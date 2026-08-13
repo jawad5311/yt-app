@@ -34,6 +34,27 @@ def cleanup_profile_locks(profile_path: Path) -> None:
                 pass
 
 
+import winreg
+
+
+def get_chrome_major_version() -> Optional[int]:
+    """Detect installed Chrome browser major version from registry or common paths."""
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for key_path in (
+            r"Software\Google\Chrome\BLBeacon",
+            r"Software\WOW6432Node\Google\Chrome\BLBeacon",
+        ):
+            try:
+                key = winreg.OpenKey(root, key_path)
+                val, _ = winreg.QueryValueEx(key, "version")
+                winreg.CloseKey(key)
+                if val:
+                    return int(val.split(".")[0])
+            except Exception:
+                pass
+    return None
+
+
 def setup_driver(account: Account, log_queue: Optional[queue.Queue] = None) -> uc.Chrome:
     """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
     profile_dir = get_runtime_profiles_dir() / account.get_profile_dir_name()
@@ -52,14 +73,22 @@ def setup_driver(account: Account, log_queue: Optional[queue.Queue] = None) -> u
     options.add_argument("--window-size=1280,800")
     options.add_argument("--lang=en-US,en")
 
+    chrome_major = get_chrome_major_version()
+    if chrome_major:
+        emit(log_queue, f"Detected system Chrome major version: {chrome_major}")
+
     try:
-        driver = uc.Chrome(options=options, use_subprocess=True)
+        if chrome_major:
+            driver = uc.Chrome(options=options, version_main=chrome_major, use_subprocess=True)
+        else:
+            driver = uc.Chrome(options=options, use_subprocess=True)
         driver.set_page_load_timeout(60)
         emit(log_queue, f"Chrome driver successfully started for {account.email}.")
         return driver
     except Exception as exc:
         emit(log_queue, f"Failed to initialize Chrome driver: {exc}", logging.ERROR)
         raise
+
 
 
 def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None) -> None:
