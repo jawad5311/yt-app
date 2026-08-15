@@ -9,7 +9,7 @@ class VideoTask:
     title: str = ""
     keywords: str = ""
     watchtime_duration: str = "5 Minutes"
-    comment_type: str = "AI"  # 'AI' or 'Custom'
+    comment_type: str = "AI"  # 'AI', 'Custom', or 'None'
     custom_comment: str = ""
     like: bool = True
 
@@ -37,9 +37,15 @@ class VideoTask:
         )
 
     def parse_duration_seconds(self) -> int:
-        """Parse watchtime_duration string e.g. '5 Minutes', '30 Seconds', '10' into integer seconds."""
+        """Parse watchtime_duration string e.g. '24 Hours', '1 Hour', '15 Minutes', '30 Seconds' into integer seconds."""
         val = self.watchtime_duration.lower().strip()
-        if "minute" in val:
+        if "hour" in val:
+            num = val.split("hour")[0].strip()
+            try:
+                return int(float(num) * 3600)
+            except ValueError:
+                return 3600
+        elif "minute" in val:
             num = val.split("minute")[0].strip()
             try:
                 return int(float(num) * 60)

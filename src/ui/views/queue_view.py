@@ -84,8 +84,25 @@ class QueueView(ctk.CTkFrame):
         title_entry.insert(0, target_task.title)
         title_entry.pack(padx=20, pady=(0, 10))
 
+        WATCHTIME_OPTIONS = [
+            "30 Seconds",
+            "1 Minute",
+            "2 Minutes",
+            "5 Minutes",
+            "10 Minutes",
+            "15 Minutes",
+            "30 Minutes",
+            "45 Minutes",
+            "1 Hour",
+            "2 Hours",
+            "3 Hours",
+            "6 Hours",
+            "12 Hours",
+            "24 Hours",
+        ]
+
         ctk.CTkLabel(modal, text="Watch Duration:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        duration_option = ctk.CTkOptionMenu(modal, values=["30 Seconds", "1 Minute", "2 Minutes", "5 Minutes", "10 Minutes"], width=440)
+        duration_option = ctk.CTkOptionMenu(modal, values=WATCHTIME_OPTIONS, width=440)
         duration_option.set(target_task.watchtime_duration or "5 Minutes")
         duration_option.pack(padx=20, pady=(0, 10))
 
