@@ -9,6 +9,7 @@ from ..models.video_task import VideoTask
 from ..ai.base import BaseAIProvider
 from ..ai.gemini_provider import GeminiAIProvider
 from ..ai.openai_provider import OpenAIProvider
+from ..ai.openrouter_provider import OpenRouterProvider
 from .driver import setup_driver, close_driver
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
@@ -38,11 +39,16 @@ class AutomationWorker:
         provider_type = self.config_mgr.get_setting("AIProvider", "Gemini")
         gemini_key = self.config_mgr.get_setting("GeminiKey", "")
         openai_key = self.config_mgr.get_setting("OpenAIKey", "")
+        openrouter_key = self.config_mgr.get_setting("OpenRouterKey", "")
 
-        if provider_type == "Gemini" and gemini_key:
+        if provider_type == "OpenRouter" and openrouter_key:
+            return OpenRouterProvider(openrouter_key)
+        elif provider_type == "Gemini" and gemini_key:
             return GeminiAIProvider(gemini_key)
         elif provider_type == "OpenAI" and openai_key:
             return OpenAIProvider(openai_key)
+        elif openrouter_key:
+            return OpenRouterProvider(openrouter_key)
         elif gemini_key:
             return GeminiAIProvider(gemini_key)
         elif openai_key:

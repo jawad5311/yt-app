@@ -16,6 +16,7 @@ class ConfigManager:
             "AIProvider": "Gemini",
             "OpenAIKey": "",
             "GeminiKey": "",
+            "OpenRouterKey": "",
             "CommentType": "AI",
             "WatchtimeDuration": "5 Minutes",
             "ParallelBrowsers": 1,

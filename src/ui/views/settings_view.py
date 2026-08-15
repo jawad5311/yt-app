@@ -24,7 +24,7 @@ class SettingsView(ctk.CTkFrame):
 
         # AI Provider Selection
         ctk.CTkLabel(container, text="AI Comment Provider:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(15, 2))
-        self.provider_option = ctk.CTkOptionMenu(container, values=["Gemini", "OpenAI"], width=350)
+        self.provider_option = ctk.CTkOptionMenu(container, values=["Gemini", "OpenAI", "OpenRouter"], width=350)
         self.provider_option.set(self.config_mgr.get_setting("AIProvider", "Gemini"))
         self.provider_option.pack(anchor="w", padx=15, pady=(0, 15))
 
@@ -39,6 +39,12 @@ class SettingsView(ctk.CTkFrame):
         self.openai_entry = ctk.CTkEntry(container, placeholder_text="sk-...", width=450, show="*")
         self.openai_entry.insert(0, self.config_mgr.get_setting("OpenAIKey", ""))
         self.openai_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        # OpenRouter API Key
+        ctk.CTkLabel(container, text="OpenRouter API Key (model: openai/gpt-oss-20b:free):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(5, 2))
+        self.openrouter_entry = ctk.CTkEntry(container, placeholder_text="sk-or-v1-...", width=450, show="*")
+        self.openrouter_entry.insert(0, self.config_mgr.get_setting("OpenRouterKey", ""))
+        self.openrouter_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # Direct Link Fallback Toggle
         self.fallback_switch = ctk.CTkSwitch(
@@ -74,6 +80,7 @@ class SettingsView(ctk.CTkFrame):
         self.config_mgr.set_setting("AIProvider", self.provider_option.get())
         self.config_mgr.set_setting("GeminiKey", self.gemini_entry.get().strip())
         self.config_mgr.set_setting("OpenAIKey", self.openai_entry.get().strip())
+        self.config_mgr.set_setting("OpenRouterKey", self.openrouter_entry.get().strip())
         self.config_mgr.set_setting("DirectLinkFallback", str(bool(self.fallback_switch.get())))
 
         try:
