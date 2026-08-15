@@ -53,6 +53,7 @@ class QueueView(ctk.CTkFrame):
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
         self.refresh_list()
+        self.app_controller.on_queue_changed(self.video_tasks)
 
     def save_queue(self):
         dict_list = [v.to_dict() for v in self.video_tasks]
