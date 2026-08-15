@@ -27,14 +27,17 @@ def extract_video_id(url: str) -> Optional[str]:
     return None
 
 
-def safe_get(driver: Any, url: str, timeout: int = 35, log_queue: Optional[queue.Queue] = None) -> None:
+from selenium.webdriver.common.keys import Keys
+
+
+def safe_get(driver: Any, url: str, timeout: int = 45, log_queue: Optional[queue.Queue] = None) -> None:
     """Navigate to URL safely, stopping sub-resource loading if network times out."""
     driver.set_page_load_timeout(timeout)
     try:
         driver.get(url)
     except Exception as exc:
         if "timeout" in str(exc).lower():
-            emit(log_queue, "Page DOM ready; stopping background network stream timeout and continuing...", logging.WARNING)
+            emit(log_queue, "Page DOM ready; stopping background stream timeout and continuing...", logging.WARNING)
             try:
                 driver.execute_script("window.stop();")
             except Exception:
@@ -63,8 +66,8 @@ def navigate_to_video_organically(
     if search_query:
         emit(log_queue, f"Starting organic search for query: '{search_query}'")
         try:
-            safe_get(driver, "https://www.youtube.com", timeout=35, log_queue=log_queue)
-            human_like_delay(1.5, 3.0)
+            safe_get(driver, "https://www.youtube.com", timeout=45, log_queue=log_queue)
+            human_like_delay(2.0, 3.5)
 
             # Accept cookies dialog if shown
             try:
@@ -76,18 +79,26 @@ def navigate_to_video_organically(
                 pass
 
             # Search box
-            search_box = WebDriverWait(driver, 15).until(
-                EC.element_to_be_clickable((By.XPATH, "//input[@id='search' or @name='search_query']"))
+            search_box = WebDriverWait(driver, 20).until(
+                EC.element_to_be_clickable(
+                    (
+                        By.XPATH,
+                        "//input[@id='search'] | //input[@name='search_query'] | //ytd-searchbox//input | //form[@id='search-form']//input",
+                    )
+                )
             )
+            search_box.click()
             search_box.clear()
             slow_type(search_box, search_query)
             human_like_delay(0.5, 1.0)
-            search_box.submit()
-            human_like_delay(2.5, 4.0)
+            search_box.send_keys(Keys.ENTER)
+            human_like_delay(3.0, 5.0)
 
             # Wait for search results
-            results = WebDriverWait(driver, 15).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "ytd-video-renderer a#video-title"))
+            results = WebDriverWait(driver, 20).until(
+                EC.presence_of_all_elements_located(
+                    (By.CSS_SELECTOR, "ytd-video-renderer a#video-title, ytd-video-renderer a#video-title-link, a#video-title")
+                )
             )
 
             emit(log_queue, f"Found {len(results)} initial search results. Searching for target video...")

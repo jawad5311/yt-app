@@ -66,7 +66,7 @@ class YTBotApp(ctk.CTk):
             ("accounts", "👤 Accounts"),
             ("queue", "🎥 Video Queue"),
             ("settings", "⚙ Settings"),
-            ("logs", "📋 Diagnostics Logs"),
+            ("logs", "📋 Logs"),
         ]
 
         for idx, (name, label_text) in enumerate(nav_items, start=1):

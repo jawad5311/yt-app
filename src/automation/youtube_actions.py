@@ -81,11 +81,18 @@ def like_video(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
     """Locate and click YouTube Like button."""
     emit(log_queue, "Attempting to like video...")
     try:
-        like_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable(
+        driver.execute_script("window.scrollBy(0, 150);")
+        human_like_delay(1.0, 1.5)
+
+        like_btn = WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located(
                 (
                     By.XPATH,
-                    "//like-button-view-model//button | //button[contains(@aria-label, 'like this video') and not(contains(@aria-label, 'dislike'))]",
+                    "//segmented-like-dislike-button-view-model//button[1] | "
+                    "//like-button-view-model//button | "
+                    "//ytd-menu-renderer//button[contains(@aria-label, 'like') or contains(@aria-label, 'Like')] | "
+                    "//button[contains(@aria-label, 'like this video') and not(contains(@aria-label, 'dislike'))] | "
+                    "//button[contains(@title, 'I like this')]",
                 )
             )
         )
@@ -95,7 +102,11 @@ def like_video(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
             emit(log_queue, "Video is already liked.")
             return True
 
-        like_btn.click()
+        try:
+            like_btn.click()
+        except Exception:
+            driver.execute_script("arguments[0].click();", like_btn)
+
         human_like_delay(1.0, 2.0)
         emit(log_queue, "Successfully liked the video!")
         return True
