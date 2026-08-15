@@ -3,6 +3,7 @@ import queue
 import time
 from typing import Any, Optional
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -25,9 +26,6 @@ def extract_video_id(url: str) -> Optional[str]:
         if match:
             return match.group(1)
     return None
-
-
-from selenium.webdriver.common.keys import Keys
 
 
 def safe_get(driver: Any, url: str, timeout: int = 45, log_queue: Optional[queue.Queue] = None) -> None:
@@ -54,18 +52,29 @@ def navigate_to_video_organically(
 ) -> bool:
     """
     Organic Navigation Strategy:
-    1. If search keywords or video title are provided, perform YouTube search.
-    2. Scroll search results to find matching video ID or title, then click it.
-    3. If search fails or yields no match, use direct_link_fallback if enabled.
+    1. Query & Video ID Parsing
+    2. Stealth Navigation to YouTube Home
+    3. Simulated Human Typing & Search Submission
+    4. Search Result Scanning & Matching (Video ID / Title)
+    5. Smooth Scroll & Organic Click
+    6. Direct Link Fallback
     """
+    # 1. Query & Video ID Parsing
     search_query = task.keywords.strip() or task.title.strip()
     target_video_id = extract_video_id(task.url)
+
+    emit(
+        log_queue,
+        f"[Step 1/6] Query & ID Parsing: Target Video ID = '{target_video_id or 'N/A'}', Search Query = '{search_query or 'None'}'",
+    )
 
     organic_success = False
 
     if search_query:
         emit(log_queue, f"Starting organic search for query: '{search_query}'")
         try:
+            # 2. Stealth Navigation to YouTube Home
+            emit(log_queue, "[Step 2/6] Navigating to YouTube homepage (https://www.youtube.com)...")
             safe_get(driver, "https://www.youtube.com", timeout=45, log_queue=log_queue)
             human_like_delay(2.0, 3.5)
 
@@ -74,11 +83,13 @@ def navigate_to_video_organically(
                 reject_or_accept = driver.find_elements(By.XPATH, "//button[contains(., 'Accept') or contains(., 'I agree')]")
                 if reject_or_accept:
                     reject_or_accept[0].click()
+                    emit(log_queue, "[Step 2/6] Accepted cookie/consent banner.")
                     human_like_delay(1.0, 1.5)
             except Exception:
                 pass
 
-            # Search box
+            # 3. Simulated Human Typing
+            emit(log_queue, "[Step 3/6] Locating search input box...")
             search_box = WebDriverWait(driver, 20).until(
                 EC.element_to_be_clickable(
                     (
@@ -89,20 +100,24 @@ def navigate_to_video_organically(
             )
             search_box.click()
             search_box.clear()
+            emit(log_queue, f"[Step 3/6] Typing search query '{search_query}' character-by-character with human micro-delays...")
             slow_type(search_box, search_query)
             human_like_delay(0.5, 1.0)
+            
+            emit(log_queue, "[Step 3/6] Submitting search query via ENTER key...")
             search_box.send_keys(Keys.ENTER)
             human_like_delay(3.0, 5.0)
 
-            # Wait for search results
+            # 4. Search Result Matching
+            emit(log_queue, "[Step 4/6] Waiting for video search results to load...")
             results = WebDriverWait(driver, 20).until(
                 EC.presence_of_all_elements_located(
                     (By.CSS_SELECTOR, "ytd-video-renderer a#video-title, ytd-video-renderer a#video-title-link, a#video-title")
                 )
             )
 
-            emit(log_queue, f"Found {len(results)} initial search results. Searching for target video...")
-            
+            emit(log_queue, f"[Step 4/6] Found {len(results)} search results. Scanning top 15 results for matching Video ID/Title...")
+
             selected_link = None
             for idx, link in enumerate(results[:15]):
                 href = link.get_attribute("href") or ""
@@ -111,43 +126,46 @@ def navigate_to_video_organically(
                 # Check ID match
                 if target_video_id and target_video_id in href:
                     selected_link = link
-                    emit(log_queue, f"Found target video in search result #{idx + 1} by video ID match!")
+                    emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID ('{target_video_id}')!")
                     break
 
                 # Check title match
                 if task.title and task.title.lower() in title_text:
                     selected_link = link
-                    emit(log_queue, f"Found target video in search result #{idx + 1} by title match!")
+                    emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Title ('{task.title}')!")
                     break
 
             if selected_link:
-                # Scroll link into view & click organically
+                # 5. Smooth Scroll & Organic Click
+                emit(log_queue, "[Step 5/6] Smooth scrolling target video into view...")
                 driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", selected_link)
-                human_like_delay(1.0, 2.0)
+                human_like_delay(1.5, 2.5)
+                
+                emit(log_queue, "[Step 5/6] Clicking target video link organically...")
                 selected_link.click()
                 human_like_delay(3.0, 5.0)
                 organic_success = True
-                emit(log_queue, "Successfully clicked video from YouTube organic search results!")
+                emit(log_queue, "[Step 5/6] Successfully opened video from YouTube organic search results!")
                 return True
             else:
-                emit(log_queue, "Target video not found in top search results.", logging.WARNING)
+                emit(log_queue, "[Step 4/6] Target video not found in top 15 search results.", logging.WARNING)
 
         except Exception as exc:
             emit(log_queue, f"Organic search attempt failed: {exc}", logging.WARNING)
 
-    # Direct Link Fallback
+    # 6. Direct Link Fallback
     if not organic_success:
         if direct_link_fallback and task.url:
-            emit(log_queue, f"Falling back to direct video URL: {task.url}")
+            emit(log_queue, f"[Step 6/6] Direct Link Fallback: Navigating directly to URL: {task.url}")
             try:
                 safe_get(driver, task.url, timeout=35, log_queue=log_queue)
                 human_like_delay(3.0, 5.0)
                 return True
             except Exception as exc:
-                emit(log_queue, f"Direct link navigation failed: {exc}", logging.ERROR)
+                emit(log_queue, f"[Step 6/6] Direct link navigation failed: {exc}", logging.ERROR)
                 return False
         else:
-            emit(log_queue, "Direct link fallback disabled and organic search was unsuccessful.", logging.ERROR)
+            emit(log_queue, "[Step 6/6] Direct link fallback disabled and organic search was unsuccessful.", logging.ERROR)
             return False
 
     return False
