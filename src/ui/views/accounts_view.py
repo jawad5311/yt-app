@@ -55,7 +55,21 @@ class AccountsView(ctk.CTkFrame):
         self.scroll_frame.grid(row=2, column=0, padx=20, pady=(10, 20), sticky="nsew")
         self.scroll_frame.grid_columnconfigure(0, weight=1)
 
+        self.load_saved_accounts()
+
+    def load_saved_accounts(self):
+        raw_accounts = self.app_controller.config_mgr.get_accounts()
+        self.accounts = []
+        for item in raw_accounts:
+            if isinstance(item, dict) and "email" in item and "password" in item:
+                self.accounts.append(Account(email=item["email"], password=item["password"]))
         self.refresh_list()
+        self.app_controller.on_accounts_changed(self.accounts)
+
+    def save_accounts(self):
+        acc_dicts = [{"email": a.email, "password": a.password} for a in self.accounts]
+        self.app_controller.config_mgr.set_accounts(acc_dicts)
+        self.app_controller.on_accounts_changed(self.accounts)
 
     def import_accounts_file(self, file_path: str = ""):
         if not file_path:
@@ -79,8 +93,8 @@ class AccountsView(ctk.CTkFrame):
 
         if new_accounts:
             self.accounts = new_accounts
+            self.save_accounts()
             self.refresh_list()
-            self.app_controller.on_accounts_changed(self.accounts)
 
     def add_account_dialog(self):
         dialog = ctk.CTkInputDialog(text="Enter account details as 'email:password':", title="Add Account")
@@ -89,21 +103,21 @@ class AccountsView(ctk.CTkFrame):
             acc = Account.parse_line(input_text)
             if acc:
                 self.accounts.append(acc)
+                self.save_accounts()
                 self.refresh_list()
-                self.app_controller.on_accounts_changed(self.accounts)
             else:
                 messagebox.showerror("Error", "Invalid account format. Use 'email:password' or 'email,password'")
 
     def remove_account(self, index: int):
         if 0 <= index < len(self.accounts):
             del self.accounts[index]
+            self.save_accounts()
             self.refresh_list()
-            self.app_controller.on_accounts_changed(self.accounts)
 
     def clear_accounts(self):
         self.accounts.clear()
+        self.save_accounts()
         self.refresh_list()
-        self.app_controller.on_accounts_changed(self.accounts)
 
     def refresh_list(self):
         for child in self.scroll_frame.winfo_children():

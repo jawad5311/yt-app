@@ -1,5 +1,6 @@
 import queue
 import threading
+from pathlib import Path
 from typing import List, Optional
 import customtkinter as ctk
 
@@ -38,9 +39,11 @@ class YTBotApp(ctk.CTk):
         self._build_ui()
         self.after(100, self._poll_log_queue)
 
-        # Pre-load accounts if accounts.txt exists
-        accounts_file = self.config_mgr.get_setting("AccountsFile", "accounts.txt")
-        self.views["accounts"].import_accounts_file(accounts_file)
+        # Pre-load accounts fallback if saved list is empty and accounts.txt exists
+        if not self.loaded_accounts:
+            accounts_file = self.config_mgr.get_setting("AccountsFile", "accounts.txt")
+            if Path(accounts_file).exists():
+                self.views["accounts"].import_accounts_file(accounts_file)
 
     def _build_ui(self):
         self.grid_columnconfigure(1, weight=1)
