@@ -102,6 +102,11 @@ class YTBotApp(ctk.CTk):
             view.grid(row=0, column=0, sticky="nsew")
 
         self.show_view("dashboard")
+        self.views["dashboard"].update_stats(
+            len(self.loaded_accounts),
+            len(self.queued_video_tasks),
+            "Idle",
+        )
 
     def show_view(self, name: str):
         for view_name, view_widget in self.views.items():
@@ -113,19 +118,21 @@ class YTBotApp(ctk.CTk):
 
     def on_accounts_changed(self, accounts: List[Account]):
         self.loaded_accounts = accounts
-        self.views["dashboard"].update_stats(
-            len(self.loaded_accounts),
-            len(self.queued_video_tasks),
-            "Running" if self.is_running else "Idle",
-        )
+        if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
+            self.views["dashboard"].update_stats(
+                len(self.loaded_accounts),
+                len(self.queued_video_tasks),
+                "Running" if self.is_running else "Idle",
+            )
 
     def on_queue_changed(self, tasks: List[VideoTask]):
         self.queued_video_tasks = tasks
-        self.views["dashboard"].update_stats(
-            len(self.loaded_accounts),
-            len(self.queued_video_tasks),
-            "Running" if self.is_running else "Idle",
-        )
+        if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
+            self.views["dashboard"].update_stats(
+                len(self.loaded_accounts),
+                len(self.queued_video_tasks),
+                "Running" if self.is_running else "Idle",
+            )
 
     def start_automation(self):
         if self.is_running:
