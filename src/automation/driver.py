@@ -64,6 +64,7 @@ def setup_driver(account: Account, log_queue: Optional[queue.Queue] = None) -> u
     emit(log_queue, f"Initializing Chrome driver for account: {account.email}")
 
     options = uc.ChromeOptions()
+    options.page_load_strategy = "eager"
     options.add_argument(f"--user-data-dir={profile_dir}")
     options.add_argument("--no-first-run")
     options.add_argument("--no-service-autorun")
@@ -82,7 +83,7 @@ def setup_driver(account: Account, log_queue: Optional[queue.Queue] = None) -> u
             driver = uc.Chrome(options=options, version_main=chrome_major, use_subprocess=True)
         else:
             driver = uc.Chrome(options=options, use_subprocess=True)
-        driver.set_page_load_timeout(60)
+        driver.set_page_load_timeout(45)
         emit(log_queue, f"Chrome driver successfully started for {account.email}.")
         return driver
     except Exception as exc:

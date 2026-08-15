@@ -27,6 +27,22 @@ def extract_video_id(url: str) -> Optional[str]:
     return None
 
 
+def safe_get(driver: Any, url: str, timeout: int = 35, log_queue: Optional[queue.Queue] = None) -> None:
+    """Navigate to URL safely, stopping sub-resource loading if network times out."""
+    driver.set_page_load_timeout(timeout)
+    try:
+        driver.get(url)
+    except Exception as exc:
+        if "timeout" in str(exc).lower():
+            emit(log_queue, "Page DOM ready; stopping background network stream timeout and continuing...", logging.WARNING)
+            try:
+                driver.execute_script("window.stop();")
+            except Exception:
+                pass
+        else:
+            raise
+
+
 def navigate_to_video_organically(
     driver: Any,
     task: VideoTask,
@@ -47,7 +63,7 @@ def navigate_to_video_organically(
     if search_query:
         emit(log_queue, f"Starting organic search for query: '{search_query}'")
         try:
-            driver.get("https://www.youtube.com")
+            safe_get(driver, "https://www.youtube.com", timeout=35, log_queue=log_queue)
             human_like_delay(1.5, 3.0)
 
             # Accept cookies dialog if shown
@@ -113,7 +129,7 @@ def navigate_to_video_organically(
         if direct_link_fallback and task.url:
             emit(log_queue, f"Falling back to direct video URL: {task.url}")
             try:
-                driver.get(task.url)
+                safe_get(driver, task.url, timeout=35, log_queue=log_queue)
                 human_like_delay(3.0, 5.0)
                 return True
             except Exception as exc:

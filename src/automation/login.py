@@ -27,6 +27,9 @@ def is_logged_in(driver: Any) -> bool:
     return False
 
 
+from .navigation import safe_get
+
+
 def perform_google_login(
     driver: Any,
     account: Account,
@@ -36,7 +39,10 @@ def perform_google_login(
     """Perform Google sign-in or verify existing active session."""
     emit(log_queue, f"Checking Google sign-in status for {account.email}...")
 
-    driver.get("https://accounts.google.com/")
+    try:
+        safe_get(driver, "https://accounts.google.com/", timeout=30, log_queue=log_queue)
+    except Exception:
+        pass
     human_like_delay(1.5, 2.5)
 
     if is_logged_in(driver):
