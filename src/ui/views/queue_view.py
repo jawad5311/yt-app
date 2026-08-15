@@ -1,6 +1,6 @@
 import customtkinter as ctk
 from tkinter import messagebox
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from ...models.video_task import VideoTask
 
@@ -31,7 +31,7 @@ class QueueView(ctk.CTkFrame):
         ctk.CTkButton(
             btn_frame,
             text="+ Add Target Video",
-            command=self.open_add_video_modal,
+            command=lambda: self.open_video_modal(),
         ).pack(side="left", padx=(0, 10))
 
         ctk.CTkButton(
@@ -60,39 +60,46 @@ class QueueView(ctk.CTkFrame):
         self.app_controller.config_mgr.set_video_queue(dict_list)
         self.app_controller.on_queue_changed(self.video_tasks)
 
-    def open_add_video_modal(self):
+    def open_video_modal(self, edit_index: Optional[int] = None):
+        is_editing = edit_index is not None and 0 <= edit_index < len(self.video_tasks)
+        target_task = self.video_tasks[edit_index] if is_editing else VideoTask()
+
         modal = ctk.CTkToplevel(self)
-        modal.title("Add Target Video Task")
-        modal.geometry("500x520")
+        modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
+        modal.geometry("500x530")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
         url_entry = ctk.CTkEntry(modal, placeholder_text="https://www.youtube.com/watch?v=...", width=440)
+        url_entry.insert(0, target_task.url)
         url_entry.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Search Keywords (for Organic Search):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         keywords_entry = ctk.CTkEntry(modal, placeholder_text="e.g., python automation tutorial", width=440)
+        keywords_entry.insert(0, target_task.keywords)
         keywords_entry.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Video Title (Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         title_entry = ctk.CTkEntry(modal, placeholder_text="Exact or partial video title", width=440)
+        title_entry.insert(0, target_task.title)
         title_entry.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Watch Duration:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         duration_option = ctk.CTkOptionMenu(modal, values=["30 Seconds", "1 Minute", "2 Minutes", "5 Minutes", "10 Minutes"], width=440)
-        duration_option.set("5 Minutes")
+        duration_option.set(target_task.watchtime_duration or "5 Minutes")
         duration_option.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Comment Mode:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         comment_mode = ctk.CTkOptionMenu(modal, values=["AI", "Custom", "None"], width=440)
-        comment_mode.set("AI")
+        comment_mode.set(target_task.comment_type or "AI")
         comment_mode.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Custom Comment (if Custom Mode selected):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         custom_comment_entry = ctk.CTkEntry(modal, placeholder_text="Type custom comment here...", width=440)
+        custom_comment_entry.insert(0, target_task.custom_comment)
         custom_comment_entry.pack(padx=20, pady=(0, 15))
 
-        def on_add():
+        def on_submit():
             url = url_entry.get().strip()
             keywords = keywords_entry.get().strip()
             title = title_entry.get().strip()
@@ -100,7 +107,7 @@ class QueueView(ctk.CTkFrame):
                 messagebox.showerror("Error", "Please provide at least a URL or Search Keywords!")
                 return
 
-            task = VideoTask(
+            updated_task = VideoTask(
                 url=url,
                 keywords=keywords,
                 title=title,
@@ -108,12 +115,21 @@ class QueueView(ctk.CTkFrame):
                 comment_type=comment_mode.get(),
                 custom_comment=custom_comment_entry.get().strip(),
             )
-            self.video_tasks.append(task)
+
+            if is_editing:
+                self.video_tasks[edit_index] = updated_task
+            else:
+                self.video_tasks.append(updated_task)
+
             self.save_queue()
             self.refresh_list()
             modal.destroy()
 
-        ctk.CTkButton(modal, text="Add Task", fg_color="#2FA572", hover_color="#1E7B52", command=on_add).pack(pady=10)
+        btn_text = "Save Changes" if is_editing else "Add Task"
+        btn_color = "#1F6AA5" if is_editing else "#2FA572"
+        btn_hover = "#144870" if is_editing else "#1E7B52"
+
+        ctk.CTkButton(modal, text=btn_text, fg_color=btn_color, hover_color=btn_hover, command=on_submit).pack(pady=10)
 
     def remove_task(self, index: int):
         if 0 <= index < len(self.video_tasks):
@@ -147,11 +163,24 @@ class QueueView(ctk.CTkFrame):
             info_text = f"#{idx + 1}. {t_text}\nKeywords: {task.keywords or 'N/A'} | Watchtime: {task.watchtime_duration} | Comment: {task.comment_type}"
             ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13)).pack(side="left", padx=15, pady=10)
 
+            # Action Buttons Frame
+            action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+            action_btn_frame.pack(side="right", padx=10, pady=10)
+
             ctk.CTkButton(
-                card,
-                text="Remove",
-                width=70,
+                action_btn_frame,
+                text="✏ Edit",
+                width=65,
+                fg_color="#1F6AA5",
+                hover_color="#144870",
+                command=lambda i=idx: self.open_video_modal(edit_index=i),
+            ).pack(side="left", padx=(0, 6))
+
+            ctk.CTkButton(
+                action_btn_frame,
+                text="🗑 Remove",
+                width=75,
                 fg_color="#D32F2F",
                 hover_color="#9A0007",
                 command=lambda i=idx: self.remove_task(i),
-            ).pack(side="right", padx=10, pady=10)
+            ).pack(side="left")
