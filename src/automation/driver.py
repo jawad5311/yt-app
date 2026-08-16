@@ -3,6 +3,7 @@ import os
 import queue
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional, Any
 import undetected_chromedriver as uc
