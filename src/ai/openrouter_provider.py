@@ -6,7 +6,7 @@ from .base import BaseAIProvider
 
 
 class OpenRouterProvider(BaseAIProvider):
-    """OpenRouter API Provider targeting openai/gpt-oss-20b:free by default."""
+    """OpenRouter API Provider targeting openai/gpt-oss-20b:free by default with fallback models."""
 
     def __init__(self, api_key: str, model_name: str = "openai/gpt-oss-20b:free"):
         self.api_key = api_key.strip()
@@ -37,51 +37,58 @@ class OpenRouterProvider(BaseAIProvider):
             "X-Title": "YouTube Automation Bot",
         }
 
-        # First attempt via OpenAI SDK if available
-        try:
-            import openai
-            client = openai.OpenAI(
-                api_key=self.api_key,
-                base_url="https://openrouter.ai/api/v1",
-                default_headers={
-                    "HTTP-Referer": "https://github.com/yt-tool",
-                    "X-Title": "YouTube Automation Bot",
-                },
-            )
-            response = client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {"role": "system", "content": "You write authentic YouTube comments."},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=100,
-                temperature=0.7,
-            )
-            if response and response.choices and response.choices[0].message.content:
-                return response.choices[0].message.content.strip().strip('"')
-        except Exception as exc:
-            logging.warning(f"OpenAI SDK call to OpenRouter failed, falling back to direct REST: {exc}")
+        # Models list with fallback to free openrouter models
+        models_to_try = [self.model_name, "google/gemini-2.0-flash-lite-preview-02-05:free", "meta-llama/llama-3.3-70b-instruct:free"]
 
-        # Fallback via direct REST POST request
-        url = "https://openrouter.ai/api/v1/chat/completions"
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": "You write authentic YouTube comments."},
-                {"role": "user", "content": prompt},
-            ],
-            "max_tokens": 100,
-            "temperature": 0.7,
-        }
+        for model in models_to_try:
+            # 1. SDK Try
+            try:
+                import openai
+                client = openai.OpenAI(
+                    api_key=self.api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    default_headers={
+                        "HTTP-Referer": "https://github.com/yt-tool",
+                        "X-Title": "YouTube Automation Bot",
+                    },
+                )
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You write authentic YouTube comments."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=100,
+                    temperature=0.7,
+                )
+                if response and response.choices and response.choices[0].message:
+                    content = response.choices[0].message.content
+                    if isinstance(content, str) and content.strip():
+                        return content.strip().strip('"')
+            except Exception as exc:
+                logging.debug(f"OpenRouter SDK attempt for {model} failed: {exc}")
 
-        resp = requests.post(url, json=payload, headers=headers, timeout=25)
-        resp.raise_for_status()
-        data = resp.json()
-
-        choices = data.get("choices", [])
-        if choices and "message" in choices[0]:
-            content = choices[0]["message"].get("content", "")
-            if content:
-                return content.strip().strip('"')
+            # 2. REST Fallback
+            try:
+                url = "https://openrouter.ai/api/v1/chat/completions"
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": "You write authentic YouTube comments."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": 100,
+                    "temperature": 0.7,
+                }
+                resp = requests.post(url, json=payload, headers=headers, timeout=20)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    choices = data.get("choices", [])
+                    if choices and "message" in choices[0]:
+                        content = choices[0]["message"].get("content")
+                        if isinstance(content, str) and content.strip():
+                            return content.strip().strip('"')
+            except Exception as exc:
+                logging.debug(f"OpenRouter REST attempt for {model} failed: {exc}")
 
         raise RuntimeError("No comment content returned from OpenRouter API.")

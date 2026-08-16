@@ -55,6 +55,9 @@ def get_chrome_major_version() -> Optional[int]:
     return None
 
 
+DRIVER_INIT_LOCK = threading.Lock()
+
+
 def setup_driver(account: Account, log_queue: Optional[queue.Queue] = None) -> uc.Chrome:
     """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
     profile_dir = get_runtime_profiles_dir() / account.get_profile_dir_name()
@@ -79,10 +82,11 @@ def setup_driver(account: Account, log_queue: Optional[queue.Queue] = None) -> u
         emit(log_queue, f"Detected system Chrome major version: {chrome_major}")
 
     try:
-        if chrome_major:
-            driver = uc.Chrome(options=options, version_main=chrome_major, use_subprocess=True)
-        else:
-            driver = uc.Chrome(options=options, use_subprocess=True)
+        with DRIVER_INIT_LOCK:
+            if chrome_major:
+                driver = uc.Chrome(options=options, version_main=chrome_major, use_subprocess=True)
+            else:
+                driver = uc.Chrome(options=options, use_subprocess=True)
         driver.set_page_load_timeout(45)
         emit(log_queue, f"Chrome driver successfully started for {account.email}.")
         return driver
