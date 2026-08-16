@@ -49,10 +49,12 @@ def watch_video(
     """Watch target video for the specified duration with human-like interactions."""
     emit(log_queue, f"Watching video for {duration_seconds} seconds...")
 
-    # Play video if paused
+    # Ensure video is playing (only trigger play if currently paused)
     try:
-        body = driver.find_element(By.TAG_NAME, "body")
-        body.send_keys("k")  # Toggle play shortcut in YouTube
+        is_paused = driver.execute_script("var v = document.querySelector('video'); return v ? v.paused : false;")
+        if is_paused:
+            driver.execute_script("var v = document.querySelector('video'); if (v) v.play();")
+            emit(log_queue, "Resumed video playback.")
     except Exception:
         pass
 
