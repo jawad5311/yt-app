@@ -53,10 +53,17 @@ def watch_video(
     try:
         is_paused = driver.execute_script("var v = document.querySelector('video'); return v ? v.paused : false;")
         if is_paused:
-            driver.execute_script("var v = document.querySelector('video'); if (v) v.play();")
-            emit(log_queue, "Resumed video playback.")
-    except Exception:
-        pass
+            emit(log_queue, "Video is paused, initiating playback...")
+            driver.execute_script("var v = document.querySelector('video'); if (v) { v.play(); }")
+            human_like_delay(1.0, 1.5)
+            # Fallback click play button if JS play was blocked
+            still_paused = driver.execute_script("var v = document.querySelector('video'); return v ? v.paused : false;")
+            if still_paused:
+                play_btn = driver.find_elements(By.CSS_SELECTOR, "button.ytp-play-button")
+                if play_btn:
+                    play_btn[0].click()
+    except Exception as exc:
+        logging.debug(f"Error checking/triggering video playback: {exc}")
 
     start_time = time.time()
     end_time = start_time + duration_seconds
