@@ -1,3 +1,4 @@
+import webbrowser
 import customtkinter as ctk
 from tkinter import messagebox
 from typing import List, Dict, Any, Optional
@@ -59,6 +60,12 @@ class QueueView(ctk.CTkFrame):
         dict_list = [v.to_dict() for v in self.video_tasks]
         self.app_controller.config_mgr.set_video_queue(dict_list)
         self.app_controller.on_queue_changed(self.video_tasks)
+
+    def open_video_url(self, url: str):
+        if url and url.strip():
+            webbrowser.open(url.strip())
+        else:
+            messagebox.showinfo("Notice", "No direct video URL is specified for this task.")
 
     def open_video_modal(self, edit_index: Optional[int] = None):
         is_editing = edit_index is not None and 0 <= edit_index < len(self.video_tasks)
@@ -183,6 +190,15 @@ class QueueView(ctk.CTkFrame):
             # Action Buttons Frame
             action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
             action_btn_frame.pack(side="right", padx=10, pady=10)
+
+            ctk.CTkButton(
+                action_btn_frame,
+                text="🔗 View Video",
+                width=90,
+                fg_color="#2E7D32",
+                hover_color="#1B5E20",
+                command=lambda u=task.url: self.open_video_url(u),
+            ).pack(side="left", padx=(0, 6))
 
             ctk.CTkButton(
                 action_btn_frame,
