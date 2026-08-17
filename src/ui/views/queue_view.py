@@ -182,37 +182,46 @@ class QueueView(ctk.CTkFrame):
             card = ctk.CTkFrame(self.scroll_frame, corner_radius=6)
             card.pack(fill="x", padx=5, pady=5)
             card.grid_columnconfigure(0, weight=1)
+            card.grid_columnconfigure(1, weight=0)
 
             t_text = task.title or task.keywords or task.url
-            info_text = f"#{idx + 1}. {t_text}\nKeywords: {task.keywords or 'N/A'} | Watchtime: {task.watchtime_duration} | Comment: {task.comment_type}"
-            ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13)).pack(side="left", padx=15, pady=10)
+            if len(t_text) > 55:
+                t_text = t_text[:52] + "..."
 
-            # Action Buttons Frame
+            kw_text = task.keywords or "N/A"
+            if len(kw_text) > 35:
+                kw_text = kw_text[:32] + "..."
+
+            info_text = f"#{idx + 1}. {t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration} | Comment: {task.comment_type}"
+            lbl = ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13), anchor="w")
+            lbl.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
+
+            # Action Buttons Frame (Fixed to column 1 on the right edge)
             action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-            action_btn_frame.pack(side="right", padx=10, pady=10)
+            action_btn_frame.grid(row=0, column=1, padx=10, pady=10, sticky="e")
 
             ctk.CTkButton(
                 action_btn_frame,
-                text="🔗 View Video",
-                width=90,
+                text="🔗 View",
+                width=65,
                 fg_color="#2E7D32",
                 hover_color="#1B5E20",
                 command=lambda u=task.url: self.open_video_url(u),
-            ).pack(side="left", padx=(0, 6))
+            ).pack(side="left", padx=(0, 4))
 
             ctk.CTkButton(
                 action_btn_frame,
                 text="✏ Edit",
-                width=65,
+                width=60,
                 fg_color="#1F6AA5",
                 hover_color="#144870",
                 command=lambda i=idx: self.open_video_modal(edit_index=i),
-            ).pack(side="left", padx=(0, 6))
+            ).pack(side="left", padx=(0, 4))
 
             ctk.CTkButton(
                 action_btn_frame,
-                text="🗑 Remove",
-                width=75,
+                text="🗑 Delete",
+                width=65,
                 fg_color="#D32F2F",
                 hover_color="#9A0007",
                 command=lambda i=idx: self.remove_task(i),
