@@ -14,13 +14,13 @@ A modern, modular desktop automation tool for YouTube engagement, organic search
 
 ```text
 G:\Projects\yt-tool\
-├── config.ini                  # Settings & API keys configuration
+├── settings.json               # Settings, accounts & video queue (git-ignored)
 ├── requirements.txt            # Python dependencies
 ├── main.py                     # Entry point (GUI launcher & diagnostic mode)
 └── src/                        # Source Package
     ├── ai/                     # Gemini & OpenAI comment generators
     ├── automation/             # Chrome driver setup, Google login, organic navigation & YouTube actions
-    ├── config/                 # Thread-safe config.ini manager
+    ├── config/                 # Thread-safe settings.json manager
     ├── models/                 # Account & VideoTask data models
     ├── ui/                     # CustomTkinter GUI views (Dashboard, Accounts, Queue, Settings, Logs)
     └── utils/                  # Logger with API key masking & typing helper utilities

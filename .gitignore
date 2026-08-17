@@ -41,3 +41,6 @@ logs/*.log
 .vscode/
 *.swp
 *.swo
+
+# Configuration files with credentials
+settings.json
