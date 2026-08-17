@@ -4,12 +4,14 @@ import threading
 import time
 from typing import Any, Optional
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 from ..models.account import Account
 from ..utils.helpers import human_like_delay, slow_type
 from ..utils.logger import emit
+from .navigation import safe_get
 
 
 def is_logged_in(driver: Any) -> bool:
@@ -20,14 +22,11 @@ def is_logged_in(driver: Any) -> bool:
             if "signin" not in url and "accountchooser" not in url and "challenge" not in url:
                 return True
         source = (driver.page_source or "").lower()
-        if "myaccount.google.com" in source:
+        if "myaccount.google.com" in source and "signin" not in source:
             return True
     except Exception:
         pass
     return False
-
-
-from .navigation import safe_get
 
 
 def perform_google_login(
@@ -36,46 +35,81 @@ def perform_google_login(
     log_queue: Optional[queue.Queue] = None,
     stop_event: Optional[threading.Event] = None,
 ) -> bool:
-    """Perform Google sign-in or verify existing active session."""
+    """
+    Perform Google sign-in or verify existing active session:
+    1. Navigate to https://accounts.google.com/
+    2. Wait up to 10 seconds to allow JS rendering / SSO redirect to myaccount.google.com
+    3. If email/password input is present, enter credentials automatically
+    4. Wait for redirection to myaccount.google.com
+    5. Redirect browser to https://www.youtube.com/
+    """
     emit(log_queue, f"Checking Google sign-in status for {account.email}...")
 
     try:
         safe_get(driver, "https://accounts.google.com/", timeout=30, log_queue=log_queue)
     except Exception:
         pass
-    human_like_delay(1.5, 2.5)
 
-    if is_logged_in(driver):
-        emit(log_queue, f"Account {account.email} is already signed in!")
-        return True
+    # Pause up to 10 seconds while monitoring if page redirects automatically to myaccount.google.com
+    start_wait = time.time()
+    while time.time() - start_wait < 10.0:
+        if is_logged_in(driver):
+            emit(log_queue, f"Account {account.email} is already signed in! Redirecting to YouTube...")
+            safe_get(driver, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
+            human_like_delay(2.0, 3.0)
+            return True
+        time.sleep(1.0)
 
     emit(log_queue, f"Attempting sign-in for {account.email}...")
 
     try:
-        # Email field
+        # Email field using exact DevTools selectors (id='identifierId', name='identifier', aria-label='Email or phone')
         email_input = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.XPATH, "//input[@type='email' or @name='identifier']"))
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    "//input[@id='identifierId'] | //input[@name='identifier'] | //input[@aria-label='Email or phone'] | //input[@type='email']",
+                )
+            )
         )
+        email_input.click()
         email_input.clear()
         slow_type(email_input, account.email)
         human_like_delay(0.5, 1.0)
-        
-        # Click Next
-        next_btn = driver.find_element(By.XPATH, "//button[contains(., 'Next') or contains(., 'weiter') or @id='identifierNext']")
-        next_btn.click()
-        human_like_delay(2.0, 3.5)
+
+        # Click Next button or press ENTER
+        try:
+            next_btn = driver.find_element(
+                By.XPATH,
+                "//button[contains(., 'Next') or contains(., 'weiter') or @id='identifierNext'] | //div[@id='identifierNext']//button",
+            )
+            next_btn.click()
+        except Exception:
+            email_input.send_keys(Keys.ENTER)
+
+        human_like_delay(2.5, 4.0)
 
         # Password field
         pwd_input = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.XPATH, "//input[@type='password' or @name='Passwd']"))
+            EC.element_to_be_clickable(
+                (By.XPATH, "//input[@type='password' or @name='Passwd' or @name='password']")
+            )
         )
+        pwd_input.click()
         pwd_input.clear()
         slow_type(pwd_input, account.password)
         human_like_delay(0.5, 1.0)
 
-        # Click Next
-        pwd_next = driver.find_element(By.XPATH, "//button[contains(., 'Next') or @id='passwordNext']")
-        pwd_next.click()
+        # Click Password Next button or press ENTER
+        try:
+            pwd_next = driver.find_element(
+                By.XPATH,
+                "//button[contains(., 'Next') or @id='passwordNext'] | //div[@id='passwordNext']//button",
+            )
+            pwd_next.click()
+        except Exception:
+            pwd_input.send_keys(Keys.ENTER)
+
         human_like_delay(3.0, 5.0)
 
     except Exception as exc:
@@ -91,7 +125,9 @@ def perform_google_login(
             return False
 
         if is_logged_in(driver):
-            emit(log_queue, f"Login successful for {account.email}!")
+            emit(log_queue, f"Login successful for {account.email}! Redirecting to YouTube...")
+            safe_get(driver, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
+            human_like_delay(2.0, 3.0)
             return True
 
         url = (driver.current_url or "").lower()
