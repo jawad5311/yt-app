@@ -94,7 +94,7 @@ def navigate_to_video_organically(
                 EC.element_to_be_clickable(
                     (
                         By.XPATH,
-                        "//input[@id='search'] | //input[@name='search_query'] | //ytd-searchbox//input | //form[@id='search-form']//input",
+                        "//textarea[@name='search_query'] | //input[@name='search_query'] | //*[contains(@class, 'yt-searchbox-input')] | //input[@id='search'] | //textarea[@id='search'] | //ytd-searchbox//input | //ytd-searchbox//textarea | //form[contains(@class, 'SearchForm')]//textarea | //form[contains(@class, 'SearchForm')]//input",
                     )
                 )
             )
