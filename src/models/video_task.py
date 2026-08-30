@@ -36,9 +36,15 @@ class VideoTask:
             like=bool(data.get("like", True)),
         )
 
-    def parse_duration_seconds(self) -> int:
-        """Parse watchtime_duration string e.g. '24 Hours', '1 Hour', '15 Minutes', '30 Seconds' into integer seconds."""
+    def is_full_video(self) -> bool:
+        """Check if task is set to watch full video until playback finishes."""
+        return "full" in self.watchtime_duration.lower()
+
+    def parse_duration_seconds(self) -> Optional[int]:
+        """Parse watchtime_duration string into integer seconds, or None if Full Video."""
         val = self.watchtime_duration.lower().strip()
+        if "full" in val:
+            return None
         if "hour" in val:
             num = val.split("hour")[0].strip()
             try:

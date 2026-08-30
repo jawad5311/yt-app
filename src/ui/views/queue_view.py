@@ -92,6 +92,7 @@ class QueueView(ctk.CTkFrame):
         title_entry.pack(padx=20, pady=(0, 10))
 
         WATCHTIME_OPTIONS = [
+            "Full Video",
             "30 Seconds",
             "1 Minute",
             "2 Minutes",
