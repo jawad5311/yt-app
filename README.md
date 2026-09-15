@@ -14,12 +14,13 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 
 ```text
 G:\Projects\yt-tool\
-├── settings.json               # Settings, accounts & video queue (git-ignored)
+├── settings.json               # Application settings & video queue (git-ignored)
+├── credentials.json            # Local Google account credentials (git-ignored)
 ├── requirements.txt            # Python dependencies
 ├── main.py                     # Entry point (GUI launcher & diagnostic mode)
 └── src/                        # Source Package
     ├── automation/             # Chrome driver setup, Google login, organic navigation & YouTube actions
-    ├── config/                 # Thread-safe settings.json manager
+    ├── config/                 # Thread-safe settings and credentials manager
     ├── models/                 # Account & VideoTask data models
     ├── ui/                     # CustomTkinter GUI views (Dashboard, Accounts, Queue, Settings, Logs)
     └── utils/                  # Logger with API key masking & typing helper utilities
@@ -47,7 +48,50 @@ python main.py
 python main.py --diagnose-browser
 ```
 
-## Account File Format
+## Loading Accounts
+
+The app stores Google account credentials locally in `credentials.json`. This file is ignored by Git and must never be uploaded or shared.
+
+### Option 1: Load accounts from the app
+
+1. Start the app with `python main.py`.
+2. Open the **Accounts** screen.
+3. Click **Add Single Account**.
+4. Enter one account as `email:password` and confirm.
+5. Repeat for each account. The app saves them automatically to `credentials.json`.
+
+### Option 2: Import an accounts text file
+
+1. Create a local text file such as `accounts.txt`.
+2. Put one account on each line using either format:
+
+   ```text
+   email@gmail.com:password
+   email2@gmail.com,password2
+   ```
+
+3. Start the app and open **Accounts**.
+4. Click **Load Accounts File (accounts.txt)** and select the file.
+5. Confirm that the accounts appear in the list. The imported accounts are then saved to `credentials.json`.
+
+### Option 3: Edit `credentials.json` directly
+
+Create or edit the file in the project folder with this structure:
+
+```json
+{
+  "accounts": [
+    {"email": "email@gmail.com", "password": "password"},
+    {"email": "email2@gmail.com", "password": "password2"}
+  ]
+}
+```
+
+Restart the app after editing the file. Use accounts you control, and do not commit this file to Git.
+
+The number of accounts used in one run is controlled by **Settings → Parallel Browsers Count**. The value can be between 1 and 10.
+
+## Legacy Account File Format
 
 Accounts can be loaded from `accounts.txt` in the format:
 
