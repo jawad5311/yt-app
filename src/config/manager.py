@@ -34,6 +34,7 @@ class ConfigManager:
         if config_file is None:
             config_file = Path(__file__).resolve().parent.parent.parent / "settings.json"
         self.config_file = Path(config_file)
+        self.credentials_file = self.config_file.with_name("credentials.json")
         self._lock = threading.Lock()
         self.data: Dict[str, Any] = {}
         self.load()
@@ -126,15 +127,40 @@ class ConfigManager:
             self._save_unlocked()
 
     def get_accounts(self) -> List[Dict[str, str]]:
-        """Return raw account dictionary list [{"email": "...", "password": "..."}, ...]."""
+        """Return account credentials from the separate local credentials file."""
         with self._lock:
-            return list(self.data.get("accounts", []))
+            if self.credentials_file.exists():
+                try:
+                    with open(self.credentials_file, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    accounts = loaded.get("accounts", []) if isinstance(loaded, dict) else []
+                    if isinstance(accounts, list):
+                        legacy_accounts = self.data.get("accounts", [])
+                        if not accounts and isinstance(legacy_accounts, list) and legacy_accounts:
+                            self._save_credentials_unlocked(legacy_accounts)
+                            self.data["accounts"] = []
+                            self._save_unlocked()
+                            return list(legacy_accounts)
+                        return list(accounts)
+                except Exception as exc:
+                    logging.error(f"Error reading credentials file {self.credentials_file}: {exc}")
+
+            # Migrate legacy accounts from settings.json on first use.
+            accounts = list(self.data.get("accounts", []))
+            self._save_credentials_unlocked(accounts)
+            return accounts
 
     def set_accounts(self, accounts_list: List[Dict[str, str]]) -> None:
-        """Persist account dictionary list."""
+        """Persist account credentials in credentials.json."""
         with self._lock:
-            self.data["accounts"] = accounts_list
-            self._save_unlocked()
+            self._save_credentials_unlocked(accounts_list)
+
+    def _save_credentials_unlocked(self, accounts_list: List[Dict[str, str]]) -> None:
+        self.credentials_file.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self.credentials_file.with_suffix(".tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump({"accounts": accounts_list}, f, indent=2, ensure_ascii=False)
+        temp_path.replace(self.credentials_file)
 
     def get_video_queue(self) -> List[Dict[str, Any]]:
         """Return video task dictionary list."""

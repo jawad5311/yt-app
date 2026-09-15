@@ -44,3 +44,4 @@ logs/*.log
 
 # Configuration files with credentials
 settings.json
+credentials.json
