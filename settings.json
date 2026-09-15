@@ -1,0 +1,19 @@
+{
+  "settings": {
+    "AccountsFile": "accounts.txt",
+    "AccessKey": "access",
+    "DirectLinkFallback": "True",
+    "WatchtimeDuration": "5 Minutes",
+    "ParallelBrowsers": "1",
+    "AppearanceMode": "Dark"
+  },
+  "accounts": [],
+  "videos": [
+    {
+      "url": "https://www.youtube.com/watch?v=0i_59koRA2Q",
+      "title": "This ONE Book Has The Power to Change Your ENTIRE Life",
+      "keywords": "This ONE Book Has The Power to Change Your ENTIRE Life",
+      "watchtime_duration": "30 Seconds"
+    }
+  ]
+}
