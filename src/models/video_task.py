@@ -9,9 +9,6 @@ class VideoTask:
     title: str = ""
     keywords: str = ""
     watchtime_duration: str = "5 Minutes"
-    comment_type: str = "AI"  # 'AI', 'Custom', or 'None'
-    custom_comment: str = ""
-    like: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -19,9 +16,6 @@ class VideoTask:
             "title": self.title,
             "keywords": self.keywords,
             "watchtime_duration": self.watchtime_duration,
-            "comment_type": self.comment_type,
-            "custom_comment": self.custom_comment,
-            "like": self.like,
         }
 
     @classmethod
@@ -31,9 +25,6 @@ class VideoTask:
             title=data.get("title", ""),
             keywords=data.get("keywords", data.get("title", "")),
             watchtime_duration=data.get("watchtime_duration", "5 Minutes"),
-            comment_type=data.get("comment_type", "AI"),
-            custom_comment=data.get("custom_comment", ""),
-            like=bool(data.get("like", True)),
         )
 
     def is_full_video(self) -> bool:

@@ -73,7 +73,7 @@ class QueueView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
-        modal.geometry("500x530")
+        modal.geometry("500x390")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
@@ -114,16 +114,6 @@ class QueueView(ctk.CTkFrame):
         duration_option.set(target_task.watchtime_duration or "5 Minutes")
         duration_option.pack(padx=20, pady=(0, 10))
 
-        ctk.CTkLabel(modal, text="Comment Mode:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        comment_mode = ctk.CTkOptionMenu(modal, values=["AI", "Custom", "None"], width=440)
-        comment_mode.set(target_task.comment_type or "AI")
-        comment_mode.pack(padx=20, pady=(0, 10))
-
-        ctk.CTkLabel(modal, text="Custom Comment (if Custom Mode selected):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        custom_comment_entry = ctk.CTkEntry(modal, placeholder_text="Type custom comment here...", width=440)
-        custom_comment_entry.insert(0, target_task.custom_comment)
-        custom_comment_entry.pack(padx=20, pady=(0, 15))
-
         def on_submit():
             url = url_entry.get().strip()
             keywords = keywords_entry.get().strip()
@@ -137,8 +127,6 @@ class QueueView(ctk.CTkFrame):
                 keywords=keywords,
                 title=title,
                 watchtime_duration=duration_option.get(),
-                comment_type=comment_mode.get(),
-                custom_comment=custom_comment_entry.get().strip(),
             )
 
             if is_editing:
@@ -193,7 +181,7 @@ class QueueView(ctk.CTkFrame):
             if len(kw_text) > 35:
                 kw_text = kw_text[:32] + "..."
 
-            info_text = f"#{idx + 1}. {t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration} | Comment: {task.comment_type}"
+            info_text = f"#{idx + 1}. {t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration}"
             lbl = ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13), anchor="w")
             lbl.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
 

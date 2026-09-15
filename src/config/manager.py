@@ -8,16 +8,20 @@ from typing import Any, Dict, List, Optional
 class ConfigManager:
     """Thread-safe configuration manager using settings.json for settings, accounts, and video queue persistence."""
 
+    REMOVED_SETTINGS = {
+        "AIProvider",
+        "OpenAIKey",
+        "GeminiKey",
+        "OpenRouterKey",
+        "CommentType",
+    }
+    REMOVED_VIDEO_FIELDS = {"comment_type", "custom_comment", "like"}
+
     DEFAULT_DATA: Dict[str, Any] = {
         "settings": {
             "AccountsFile": "accounts.txt",
             "AccessKey": "access",
             "DirectLinkFallback": True,
-            "AIProvider": "Gemini",
-            "OpenAIKey": "",
-            "GeminiKey": "",
-            "OpenRouterKey": "",
-            "CommentType": "AI",
             "WatchtimeDuration": "5 Minutes",
             "ParallelBrowsers": 1,
             "AppearanceMode": "Dark",
@@ -65,6 +69,23 @@ class ConfigManager:
             for key, val in self.DEFAULT_DATA["settings"].items():
                 if key not in self.data["settings"]:
                     self.data["settings"][key] = val
+
+            # Remove settings that belonged to the retired commenting feature,
+            # including any API keys previously stored on disk.
+            removed = False
+            for key in self.REMOVED_SETTINGS:
+                if key in self.data["settings"]:
+                    del self.data["settings"][key]
+                    removed = True
+            for video in self.data["videos"]:
+                if not isinstance(video, dict):
+                    continue
+                for key in self.REMOVED_VIDEO_FIELDS:
+                    if key in video:
+                        del video[key]
+                        removed = True
+            if removed:
+                self._save_unlocked()
 
     def save(self) -> None:
         """Save current configuration state to disk."""
