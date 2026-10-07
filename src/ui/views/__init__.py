@@ -1,8 +1,8 @@
-from .dashboard_view import DashboardView
 from .accounts_view import AccountsView
+from .dashboard_view import DashboardView
+from .logs_view import LogsView
 from .queue_view import QueueView
 from .settings_view import SettingsView
-from .logs_view import LogsView
 
 __all__ = [
     "DashboardView",

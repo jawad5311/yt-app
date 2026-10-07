@@ -1,18 +1,18 @@
 import logging
 import queue
-import time
 from typing import Any, Optional
+
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 from ..models.video_task import VideoTask
 from ..utils.helpers import human_like_delay, slow_type
 from ..utils.logger import emit
 
 
-def extract_video_id(url: str) -> Optional[str]:
+def extract_video_id(url: Optional[str]) -> Optional[str]:
     """Extract YouTube video ID from URL string."""
     if not url:
         return None
@@ -103,7 +103,7 @@ def navigate_to_video_organically(
             emit(log_queue, f"[Step 3/6] Typing search query '{search_query}' character-by-character with human micro-delays...")
             slow_type(search_box, search_query)
             human_like_delay(0.5, 1.0)
-            
+
             emit(log_queue, "[Step 3/6] Submitting search query via ENTER key...")
             search_box.send_keys(Keys.ENTER)
             human_like_delay(3.0, 5.0)
@@ -140,7 +140,7 @@ def navigate_to_video_organically(
                 emit(log_queue, "[Step 5/6] Smooth scrolling target video into view...")
                 driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", selected_link)
                 human_like_delay(1.5, 2.5)
-                
+
                 emit(log_queue, "[Step 5/6] Clicking target video link organically...")
                 selected_link.click()
                 human_like_delay(3.0, 5.0)

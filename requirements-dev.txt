@@ -1,0 +1,5 @@
+# Development / CI tooling - install on top of requirements.txt:
+#   python -m pip install -r requirements.txt -r requirements-dev.txt
+pytest==9.1.1
+ruff==0.16.10
+mypy==2.4.0

@@ -1,34 +1,39 @@
 import queue
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
 import customtkinter as ctk
 
+from ..automation.worker import AutomationWorker
 from ..config.manager import ConfigManager
 from ..models.account import Account
 from ..models.video_task import VideoTask
-from ..automation.worker import AutomationWorker
-from ..utils.logger import init_logging, emit
-from .views.dashboard_view import DashboardView
+from ..utils.logger import emit, init_logging
 from .views.accounts_view import AccountsView
+from .views.dashboard_view import DashboardView
+from .views.logs_view import LogsView
 from .views.queue_view import QueueView
 from .views.settings_view import SettingsView
-from .views.logs_view import LogsView
 
 
 class YTBotApp(ctk.CTk):
     def __init__(self, config_mgr: Optional[ConfigManager] = None):
         super().__init__()
-        ctk.set_appearance_mode("Dark")
-        ctk.set_default_color_theme("blue")
+        self.config_mgr = config_mgr or ConfigManager()
 
-        self.title("YouTube Views + Comment Organic Bot - V2.1 (Modular)")
+        self.title("YouTube Playback Automation Tool - V2.1 (Modular)")
         self.geometry("1100x700")
         self.minsize(950, 600)
 
-        self.config_mgr = config_mgr or ConfigManager()
+        self.apply_appearance_mode(self.config_mgr.get_setting("AppearanceMode", "Dark"))
+        ctk.set_default_color_theme("blue")
+
         self.log_file = init_logging()
-        self.log_queue = queue.Queue()
+        self.log_queue: queue.Queue = queue.Queue()
+        # Structured worker events: ("progress", worker_id, done, total) / ("status", text, level)
+        self.event_queue: queue.Queue = queue.Queue()
+        self.worker_progress: dict = {}
 
         self.loaded_accounts: List[Account] = []
         self.queued_video_tasks: List[VideoTask] = []
@@ -60,7 +65,7 @@ class YTBotApp(ctk.CTk):
             font=ctk.CTkFont(size=20, weight="bold"),
         ).grid(row=0, column=0, padx=20, pady=(20, 20))
 
-        self.nav_buttons = {}
+        self.nav_buttons: Dict[str, Any] = {}
         nav_items = [
             ("dashboard", "📊 Dashboard"),
             ("accounts", "👤 Accounts"),
@@ -90,7 +95,7 @@ class YTBotApp(ctk.CTk):
         self.container.grid_columnconfigure(0, weight=1)
         self.container.grid_rowconfigure(0, weight=1)
 
-        self.views = {
+        self.views: Dict[str, Any] = {
             "dashboard": DashboardView(self.container, self),
             "accounts": AccountsView(self.container, self),
             "queue": QueueView(self.container, self),
@@ -115,6 +120,13 @@ class YTBotApp(ctk.CTk):
                 self.nav_buttons[view_name].configure(fg_color=("gray75", "gray25"))
             else:
                 self.nav_buttons[view_name].configure(fg_color="transparent")
+
+    def apply_appearance_mode(self, mode: str) -> None:
+        """Apply and remember the appearance mode (Dark / Light / System)."""
+        valid = ("Dark", "Light", "System")
+        ctk.set_appearance_mode(mode if mode in valid else "Dark")
+        if hasattr(self, "config_mgr") and self.config_mgr is not None:
+            self.config_mgr.set_setting("AppearanceMode", mode if mode in valid else "Dark")
 
     def on_accounts_changed(self, accounts: List[Account]):
         self.loaded_accounts = accounts
@@ -150,7 +162,14 @@ class YTBotApp(ctk.CTk):
 
         self.is_running = True
         self.stop_event.clear()
+        self.worker_progress.clear()
+        while not self.event_queue.empty():
+            try:
+                self.event_queue.get_nowait()
+            except queue.Empty:
+                break
         self.views["dashboard"].set_running_state(True)
+        self.views["dashboard"].reset_progress()
         emit(self.log_queue, "=== Starting YouTube Automation Session ===")
 
         # Spawn worker thread(s)
@@ -158,13 +177,15 @@ class YTBotApp(ctk.CTk):
         parallel_limit = self.config_mgr.get_int("ParallelBrowsers", 1)
 
         # Distribute accounts across worker threads
-        for acc in self.loaded_accounts[:parallel_limit]:
+        for worker_id, acc in enumerate(self.loaded_accounts[:parallel_limit]):
             worker = AutomationWorker(
                 account=acc,
                 video_tasks=self.queued_video_tasks,
                 config_mgr=self.config_mgr,
                 log_queue=self.log_queue,
                 stop_event=self.stop_event,
+                event_queue=self.event_queue,
+                worker_id=worker_id,
             )
             thread = threading.Thread(target=worker.run, daemon=True)
             self.active_threads.append(thread)
@@ -184,8 +205,30 @@ class YTBotApp(ctk.CTk):
             t.join()
 
         self.is_running = False
-        self.after(0, lambda: self.views["dashboard"].set_running_state(False))
+        # Cross-thread UI updates must go through the event queue, not tk directly.
+        try:
+            self.event_queue.put_nowait(("finished",))
+        except queue.Full:
+            pass
         emit(self.log_queue, "=== Automation Session Completed ===")
+
+    def _handle_worker_event(self, event) -> None:
+        """Apply a structured worker event to the dashboard (main thread only)."""
+        if not event:
+            return
+        kind = event[0]
+
+        if kind == "progress" and len(event) == 4:
+            _, worker_id, done, total = event
+            self.worker_progress[worker_id] = (done, total)
+            done_sum = sum(d for d, _ in self.worker_progress.values())
+            total_sum = sum(t for _, t in self.worker_progress.values())
+            self.views["dashboard"].set_progress(done_sum, total_sum)
+        elif kind == "status" and len(event) == 3:
+            _, message, level = event
+            self.views["dashboard"].set_status(message, level)
+        elif kind == "finished":
+            self.views["dashboard"].set_running_state(False)
 
     def _poll_log_queue(self):
         try:
@@ -194,4 +237,11 @@ class YTBotApp(ctk.CTk):
                 self.views["logs"].append_log(msg)
         except queue.Empty:
             pass
+
+        try:
+            while True:
+                self._handle_worker_event(self.event_queue.get_nowait())
+        except queue.Empty:
+            pass
+
         self.after(100, self._poll_log_queue)

@@ -4,27 +4,33 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..models.video_task import DEFAULT_WATCHTIME_DURATION
+
 
 class ConfigManager:
     """Thread-safe configuration manager using settings.json for settings, accounts, and video queue persistence."""
 
+    # Retired / unused settings that are purged from disk on load.
     REMOVED_SETTINGS = {
         "AIProvider",
         "OpenAIKey",
         "GeminiKey",
         "OpenRouterKey",
         "CommentType",
+        "AccessKey",
     }
     REMOVED_VIDEO_FIELDS = {"comment_type", "custom_comment", "like"}
 
     DEFAULT_DATA: Dict[str, Any] = {
         "settings": {
             "AccountsFile": "accounts.txt",
-            "AccessKey": "access",
             "DirectLinkFallback": True,
-            "WatchtimeDuration": "5 Minutes",
+            "WatchtimeDuration": DEFAULT_WATCHTIME_DURATION,
             "ParallelBrowsers": 1,
             "AppearanceMode": "Dark",
+            "FullVideoTimeoutMinutes": 360,
+            "SkipAds": True,
+            "MaxAdWatchSeconds": 32,
         },
         "accounts": [],
         "videos": [],

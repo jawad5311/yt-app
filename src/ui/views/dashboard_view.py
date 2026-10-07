@@ -1,5 +1,9 @@
 import customtkinter as ctk
 
+# Status line colours for (light, dark) appearance modes.
+STATUS_INFO_COLOR = ("#555555", "#BBBBBB")
+STATUS_ERROR_COLOR = ("#C62828", "#FF6B6B")
+
 
 class DashboardView(ctk.CTkFrame):
     def __init__(self, parent, app_controller):
@@ -73,6 +77,24 @@ class DashboardView(ctk.CTkFrame):
         self.card_accounts.configure(text=str(accounts_count))
         self.card_videos.configure(text=str(videos_count))
         self.card_status.configure(text=status)
+
+    def reset_progress(self):
+        """Clear the progress bar and status line before a run starts."""
+        self.progress_bar.set(0)
+        self.progress_label.configure(text="Starting automation...", text_color=STATUS_INFO_COLOR)
+
+    def set_progress(self, done: int, total: int):
+        """Update the progress bar from aggregated worker progress."""
+        self.progress_bar.set((done / total) if total else 0.0)
+        text = f"Completed {done} / {total} tasks"
+        if total and done >= total:
+            text += " — finished"
+        self.progress_label.configure(text=text, text_color=STATUS_INFO_COLOR)
+
+    def set_status(self, message: str, level: str = "info"):
+        """Surface a worker status message (e.g. a failed sign-in) on the dashboard."""
+        color = STATUS_ERROR_COLOR if level == "error" else STATUS_INFO_COLOR
+        self.progress_label.configure(text=message, text_color=color)
 
     def set_running_state(self, is_running: bool):
         if is_running:

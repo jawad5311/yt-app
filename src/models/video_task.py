@@ -1,5 +1,26 @@
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+# Duration choices offered by the UI (Add/Edit task modal and the Settings default).
+WATCHTIME_OPTIONS: List[str] = [
+    "Full Video",
+    "30 Seconds",
+    "1 Minute",
+    "2 Minutes",
+    "5 Minutes",
+    "10 Minutes",
+    "15 Minutes",
+    "30 Minutes",
+    "45 Minutes",
+    "1 Hour",
+    "2 Hours",
+    "3 Hours",
+    "6 Hours",
+    "12 Hours",
+    "24 Hours",
+]
+
+DEFAULT_WATCHTIME_DURATION = "5 Minutes"
 
 
 @dataclass
@@ -8,7 +29,7 @@ class VideoTask:
     url: str = ""
     title: str = ""
     keywords: str = ""
-    watchtime_duration: str = "5 Minutes"
+    watchtime_duration: str = DEFAULT_WATCHTIME_DURATION
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -24,7 +45,7 @@ class VideoTask:
             url=data.get("url", ""),
             title=data.get("title", ""),
             keywords=data.get("keywords", data.get("title", "")),
-            watchtime_duration=data.get("watchtime_duration", "5 Minutes"),
+            watchtime_duration=data.get("watchtime_duration", DEFAULT_WATCHTIME_DURATION),
         )
 
     def is_full_video(self) -> bool:

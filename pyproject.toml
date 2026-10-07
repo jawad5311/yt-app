@@ -1,0 +1,28 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["venv", "runtime", "build", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle basics, F: pyflakes (real errors), I: import sorting
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # long XPath/JS selector strings are intentional
+]
+
+[tool.ruff.lint.per-file-ignores]
+# main.py must set up sys.path before importing the src package.
+"main.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+no_implicit_optional = true

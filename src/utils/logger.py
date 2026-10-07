@@ -2,8 +2,7 @@ import logging
 import queue
 import re
 from pathlib import Path
-from typing import Optional, Any
-
+from typing import Any, Optional
 
 SECRET_PATTERNS = [
     re.compile(r"key=([A-Za-z0-9_\-]+)", re.IGNORECASE),

@@ -1,8 +1,8 @@
-from .driver import setup_driver, close_driver
+from .driver import close_driver, setup_driver
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
-from .youtube_actions import watch_video
 from .worker import AutomationWorker
+from .youtube_actions import watch_video
 
 __all__ = [
     "setup_driver",

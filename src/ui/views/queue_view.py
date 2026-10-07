@@ -1,9 +1,10 @@
 import webbrowser
-import customtkinter as ctk
 from tkinter import messagebox
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 
-from ...models.video_task import VideoTask
+import customtkinter as ctk
+
+from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
 
 
 class QueueView(ctk.CTkFrame):
@@ -50,6 +51,11 @@ class QueueView(ctk.CTkFrame):
 
         self.load_initial_queue()
 
+    def _default_watch_duration(self) -> str:
+        """Default duration for newly created tasks (Settings -> Default Watch Duration)."""
+        configured = self.app_controller.config_mgr.get_setting("WatchtimeDuration", DEFAULT_WATCHTIME_DURATION)
+        return configured if configured in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION
+
     def load_initial_queue(self):
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
@@ -68,8 +74,12 @@ class QueueView(ctk.CTkFrame):
             messagebox.showinfo("Notice", "No direct video URL is specified for this task.")
 
     def open_video_modal(self, edit_index: Optional[int] = None):
-        is_editing = edit_index is not None and 0 <= edit_index < len(self.video_tasks)
-        target_task = self.video_tasks[edit_index] if is_editing else VideoTask()
+        index = edit_index if edit_index is not None else -1
+        is_editing = 0 <= index < len(self.video_tasks)
+        if is_editing:
+            target_task = self.video_tasks[index]
+        else:
+            target_task = VideoTask(watchtime_duration=self._default_watch_duration())
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
@@ -91,27 +101,9 @@ class QueueView(ctk.CTkFrame):
         title_entry.insert(0, target_task.title)
         title_entry.pack(padx=20, pady=(0, 10))
 
-        WATCHTIME_OPTIONS = [
-            "Full Video",
-            "30 Seconds",
-            "1 Minute",
-            "2 Minutes",
-            "5 Minutes",
-            "10 Minutes",
-            "15 Minutes",
-            "30 Minutes",
-            "45 Minutes",
-            "1 Hour",
-            "2 Hours",
-            "3 Hours",
-            "6 Hours",
-            "12 Hours",
-            "24 Hours",
-        ]
-
         ctk.CTkLabel(modal, text="Watch Duration:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         duration_option = ctk.CTkOptionMenu(modal, values=WATCHTIME_OPTIONS, width=440)
-        duration_option.set(target_task.watchtime_duration or "5 Minutes")
+        duration_option.set(target_task.watchtime_duration or self._default_watch_duration())
         duration_option.pack(padx=20, pady=(0, 10))
 
         def on_submit():
@@ -130,7 +122,7 @@ class QueueView(ctk.CTkFrame):
             )
 
             if is_editing:
-                self.video_tasks[edit_index] = updated_task
+                self.video_tasks[index] = updated_task
             else:
                 self.video_tasks.append(updated_task)
 

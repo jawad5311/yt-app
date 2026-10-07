@@ -1,19 +1,21 @@
 {
   "settings": {
     "AccountsFile": "accounts.txt",
-    "AccessKey": "access",
-    "DirectLinkFallback": "True",
-    "WatchtimeDuration": "5 Minutes",
-    "ParallelBrowsers": "1",
-    "AppearanceMode": "Dark"
+    "DirectLinkFallback": "False",
+    "WatchtimeDuration": "Full Video",
+    "ParallelBrowsers": "2",
+    "AppearanceMode": "Dark",
+    "FullVideoTimeoutMinutes": "20",
+    "SkipAds": "False",
+    "MaxAdWatchSeconds": "32"
   },
   "accounts": [],
   "videos": [
     {
-      "url": "https://www.youtube.com/watch?v=0i_59koRA2Q",
-      "title": "This ONE Book Has The Power to Change Your ENTIRE Life",
-      "keywords": "This ONE Book Has The Power to Change Your ENTIRE Life",
-      "watchtime_duration": "30 Seconds"
+      "url": "https://www.youtube.com/watch?v=Ec9FSxwPea0",
+      "title": "1 Minute Timer",
+      "keywords": "1 Minute Timer",
+      "watchtime_duration": "Full Video"
     }
   ]
 }

@@ -32,6 +32,9 @@ runtime/
 logs/*.log
 !logs/.gitkeep
 
+# Provisioned browser extensions (downloaded on first use)
+extensions/
+
 # PyInstaller
 *.manifest
 *.spec
@@ -42,6 +45,7 @@ logs/*.log
 *.swp
 *.swo
 
-# Configuration files with credentials
-settings.json
+# Configuration files with credentials (never commit)
+# NOTE: settings.json is intentionally tracked (it only holds sanitized settings
+# and the video queue, no credentials) - it is NOT ignored.
 credentials.json

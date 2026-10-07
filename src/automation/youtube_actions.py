@@ -5,8 +5,82 @@ import threading
 import time
 from typing import Any, Optional
 
-from ..utils.helpers import human_like_delay
+from selenium.webdriver.common.by import By
+
 from ..utils.logger import emit
+from .ads import PLAYER_STATE_JS, AdWatchState
+
+# Abort the watch loop when no <video> element is present for this many seconds.
+VIDEO_MISSING_LIMIT_SECONDS = 60
+
+# Safety net for "Full Video" mode so a player that never reaches `ended`
+# cannot hang a worker forever. Overridable via the FullVideoTimeoutMinutes setting.
+DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS = 6 * 3600
+
+# Skip-button discovery: modern + legacy class names, scoped to the player so a
+# generic "Skip" button elsewhere on the page is never clicked.
+SKIP_BUTTON_SELECTORS = (
+    ".html5-video-player button.ytp-ad-skip-button-modern",
+    ".html5-video-player button.ytp-skip-ad-button",
+    ".html5-video-player button.ytp-ad-skip-button",
+    ".html5-video-player .ytp-ad-skip-button-container button",
+    ".html5-video-player .ytp-ad-skip-button-text",
+    "button.ytp-ad-skip-button-modern",
+    ".ytp-ad-skip-button",
+    ".ytp-skip-ad-button",
+)
+
+SKIP_BUTTON_XPATH = (
+    "//div[contains(@class,'html5-video-player')]//button["
+    "@id='skip-button' or contains(@class,'ytp-ad-skip') or contains(@class,'ytp-skip-ad')"
+    " or .//span[normalize-space()='Skip' or normalize-space()='Skip Ads'"
+    " or normalize-space()='Skip ad' or normalize-space()='Überspringen'"
+    " or normalize-space()='Anzeigen überspringen']]"
+)
+
+
+def find_skip_button(driver: Any) -> Any:
+    """Return the first *visible* Skip button inside the player, or ``None``."""
+    for selector in SKIP_BUTTON_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+        except Exception:
+            continue
+        for element in elements:
+            try:
+                if element.is_displayed():
+                    return element
+            except Exception:
+                continue
+
+    try:
+        for element in driver.find_elements(By.XPATH, SKIP_BUTTON_XPATH):
+            try:
+                if element.is_displayed():
+                    return element
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return None
+
+
+def click_element(driver: Any, element: Any) -> bool:
+    """Click an element, preferring a synthetic click so overlays cannot swallow it."""
+    try:
+        driver.execute_script("arguments[0].click();", element)
+        return True
+    except Exception:
+        try:
+            element.click()
+            return True
+        except Exception:
+            return False
+
+
+def _format_clock(seconds: float) -> str:
+    return f"{int(seconds // 60):02d}:{int(seconds % 60):02d}"
 
 
 def watch_video(
@@ -14,117 +88,185 @@ def watch_video(
     duration_seconds: Optional[int],
     stop_event: Optional[threading.Event] = None,
     log_queue: Optional[queue.Queue] = None,
-) -> None:
-    """Watch target video for the specified duration (or full video if duration_seconds is None) with human-like interactions."""
+    full_timeout_seconds: int = DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
+    skip_ads: bool = True,
+    max_ad_seconds: int = 32,
+) -> bool:
+    """Watch the target video for a fixed duration or its full length.
+
+    Args:
+        duration_seconds: fixed watch budget in seconds, or ``None`` for Full Video.
+        full_timeout_seconds: hard cap for Full Video mode (``0`` disables it).
+        skip_ads: ``True`` -> ad blocker + fallback skip after the 30-35s
+            monetisation window; ``False`` -> watch ads, escaping only once
+            cumulative ad time reaches ``max_ad_seconds`` (``0`` = never).
+        max_ad_seconds: cumulative ad-watch cap used when ``skip_ads`` is off.
+
+    Returns:
+        True  -> the watch finished normally (duration reached, video finished,
+                 or the Full Video safety timeout tripped).
+        False -> the watch was interrupted by the user or failed (e.g. no video
+                 element could be found); callers may retry.
+    """
     is_full_mode = duration_seconds is None or duration_seconds <= 0
+    ad_state = AdWatchState()
 
     if is_full_mode:
         emit(log_queue, "Watching full video until playback finishes...")
+        if full_timeout_seconds > 0:
+            emit(log_queue, f"Full-video safety timeout: {full_timeout_seconds // 60} minutes.")
     else:
         emit(log_queue, f"Watching video for up to {duration_seconds} seconds...")
 
-    # Ensure video is playing (only trigger play if currently paused)
-    try:
-        is_paused = driver.execute_script("var v = document.querySelector('video'); return v ? v.paused : false;")
-        if is_paused:
-            emit(log_queue, "Video is paused, initiating playback...")
-            driver.execute_script("var v = document.querySelector('video'); if (v) { v.play(); }")
-            human_like_delay(1.0, 1.5)
-            # Fallback click play button if JS play was blocked
-            still_paused = driver.execute_script("var v = document.querySelector('video'); return v ? v.paused : false;")
-            if still_paused:
-                play_btn = driver.find_elements(By.CSS_SELECTOR, "button.ytp-play-button")
-                if play_btn:
-                    play_btn[0].click()
-    except Exception as exc:
-        logging.debug(f"Error checking/triggering video playback: {exc}")
+    if skip_ads:
+        emit(log_queue, "Ad policy: blocker ON, fallback skips ads after the 30-35s monetisation window.")
+    elif max_ad_seconds > 0:
+        emit(log_queue, f"Ad policy: watching all ads, escape cap at {max_ad_seconds}s.")
+    else:
+        emit(log_queue, "Ad policy: watching all ads, no escape cap.")
 
-    start_time = time.time()
-    last_log_time = 0.0
+    started_at = time.time()
+    last_tick = started_at
+    last_progress_log = 0.0
+    last_ad_log = 0.0
+    video_missing_since: Optional[float] = None
+    escape_warned = False
+    play_attempts = 0
 
     while True:
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Watchtime interrupted by user.")
-            break
+            return False
 
-        elapsed = time.time() - start_time
+        now = time.time()
+        delta = max(0.0, now - last_tick)
+        last_tick = now
+        elapsed = now - started_at
 
-        # Check video playback state via JavaScript
         try:
-            video_state = driver.execute_script("""
-                var v = document.querySelector('video');
-                if (!v) return { found: false };
-                var isAd = false;
-                var adElem = document.querySelector('.ad-showing, .ytp-ad-player-overlay, .video-ads');
-                if (adElem) isAd = true;
-
-                return {
-                    found: true,
-                    paused: v.paused,
-                    ended: v.ended,
-                    currentTime: v.currentTime || 0,
-                    duration: v.duration || 0,
-                    isAd: isAd
-                };
-            """)
+            video_state = driver.execute_script(PLAYER_STATE_JS)
         except Exception:
             video_state = {"found": False}
 
-        # Check if Skip Ad button is visible and click it
-        try:
-            skip_btns = driver.find_elements(
-                By.CSS_SELECTOR,
-                ".ytp-ad-skip-button, .ytp-skip-ad-button, button.ytp-ad-skip-button-modern, .ytp-ad-skip-button-text"
+        if not video_state.get("found"):
+            if video_missing_since is None:
+                video_missing_since = now
+            elif now - video_missing_since >= VIDEO_MISSING_LIMIT_SECONDS:
+                emit(
+                    log_queue,
+                    f"No video element found for {VIDEO_MISSING_LIMIT_SECONDS}s. Aborting watch.",
+                    logging.ERROR,
+                )
+                return False
+            time.sleep(3)
+            continue
+
+        video_missing_since = None
+        is_ad = bool(video_state.get("isAd"))
+        ad_state.tick(is_ad, delta)
+
+        # ------------------------------------------------------------ ads ----
+        if is_ad:
+            if now - last_ad_log >= 30:
+                last_ad_log = now
+                if skip_ads:
+                    emit(
+                        log_queue,
+                        f"Ad playing: {ad_state.break_ad_seconds:.0f}s into this break "
+                        f"(skip at ~{ad_state.skip_target:.0f}s).",
+                    )
+                else:
+                    emit(
+                        log_queue,
+                        f"Ad playing: {ad_state.break_ad_seconds:.0f}s break / "
+                        f"{ad_state.total_ad_seconds:.0f}s total (cap {max_ad_seconds}s). Watching it.",
+                    )
+
+            reason = ad_state.skip_reason(skip_ads, max_ad_seconds)
+            if reason is not None:
+                button = find_skip_button(driver)
+                if button is not None and click_element(driver, button):
+                    emit(log_queue, f"Clicked Skip Ad - {reason}.")
+                    escape_warned = False
+                elif not skip_ads and not escape_warned:
+                    escape_warned = True
+                    emit(
+                        log_queue,
+                        "Ad cap reached but no Skip button found (unskippable ad). Waiting for it to finish.",
+                        logging.WARNING,
+                    )
+
+            if is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds:
+                emit(
+                    log_queue,
+                    f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.",
+                    logging.WARNING,
+                )
+                return True
+
+            time.sleep(3)
+            continue
+
+        # ----------------------------------------------------- main video ----
+        escape_warned = False
+        ended = bool(video_state.get("ended", False))
+        curr_time = float(video_state.get("currentTime", 0.0))
+        video_duration = float(video_state.get("duration", 0.0))
+        paused = bool(video_state.get("paused", False))
+
+        # Playback finished
+        if video_duration > 0 and (ended or curr_time >= (video_duration - 1.5)):
+            emit(log_queue, f"Video playback finished! (Watched full length: {_format_clock(video_duration)})")
+            return True
+
+        # Paused mid-video -> resume (JS first, real play button as fallback)
+        if paused and not ended and (video_duration == 0 or curr_time < (video_duration - 2)):
+            try:
+                driver.execute_script("var v = document.querySelector('video'); if (v) v.play();")
+                play_attempts += 1
+                if play_attempts <= 3:
+                    still_paused = driver.execute_script(
+                        "var v = document.querySelector('video'); return v ? v.paused : true;"
+                    )
+                    if still_paused:
+                        play_buttons = driver.find_elements(By.CSS_SELECTOR, "button.ytp-play-button")
+                        if play_buttons:
+                            click_element(driver, play_buttons[0])
+            except Exception as exc:
+                logging.debug(f"Could not resume playback: {exc}")
+
+        # Periodic progress
+        if now - last_progress_log >= 30:
+            last_progress_log = now
+            if video_duration > 0:
+                percent = int((curr_time / video_duration) * 100)
+                mode = "full video progress" if is_full_mode else "watch progress"
+                emit(
+                    log_queue,
+                    f"Watching {mode}: {_format_clock(curr_time)} / "
+                    f"{_format_clock(video_duration)} ({percent}%)",
+                )
+
+        # Full Video safety timeout
+        if is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds:
+            emit(
+                log_queue,
+                f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.",
+                logging.WARNING,
             )
-            for s_btn in skip_btns:
-                if s_btn.is_displayed():
-                    emit(log_queue, "Skip Ad button detected. Clicking Skip Ad...")
-                    driver.execute_script("arguments[0].click();", s_btn)
-                    break
-        except Exception:
-            pass
+            return True
 
-        if video_state.get("found"):
-            is_ad = video_state.get("isAd", False)
-            ended = video_state.get("ended", False)
-            curr_time = video_state.get("currentTime", 0.0)
-            v_dur = video_state.get("duration", 0.0)
-            paused = video_state.get("paused", False)
-
-            # If not an ad and playback finished (ended flag set or currentTime reached duration)
-            if not is_ad and v_dur > 0:
-                if ended or curr_time >= (v_dur - 1.5):
-                    dur_formatted = f"{int(v_dur // 60):02d}:{int(v_dur % 60):02d}"
-                    emit(log_queue, f"Video playback finished! (Watched full length: {dur_formatted})")
-                    break
-
-            # If paused mid-video (and not an ad and not ended), attempt to resume playback
-            if paused and not ended and not is_ad and (v_dur == 0 or curr_time < (v_dur - 2)):
-                try:
-                    driver.execute_script("var v = document.querySelector('video'); if (v) v.play();")
-                except Exception:
-                    pass
-
-            # Log periodic status for Full Video mode
-            if is_full_mode and (time.time() - last_log_time >= 30):
-                last_log_time = time.time()
-                if is_ad:
-                    emit(log_queue, "Ad is playing, waiting for main video...")
-                elif v_dur > 0:
-                    curr_fmt = f"{int(curr_time // 60):02d}:{int(curr_time % 60):02d}"
-                    dur_fmt = f"{int(v_dur // 60):02d}:{int(v_dur % 60):02d}"
-                    percent = int((curr_time / v_dur) * 100) if v_dur > 0 else 0
-                    emit(log_queue, f"Watching full video progress: {curr_fmt} / {dur_fmt} ({percent}%)")
-
-        # For fixed duration mode, stop if elapsed exceeds target duration
+        # Fixed-duration budget counts *watching* time only: seconds spent in
+        # ads are excluded so "watch all ads" mode cannot eat the whole budget.
         if not is_full_mode and duration_seconds is not None:
-            if elapsed >= duration_seconds:
+            watched_elapsed = elapsed - ad_state.total_ad_seconds
+            if watched_elapsed >= duration_seconds:
                 emit(log_queue, f"Reached watch duration limit ({duration_seconds}s).")
-                break
+                return True
 
         time.sleep(3)
 
-        # Occasional random micro-scroll
+        # Occasional random micro-scroll while the main video plays
         if random.random() < 0.2:
             try:
                 scroll_amount = random.randint(100, 300)
