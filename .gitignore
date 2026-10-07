@@ -45,7 +45,9 @@ extensions/
 *.swp
 *.swo
 
+# Local application state: per-machine settings, video queue and channels.
+# Created with defaults on first run, so it never needs to be committed.
+settings.json
+
 # Configuration files with credentials (never commit)
-# NOTE: settings.json is intentionally tracked (it only holds sanitized settings
-# and the video queue, no credentials) - it is NOT ignored.
 credentials.json
