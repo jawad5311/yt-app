@@ -66,7 +66,7 @@ python -m compileall -q main.py src tests   # expect: silent, exit 0
 5. Re-add your real account(s) for the browser stages.
    - [x] `credentials.json` exists with `{"accounts": [...]}` structure
    - [x] `settings.json` has no `accounts` entries (legacy migration)
-   - [x] `git check-ignore credentials.json` → ignored; `git check-ignore settings.json` → **not** ignored
+   - [x] `git check-ignore credentials.json` → ignored; `git check-ignore settings.json` → ignored
 
 ## Stage 3 — Video Queue 🖱 (no browser)
 
@@ -216,7 +216,7 @@ Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monet
 
 - [ ] Fresh `git clone` → `python -m pip install -r requirements.txt -r requirements-dev.txt` → `python -m pytest` → 97 passed
 - [ ] Push a branch → GitHub Actions **CI** job: `lint` (ruff+mypy) and `test` (3.11, 3.12) all green
-- [ ] `git status` clean after a full run except intended changes (note: `settings.json` *is* tracked, so its edits show up)
+- [ ] `git status` clean after a full run except intended changes (`settings.json` and `credentials.json` are git-ignored, so queue/channel edits do not show up)
 
 ---
 

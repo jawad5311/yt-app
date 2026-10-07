@@ -20,7 +20,7 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 
 ```text
 G:\Projects\yt-tool\
-├── settings.json               # App settings, accounts index & video queue (tracked; contains no credentials)
+├── settings.json               # App settings, video queue & channels (git-ignored — created on first run)
 ├── credentials.json            # Local Google account credentials (git-ignored — never commit)
 ├── requirements.txt            # Python dependencies
 ├── requirements-dev.txt        # Test / lint / type-check tooling
@@ -174,5 +174,5 @@ Click **💾 Save Settings** to apply. Settings are persisted in `settings.json`
 ## Project Layout Notes
 
 - `credentials.json` is git-ignored and must never be committed.
-- `settings.json` is intentionally **tracked**: it only holds sanitized settings and the video queue (no credentials). Local queue edits will therefore show up in `git status`.
+- `settings.json` is git-ignored too: it is per-machine state (settings, video queue, channels) and is recreated with defaults on first run, so local edits never show up in `git status`.
 - `logs/*.log` and `runtime/` are generated at runtime and are not tracked (`logs/.gitkeep` keeps the folder in the repo).

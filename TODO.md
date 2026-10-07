@@ -13,6 +13,7 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] **Dashboard progress bar never updated** — workers now emit `progress` events; the Dashboard shows aggregated `Completed X / Y tasks` across all workers.
 - [x] **Window title said "Views + Comment"** — now *YouTube Playback Automation Tool - V2.1 (Modular)*.
 - [x] **`settings.json` tracked *and* git-ignored** — decided: it stays **tracked** (sanitized settings + queue, no credentials) and the stale `.gitignore` entry was removed; `credentials.json` remains ignored.
+  - [x] **Reversed** — `settings.json` is now **git-ignored** as per-machine state (settings, video queue, channels). It is untracked with `git rm --cached`, the local file is kept, and first run recreates it from `DEFAULT_DATA`; `credentials.json` stays ignored.
 - [x] **Dead config keys** — `AccessKey` removed from defaults and purged from existing files; `WatchtimeDuration` now drives the Add Task default; `AppearanceMode` now drives the real theme.
 - [x] **`logs/.gitkeep` referenced but missing** — created; the `logs/` folder is now kept in the repo.
 
