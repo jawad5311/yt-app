@@ -73,3 +73,15 @@ def test_from_dict_falls_back_to_defaults():
 def test_from_dict_legacy_keywords_from_title():
     restored = VideoTask.from_dict({"title": "Legacy Title"})
     assert restored.keywords == "Legacy Title"
+
+
+def test_channel_defaults_to_empty():
+    assert VideoTask().channel == ""
+    assert VideoTask.from_dict({}).channel == ""
+    assert VideoTask.from_dict({"channel": None}).channel == ""
+
+
+def test_channel_roundtrips():
+    task = VideoTask(url="https://youtu.be/abcdefghijk", channel="Cooking")
+    assert task.to_dict()["channel"] == "Cooking"
+    assert VideoTask.from_dict(task.to_dict()) == task

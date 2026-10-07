@@ -1,9 +1,10 @@
 import webbrowser
-from tkinter import messagebox
+from tkinter import TclError, messagebox
 from typing import List, Optional
 
 import customtkinter as ctk
 
+from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
 
 
@@ -38,6 +39,14 @@ class QueueView(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_frame,
+            text="📺 Manage Channels",
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            command=self.open_channels_view,
+        ).pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(
+            btn_frame,
             text="🗑 Clear Queue",
             fg_color="#D32F2F",
             hover_color="#9A0007",
@@ -56,6 +65,19 @@ class QueueView(ctk.CTkFrame):
         configured = self.app_controller.config_mgr.get_setting("WatchtimeDuration", DEFAULT_WATCHTIME_DURATION)
         return configured if configured in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION
 
+    @staticmethod
+    def _restore_video_modal_grab(modal):
+        """Callback that re-grabs the task modal after a nested dialog closes."""
+
+        def restore() -> None:
+            try:
+                if modal.winfo_exists():
+                    modal.grab_set()
+            except TclError:
+                pass
+
+        return restore
+
     def load_initial_queue(self):
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
@@ -66,6 +88,53 @@ class QueueView(ctk.CTkFrame):
         dict_list = [v.to_dict() for v in self.video_tasks]
         self.app_controller.config_mgr.set_video_queue(dict_list)
         self.app_controller.on_queue_changed(self.video_tasks)
+
+    # -------------------------------------------------------------- channels
+
+    def _channels(self) -> List[Channel]:
+        return [Channel.from_dict(entry) for entry in self.app_controller.config_mgr.get_channels()]
+
+    def _channel_values(self) -> List[str]:
+        """Dropdown values for the task modal: every channel plus '(None)'."""
+        return [NO_CHANNEL_VALUE] + [channel.name for channel in self._channels()]
+
+    def open_channels_view(self):
+        show_view = getattr(self.app_controller, "show_view", None)
+        if callable(show_view) and "channels" in getattr(self.app_controller, "views", {}):
+            show_view("channels")
+
+    def reassign_channel(self, old_name: str, new_name: str) -> None:
+        """Follow a channel rename so the video relation stays intact."""
+        changed = False
+        for task in self.video_tasks:
+            if task.channel == old_name:
+                task.channel = new_name
+                changed = True
+        if changed:
+            self.save_queue()
+        self.refresh_list()
+
+    def unassign_channel(self, name: str) -> int:
+        """Detach videos from a deleted channel; returns how many were detached."""
+        count = 0
+        for task in self.video_tasks:
+            if task.channel == name:
+                task.channel = ""
+                count += 1
+        if count:
+            self.save_queue()
+        self.refresh_list()
+        return count
+
+    def unassign_all_channels(self) -> None:
+        changed = False
+        for task in self.video_tasks:
+            if task.channel:
+                task.channel = ""
+                changed = True
+        if changed:
+            self.save_queue()
+        self.refresh_list()
 
     def open_video_url(self, url: str):
         if url and url.strip():
@@ -83,7 +152,7 @@ class QueueView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
-        modal.geometry("500x390")
+        modal.geometry("500x480")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
@@ -106,6 +175,43 @@ class QueueView(ctk.CTkFrame):
         duration_option.set(target_task.watchtime_duration or self._default_watch_duration())
         duration_option.pack(padx=20, pady=(0, 10))
 
+        ctk.CTkLabel(modal, text="Channel:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        channel_option = ctk.CTkOptionMenu(modal, values=self._channel_values(), width=440)
+        channel_option.set(target_task.channel if target_task.channel in self._channel_values() else NO_CHANNEL_VALUE)
+        channel_option.pack(padx=20, pady=(0, 6))
+
+        def refresh_channel_options(selected: str = "") -> None:
+            """Repaint the dropdown after the channel list changed underneath it."""
+            values = self._channel_values()
+            channel_option.configure(values=values)
+            current = channel_option.get()
+            if selected in values:
+                channel_option.set(selected)
+            elif current in values:
+                channel_option.set(current)
+            else:
+                channel_option.set(NO_CHANNEL_VALUE)
+
+        def open_channel_dialog() -> None:
+            views = getattr(self.app_controller, "views", None)
+            channels_view = views.get("channels") if isinstance(views, dict) else None
+            if channels_view is None:
+                return
+            channels_view.open_channel_modal(
+                on_saved=lambda channel: refresh_channel_options(selected=channel.name),
+                on_close=self._restore_video_modal_grab(modal),
+            )
+
+        ctk.CTkButton(
+            modal,
+            text="+ New Channel",
+            width=130,
+            height=26,
+            fg_color="transparent",
+            border_width=1,
+            command=open_channel_dialog,
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+
         def on_submit():
             url = url_entry.get().strip()
             keywords = keywords_entry.get().strip()
@@ -119,6 +225,7 @@ class QueueView(ctk.CTkFrame):
                 keywords=keywords,
                 title=title,
                 watchtime_duration=duration_option.get(),
+                channel="" if channel_option.get() == NO_CHANNEL_VALUE else channel_option.get(),
             )
 
             if is_editing:
@@ -159,51 +266,120 @@ class QueueView(ctk.CTkFrame):
             ).pack(pady=30)
             return
 
-        for idx, task in enumerate(self.video_tasks):
-            card = ctk.CTkFrame(self.scroll_frame, corner_radius=6)
-            card.pack(fill="x", padx=5, pady=5)
-            card.grid_columnconfigure(0, weight=1)
-            card.grid_columnconfigure(1, weight=0)
+        for group in group_videos_by_channel(self.video_tasks, self._channels()):
+            self._render_group(group)
 
-            t_text = task.title or task.keywords or task.url
-            if len(t_text) > 55:
-                t_text = t_text[:52] + "..."
+    def _render_group(self, group: VideoGroup):
+        """Render one channel section (header + its video cards)."""
+        container = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+        container.pack(fill="x", padx=5, pady=(6, 4))
+        container.grid_columnconfigure(0, weight=1)
 
-            kw_text = task.keywords or "N/A"
-            if len(kw_text) > 35:
-                kw_text = kw_text[:32] + "..."
+        header = ctk.CTkFrame(container, corner_radius=6, fg_color=("gray88", "gray22"))
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
 
-            info_text = f"#{idx + 1}. {t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration}"
-            lbl = ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13), anchor="w")
-            lbl.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
+        title = f"📺 {group.name}  •  {group.count} video(s)"
+        ctk.CTkLabel(
+            header,
+            text=title,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            justify="left",
+            anchor="w",
+        ).grid(row=0, column=0, padx=12, pady=(6, 0), sticky="ew")
 
-            # Action Buttons Frame (Fixed to column 1 on the right edge)
-            action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-            action_btn_frame.grid(row=0, column=1, padx=10, pady=10, sticky="e")
+        if group.url:
+            ctk.CTkLabel(
+                header,
+                text=group.url,
+                font=ctk.CTkFont(size=12),
+                text_color=("gray30", "gray70"),
+                justify="left",
+                anchor="w",
+            ).grid(row=1, column=0, padx=12, pady=(0, 6), sticky="ew")
 
+        header_btns = ctk.CTkFrame(header, fg_color="transparent")
+        header_btns.grid(row=0, column=1, rowspan=2, padx=8, pady=6, sticky="e")
+
+        if group.url:
             ctk.CTkButton(
-                action_btn_frame,
-                text="🔗 View",
-                width=65,
+                header_btns,
+                text="🔗 Open Channel",
+                width=110,
                 fg_color="#2E7D32",
                 hover_color="#1B5E20",
-                command=lambda u=task.url: self.open_video_url(u),
+                command=lambda u=group.url: webbrowser.open(u),
             ).pack(side="left", padx=(0, 4))
 
-            ctk.CTkButton(
-                action_btn_frame,
-                text="✏ Edit",
-                width=60,
-                fg_color="#1F6AA5",
-                hover_color="#144870",
-                command=lambda i=idx: self.open_video_modal(edit_index=i),
-            ).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(
+            header_btns,
+            text="⚙ Manage",
+            width=85,
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            command=self.open_channels_view,
+        ).pack(side="left")
 
-            ctk.CTkButton(
-                action_btn_frame,
-                text="🗑 Delete",
-                width=65,
-                fg_color="#D32F2F",
-                hover_color="#9A0007",
-                command=lambda i=idx: self.remove_task(i),
-            ).pack(side="left")
+        if not group.videos:
+            ctk.CTkLabel(
+                container,
+                text="No videos in this channel yet. Click '+ Add Target Video' to add one.",
+                font=ctk.CTkFont(size=13, slant="italic"),
+                anchor="w",
+            ).grid(row=1, column=0, padx=14, pady=(0, 8), sticky="w")
+            return
+
+        for row, (index, task) in enumerate(group.videos, start=1):
+            card = self._build_task_card(container, row, task, index)
+            card.grid(row=row, column=0, sticky="ew", pady=(0, 5))
+
+    def _build_task_card(self, parent, position: int, task: VideoTask, index: int):
+        """Build a single video card; ``index`` is the task's real queue index."""
+        card = ctk.CTkFrame(parent, corner_radius=6)
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_columnconfigure(1, weight=0)
+
+        t_text = task.title or task.keywords or task.url
+        if len(t_text) > 55:
+            t_text = t_text[:52] + "..."
+
+        kw_text = task.keywords or "N/A"
+        if len(kw_text) > 35:
+            kw_text = kw_text[:32] + "..."
+
+        info_text = f"#{position}. {t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration}"
+        lbl = ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13), anchor="w")
+        lbl.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
+
+        # Action Buttons Frame (Fixed to column 1 on the right edge)
+        action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        action_btn_frame.grid(row=0, column=1, padx=10, pady=10, sticky="e")
+
+        ctk.CTkButton(
+            action_btn_frame,
+            text="🔗 View",
+            width=65,
+            fg_color="#2E7D32",
+            hover_color="#1B5E20",
+            command=lambda u=task.url: self.open_video_url(u),
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            action_btn_frame,
+            text="✏ Edit",
+            width=60,
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            command=lambda i=index: self.open_video_modal(edit_index=i),
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            action_btn_frame,
+            text="🗑 Delete",
+            width=65,
+            fg_color="#D32F2F",
+            hover_color="#9A0007",
+            command=lambda i=index: self.remove_task(i),
+        ).pack(side="left")
+
+        return card

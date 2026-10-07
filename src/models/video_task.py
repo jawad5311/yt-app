@@ -30,6 +30,8 @@ class VideoTask:
     title: str = ""
     keywords: str = ""
     watchtime_duration: str = DEFAULT_WATCHTIME_DURATION
+    # Name of the Channel this video belongs to ("" = uncategorized).
+    channel: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -37,6 +39,7 @@ class VideoTask:
             "title": self.title,
             "keywords": self.keywords,
             "watchtime_duration": self.watchtime_duration,
+            "channel": self.channel,
         }
 
     @classmethod
@@ -46,6 +49,7 @@ class VideoTask:
             title=data.get("title", ""),
             keywords=data.get("keywords", data.get("title", "")),
             watchtime_duration=data.get("watchtime_duration", DEFAULT_WATCHTIME_DURATION),
+            channel=data.get("channel") or "",
         )
 
     def is_full_video(self) -> bool:

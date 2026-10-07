@@ -80,10 +80,21 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 ### Queue & Dashboard UI
 
 - **Video Queue**: add / edit / delete / clear tasks; each card shows title, keywords, and watch duration.
+- Queue is rendered **grouped by channel** — one section header per channel (name, URL, video count) with an **Uncategorized** section for videos that belong to no channel.
 - **🔗 View** button opens the queued video URL in the system browser.
 - Responsive card grid that does not clip buttons in small windows.
 - **Dashboard**: live cards for *Loaded Accounts*, *Queued Videos*, *Bot Status*, plus Start/Stop controls.
 - Queue and settings persist in `settings.json` (thread-safe, atomic write via temp-file replace).
+
+### Channels
+
+- **Channels view** (sidebar → 📺 Channels): create / edit / delete named channels, each with a name and a channel URL.
+- **Relation**: every queue task can be assigned to one channel (`channel` field on the task); a channel owns any number of videos.
+- **Grouped queue**: the Video Queue screen groups videos under their channel header, with **🔗 Open Channel** and **⚙ Manage** shortcuts.
+- **+ New Channel** inside the *Add/Edit Task* dialog creates a channel without leaving the modal and selects it straight away.
+- Renaming a channel **cascades** to its videos; deleting a channel moves its videos to *Uncategorized* (never deletes videos).
+- URLs are normalized (`youtube.com/@x` → `https://youtube.com/@x`); duplicate/blank names are rejected in the UI and stripped from `settings.json` on load.
+- Channels persist in `settings.json` under the `channels` key (atomic write, like the queue).
 
 ### Settings
 
@@ -102,7 +113,7 @@ Retired keys (`AccessKey`, `AIProvider`, `OpenAIKey`, `GeminiKey`, `OpenRouterKe
 
 ### Quality & CI
 
-- **Test suite**: 70+ pytest cases covering duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), ad-state parsing/policy, and ad-blocker provisioning (including the DevTools loader with a scripted WebSocket).
+- **Test suite**: 97 pytest cases covering duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel serialization + queue grouping, ad-state parsing/policy, and ad-blocker provisioning (including the DevTools loader with a scripted WebSocket).
 - **Lint**: `ruff` (`E`, `F`, `W`, `I` rules) configured in `pyproject.toml`.
 - **Type check**: `mypy` over `src/` and `tests/` with `check_untyped_defs`.
 - **CI**: `.github/workflows/ci.yml` runs ruff + mypy, and pytest on Python 3.11/3.12 (Windows).

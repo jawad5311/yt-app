@@ -78,6 +78,56 @@ def test_video_queue_roundtrip(tmp_path):
     assert reloaded.get_video_queue() == tasks
 
 
+def test_video_queue_keeps_channel_relation(tmp_path):
+    mgr = make_manager(tmp_path)
+    tasks = [{"url": "https://youtu.be/abcdefghijk", "channel": "Cooking"}]
+    mgr.set_video_queue(tasks)
+    reloaded = ConfigManager(config_file=mgr.config_file)
+    assert reloaded.get_video_queue()[0]["channel"] == "Cooking"
+
+
+def test_channels_default_to_empty_list(tmp_path):
+    mgr = make_manager(tmp_path)
+    assert mgr.data["channels"] == []
+    assert mgr.get_channels() == []
+
+
+def test_missing_channels_section_is_created_on_load(tmp_path):
+    seed: dict = {"settings": {}, "accounts": [], "videos": []}
+    mgr = make_manager(tmp_path, seed)
+
+    assert mgr.get_channels() == []
+    on_disk = json.loads(mgr.config_file.read_text(encoding="utf-8"))
+    assert on_disk["channels"] == []
+
+
+def test_channel_roundtrip(tmp_path):
+    mgr = make_manager(tmp_path)
+    channels = [{"name": "Cooking", "url": "https://youtube.com/@cooking"}]
+    mgr.set_channels(channels)
+    reloaded = ConfigManager(config_file=mgr.config_file)
+    assert reloaded.get_channels() == channels
+
+
+def test_sanitize_drops_blank_and_duplicate_channels(tmp_path):
+    seed: dict = {
+        "settings": {},
+        "accounts": [],
+        "videos": [],
+        "channels": [
+            {"name": "Cooking", "url": "youtube.com/@cooking"},
+            {"name": "   ", "url": "https://ignored.example"},
+            {"name": "cooking", "url": "https://duplicate.example"},
+            "not-a-dict",
+        ],
+    }
+    mgr = make_manager(tmp_path, seed)
+
+    assert mgr.get_channels() == [{"name": "Cooking", "url": "https://youtube.com/@cooking"}]
+    on_disk = json.loads(mgr.config_file.read_text(encoding="utf-8"))
+    assert len(on_disk["channels"]) == 1
+
+
 def test_accounts_are_stored_in_credentials_file(tmp_path):
     mgr = make_manager(tmp_path)
     mgr.set_accounts([{"email": "a@b.com", "password": "pw"}])

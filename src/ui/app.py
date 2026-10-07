@@ -11,6 +11,7 @@ from ..models.account import Account
 from ..models.video_task import VideoTask
 from ..utils.logger import emit, init_logging
 from .views.accounts_view import AccountsView
+from .views.channels_view import ChannelsView
 from .views.dashboard_view import DashboardView
 from .views.logs_view import LogsView
 from .views.queue_view import QueueView
@@ -57,7 +58,7 @@ class YTBotApp(ctk.CTk):
         # Navigation Sidebar
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(6, weight=1)
+        self.sidebar.grid_rowconfigure(7, weight=1)
 
         ctk.CTkLabel(
             self.sidebar,
@@ -70,6 +71,7 @@ class YTBotApp(ctk.CTk):
             ("dashboard", "📊 Dashboard"),
             ("accounts", "👤 Accounts"),
             ("queue", "🎥 Video Queue"),
+            ("channels", "📺 Channels"),
             ("settings", "⚙ Settings"),
             ("logs", "📋 Logs"),
         ]
@@ -99,6 +101,7 @@ class YTBotApp(ctk.CTk):
             "dashboard": DashboardView(self.container, self),
             "accounts": AccountsView(self.container, self),
             "queue": QueueView(self.container, self),
+            "channels": ChannelsView(self.container, self),
             "settings": SettingsView(self.container, self),
             "logs": LogsView(self.container, self),
         }

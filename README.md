@@ -13,7 +13,7 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 - **Ad Handling**: The *Skip Ads* switch (default **on**) installs uBlock Origin Lite (pinned MV3 build, SHA-256 verified) into every session so most ads never render, then clicks through anything that still plays after a randomized **30–35 s** (past the monetisation window). With the switch **off**, ads are watched up to a cumulative *Max Ad Watch* cap before an escape-skip fires.
 - **Configurable Watch Durations**: Presets from 30 Seconds up to 24 Hours, plus a *Full Video* mode (still under testing — see [FEATURES.md](FEATURES.md)).
 - **Reliability**: Every task gets one automatic retry, watches abort cleanly if no player is found, worker progress/status is streamed to the Dashboard, and failed sign-ins are surfaced in the UI instead of only in the logs.
-- **Quality**: 70+ unit tests (`pytest`), lint (`ruff`), type checks (`mypy`), and a GitHub Actions CI pipeline.
+- **Quality**: 90+ unit tests (`pytest`), lint (`ruff`), type checks (`mypy`), and a GitHub Actions CI pipeline.
 - **Decoupled Architecture**: Clean separation of UI (`CustomTkinter`), automation engine, data models, and thread-safe configuration management.
 
 ## Project Architecture
@@ -39,8 +39,8 @@ G:\Projects\yt-tool\
     ├── ai/                     # Retired AI commenting support (stub kept for history)
     ├── automation/             # Chrome driver setup, Google login, organic navigation & YouTube actions
     ├── config/                 # Thread-safe settings and credentials manager
-    ├── models/                 # Account & VideoTask data models
-    ├── ui/                     # CustomTkinter GUI views (Dashboard, Accounts, Queue, Settings, Logs)
+    ├── models/                 # Account, VideoTask & Channel data models
+    ├── ui/                     # CustomTkinter GUI views (Dashboard, Accounts, Queue, Channels, Settings, Logs)
     └── utils/                  # Logger with API key masking & typing helper utilities
 ```
 
@@ -134,8 +134,18 @@ Open the **Video Queue** screen and click **+ Add Target Video**. Each task acce
 | Search Keywords | One of the three | Query typed into the YouTube search box for organic navigation |
 | Video Title | One of the three | Optional; matched (case-insensitive) against the top 15 search results |
 | Watch Duration | Yes | `30 Seconds` … `24 Hours`, or `Full Video` (testing) |
+| Channel | No | Groups the video under a channel on the queue screen; `(None)` = Uncategorized |
 
 At least one of URL / Keywords / Title is required. Each queue card offers **🔗 View**, **✏ Edit**, and **🗑 Delete**, and **Clear Queue** empties the whole list. The queue is persisted in `settings.json`.
+
+### 2b. Group Videos by Channel
+
+Open the **📺 Channels** screen (or **📺 Manage Channels** in the queue header) and click **+ Add Channel**. A channel is just a *name* plus a *channel URL*, and it can own any number of queue tasks:
+
+- The **Video Queue** renders one section per channel — header with the channel name, URL, video count, plus **🔗 Open Channel** and **⚙ Manage**. Videos with no channel fall into an **Uncategorized** section.
+- The task dialog's **Channel** dropdown assigns a video; **+ New Channel** creates one in place without leaving the dialog.
+- Renaming a channel keeps its videos attached; deleting a channel moves them to **Uncategorized** (videos are never deleted).
+- Channels persist in `settings.json` under `channels`.
 
 ### 3. Configure Settings
 

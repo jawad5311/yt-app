@@ -42,13 +42,22 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] **Skip Ads** toggle and **Max Ad Watch (seconds)** entry on the Settings screen, persisted to `settings.json`.
 - [x] All settings exposed and saved from the Settings screen with validation.
 
+### Channels (video grouping)
+
+- [x] **`Channel` model** (`src/models/channel.py`) — name + URL with URL normalization (`youtube.com/@x` → `https://…`), duplicate/blank-name validation, and `group_videos_by_channel()` bucketing (channel order preserved, original queue indexes preserved, trailing *Uncategorized* group).
+- [x] **📺 Channels screen** — create / edit / delete / clear channels with per-channel video counts and a **🔗 Open** shortcut; sidebar entry added.
+- [x] **Video → channel relation** — `VideoTask.channel` stored in `settings.json`; the task dialog gained a **Channel** dropdown and a **+ New Channel** button that saves without leaving the modal.
+- [x] **Grouped Video Queue** — one section header per channel (name, URL, video count) with **🔗 Open Channel** / **⚙ Manage**, plus an *Uncategorized* section; empty channels still render.
+- [x] **Rename cascades, delete detaches** — renaming a channel keeps its videos attached; deleting one moves them to *Uncategorized* (videos are never deleted).
+- [x] **Persistence & hygiene** — `channels` key added to `ConfigManager` defaults; blanks, non-dicts, and duplicate names are stripped from `settings.json` on load.
+
 ### Quality features
 
-- [x] `tests/` pytest suite — **77 passing tests**: duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), ad-state/policy, ad-blocker provisioning (scripted-WebSocket DevTools loader).
+- [x] `tests/` pytest suite — **97 passing tests**: duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel model/grouping, ad-state/policy, ad-blocker provisioning (scripted-WebSocket DevTools loader).
 - [x] `pyproject.toml` — pytest, ruff (`E,F,W,I`), and mypy (`check_untyped_defs`) configuration.
 - [x] `requirements-dev.txt` — pinned `pytest`, `ruff`, `mypy`.
 - [x] `.github/workflows/ci.yml` — ruff + mypy, pytest on Python 3.11/3.12 (Windows).
-- [x] `ruff check .` → clean · `mypy` → clean (33 files) · `pytest` → 77 passed.
+- [x] `ruff check .` → clean · `mypy` → clean (36 files) · `pytest` → 97 passed.
 - [x] Dead imports and unsorted import blocks cleaned up across the codebase.
 
 ## 🧪 Testing (manual / runtime)

@@ -16,21 +16,21 @@ Record results in the checklist at the bottom. Estimated full pass: ~60–90 min
 ```powershell
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m ruff check .          # expect: All checks passed!
-python -m mypy                  # expect: Success: no issues found in 33 source files
-python -m pytest                # expect: 77 passed
+python -m mypy                  # expect: Success: no issues found in 36 source files
+python -m pytest                # expect: 97 passed
 python -m compileall -q main.py src tests   # expect: silent, exit 0
 ```
 
 - [x] ruff clean
 - [x] mypy clean
-- [x] 77 tests pass
+- [x] 97 tests pass
 - [x] `python -c "import main"` succeeds
 
 ## Stage 1 — App boot & configuration 🖱 (no browser)
 
 1. `python main.py`
    - [x] Window title: **YouTube Playback Automation Tool - V2.1 (Modular)**
-   - [x] Default view is Dashboard; sidebar has 5 entries (Dashboard, Accounts, Video Queue, Settings, Logs)
+   - [x] Default view is Dashboard; sidebar has 6 entries (Dashboard, Accounts, Video Queue, Channels, Settings, Logs)
    - [x] Dashboard cards show account/queue counts and `Idle`
    - [x] No traceback in the Logs view or console
 2. Settings screen:
@@ -84,6 +84,27 @@ python -m compileall -q main.py src tests   # expect: silent, exit 0
 6. Resize the window to its minimum (950×600)
    - [x] Buttons not clipped (responsive grid fix)
 7. **🗑 Clear Queue** → confirm empty after restart.
+
+## Stage 3b — Channels 🖱 (no browser)
+
+1. Video Queue → **📺 Manage Channels** → **+ Add Channel** with an empty name → **Add Channel**
+   - [ ] Error: *Channel name is required.*
+2. Add `Cooking` with `youtube.com/@cooking`
+   - [ ] Row shows the name, the normalized `https://…` URL and `0 video(s)`
+3. Add a second channel named `cooking`
+   - [ ] Error: *A channel named 'Cooking' already exists.*
+4. **+ Add Target Video** → the Channel dropdown lists `(None)`, `Cooking`, …; pick `Cooking` → **Add Task**
+   - [ ] Queue renders a `📺 Cooking • 1 video(s)` section header showing the channel URL
+   - [ ] A task added with `(None)` lands under **Uncategorized**
+   - [ ] A channel with no videos still renders its own (empty) section
+5. In the task modal click **+ New Channel**, save `Gaming`
+   - [ ] Dialog closes, the task modal survives, and its Channel dropdown now shows `Gaming` selected
+6. **✏ Edit** `Cooking` → rename to `Cooking Shows` → **Save Changes**
+   - [ ] The channel's videos keep their grouping (header follows the new name)
+7. **🗑 Delete** `Cooking Shows`
+   - [ ] Notice: *… video(s) moved to Uncategorized*; those videos reappear under **Uncategorized**
+8. Restart the app
+   - [ ] Channels and the video → channel relation survive (`settings.json` → `channels`)
 
 ## Stage 4 — Browser diagnostics 🖱
 
@@ -193,7 +214,7 @@ Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monet
 
 ## Stage 13 — Clean-clone / CI ✅
 
-- [ ] Fresh `git clone` → `python -m pip install -r requirements.txt -r requirements-dev.txt` → `python -m pytest` → 77 passed
+- [ ] Fresh `git clone` → `python -m pip install -r requirements.txt -r requirements-dev.txt` → `python -m pytest` → 97 passed
 - [ ] Push a branch → GitHub Actions **CI** job: `lint` (ruff+mypy) and `test` (3.11, 3.12) all green
 - [ ] `git status` clean after a full run except intended changes (note: `settings.json` *is* tracked, so its edits show up)
 
@@ -207,6 +228,7 @@ Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monet
 | 1 Boot & config | | |
 | 2 Accounts | | |
 | 3 Queue | | |
+| 3b Channels | | |
 | 4 Diagnostics | | |
 | 5 Happy path | | |
 | 6 Organic search | | |

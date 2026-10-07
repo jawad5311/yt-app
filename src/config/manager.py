@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..models.channel import Channel
 from ..models.video_task import DEFAULT_WATCHTIME_DURATION
 
 
@@ -34,6 +35,7 @@ class ConfigManager:
         },
         "accounts": [],
         "videos": [],
+        "channels": [],
     }
 
     def __init__(self, config_file: Optional[Path] = None):
@@ -72,6 +74,16 @@ class ConfigManager:
             if "videos" not in self.data or not isinstance(self.data["videos"], list):
                 self.data["videos"] = []
 
+            # Channels are stored in settings.json next to the video queue.
+            channels_changed = False
+            if "channels" not in self.data or not isinstance(self.data["channels"], list):
+                self.data["channels"] = []
+                channels_changed = True
+            sanitized_channels = self._sanitize_channels(self.data["channels"])
+            if sanitized_channels != self.data["channels"]:
+                self.data["channels"] = sanitized_channels
+                channels_changed = True
+
             # Fill missing defaults
             for key, val in self.DEFAULT_DATA["settings"].items():
                 if key not in self.data["settings"]:
@@ -91,8 +103,24 @@ class ConfigManager:
                     if key in video:
                         del video[key]
                         removed = True
-            if removed:
+            if removed or channels_changed:
                 self._save_unlocked()
+
+    @staticmethod
+    def _sanitize_channels(raw: Any) -> List[Dict[str, str]]:
+        """Drop unusable channel entries and duplicate names coming from disk."""
+        if not isinstance(raw, list):
+            return []
+        cleaned: List[Dict[str, str]] = []
+        seen: set = set()
+        for entry in raw:
+            channel = Channel.from_dict(entry)
+            key = channel.name.lower()
+            if not channel.name or key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(channel.to_dict())
+        return cleaned
 
     def save(self) -> None:
         """Save current configuration state to disk."""
@@ -177,4 +205,15 @@ class ConfigManager:
         """Persist video task dictionary list."""
         with self._lock:
             self.data["videos"] = video_list
+            self._save_unlocked()
+
+    def get_channels(self) -> List[Dict[str, str]]:
+        """Return the saved channel list (name + url dictionaries)."""
+        with self._lock:
+            return [dict(entry) for entry in self.data.get("channels", [])]
+
+    def set_channels(self, channel_list: List[Dict[str, str]]) -> None:
+        """Persist the channel list, sanitized of blanks and duplicate names."""
+        with self._lock:
+            self.data["channels"] = self._sanitize_channels(channel_list)
             self._save_unlocked()
