@@ -13,7 +13,8 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 - **Ad Handling**: The *Skip Ads* switch (default **on**) installs uBlock Origin Lite (pinned MV3 build, SHA-256 verified) into every session so most ads never render, then clicks through anything that still plays after a randomized **30–35 s** (past the monetisation window). With the switch **off**, ads are watched up to a cumulative *Max Ad Watch* cap before an escape-skip fires.
 - **Configurable Watch Durations**: Presets from 30 Seconds up to 24 Hours, plus a *Full Video* mode (still under testing — see [FEATURES.md](FEATURES.md)).
 - **Reliability**: Every task gets one automatic retry, watches abort cleanly if no player is found, worker progress/status is streamed to the Dashboard, and failed sign-ins are surfaced in the UI instead of only in the logs.
-- **Quality**: 90+ unit tests (`pytest`), lint (`ruff`), type checks (`mypy`), and a GitHub Actions CI pipeline.
+- **Watch Statistics**: Every completed task records how many times a video went through the automation and how much watch time was actually delivered (ad seconds excluded). Totals show on each queue card, on channel headers and rows, and as a lifetime **Total Watch Time** card on the Dashboard — channel totals follow renames and are never erased when a video is deleted.
+- **Quality**: 140+ unit tests (`pytest`), lint (`ruff`), type checks (`mypy`), and a GitHub Actions CI pipeline.
 - **Decoupled Architecture**: Clean separation of UI (`CustomTkinter`), automation engine, data models, and thread-safe configuration management.
 
 ## Project Architecture
@@ -21,6 +22,7 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 ```text
 G:\Projects\yt-tool\
 ├── settings.json               # App settings, video queue & channels (git-ignored — created on first run)
+├── stats.json                  # Lifetime watch statistics per video (git-ignored — created on first recorded run)
 ├── credentials.json            # Local Google account credentials (git-ignored — never commit)
 ├── requirements.txt            # Python dependencies
 ├── requirements-dev.txt        # Test / lint / type-check tooling
@@ -30,7 +32,7 @@ G:\Projects\yt-tool\
 ├── FEATURES.md                 # Feature inventory: stable / testing / to be implemented
 ├── TESTING.md                  # Full staged test path (automated gates → browser scenarios)
 ├── TODO.md                     # Work tracker
-├── tests/                      # pytest suite (models, config, logging, navigation, ads, adblock)
+├── tests/                      # pytest suite (models, config, watch stats, logging, navigation, ads, adblock)
 ├── .github/workflows/ci.yml    # CI: ruff + mypy + pytest on Windows
 ├── logs/                       # Generated: automation.log (*.log git-ignored)
 ├── runtime/                    # Generated: per-account Chrome profiles, cached chromedriver (git-ignored)
@@ -38,8 +40,8 @@ G:\Projects\yt-tool\
 └── src/                        # Source Package
     ├── ai/                     # Retired AI commenting support (stub kept for history)
     ├── automation/             # Chrome driver setup, Google login, organic navigation & YouTube actions
-    ├── config/                 # Thread-safe settings and credentials manager
-    ├── models/                 # Account, VideoTask & Channel data models
+    ├── config/                 # Thread-safe settings/credentials manager + watch-statistics store
+    ├── models/                 # Account, VideoTask, Channel & watch-statistics data models
     ├── ui/                     # CustomTkinter GUI views (Dashboard, Accounts, Queue, Channels, Settings, Logs)
     └── utils/                  # Logger with API key masking & typing helper utilities
 ```
@@ -147,6 +149,17 @@ Open the **📺 Channels** screen (or **📺 Manage Channels** in the queue head
 - Renaming a channel keeps its videos attached; deleting a channel moves them to **Uncategorized** (videos are never deleted).
 - Channels persist in `settings.json` under `channels`.
 
+### 2c. Watch Statistics
+
+Every task that reaches the watch phase is recorded once (retries fold into a single run) in a local, git-ignored `stats.json`:
+
+- Each **queue card** gains a third line: `▶ 12 runs · 4h 32m watched · last ✅` — `⏸` = stopped by you, `❌` = failed.
+- Each **channel section header** and **Channels row** adds `27 runs · 12h 04m watched`, the sum of that channel's records.
+- The **Dashboard** shows a fourth card, **Total Watch Time**, with the lifetime total across every video.
+- **🗑 Reset Stats** in the queue header wipes all statistics after a confirmation.
+
+Watch time counts main-video playback only — ad seconds and paused gaps are excluded — and a run you stopped counts as a run but never as a failure. Records store the channel name as it was at run time, so renaming a channel follows its history and deleting a channel (or a video) only moves the totals to *Uncategorized*.
+
 ### 3. Configure Settings
 
 Open the **Settings** screen:
@@ -165,7 +178,7 @@ Click **💾 Save Settings** to apply. Settings are persisted in `settings.json`
 
 ### 4. Start a Run
 
-1. Open the **Dashboard** — the cards show *Loaded Accounts*, *Queued Videos*, and *Bot Status*.
+1. Open the **Dashboard** — the cards show *Loaded Accounts*, *Queued Videos*, *Bot Status*, and *Total Watch Time*.
 2. Click **▶ Start Automation**. Each worker signs in, walks the organic search flow for every queued task, then watches it for the configured duration.
 3. Watch the **progress bar and status line** on the Dashboard (completed/total tasks across all workers), with detailed output on the **Logs** screen and in `logs/automation.log` (API keys are redacted).
 4. A failed sign-in or a failed task is reported on the Dashboard status line as well as in the logs; failed tasks are retried once automatically.
@@ -175,4 +188,5 @@ Click **💾 Save Settings** to apply. Settings are persisted in `settings.json`
 
 - `credentials.json` is git-ignored and must never be committed.
 - `settings.json` is git-ignored too: it is per-machine state (settings, video queue, channels) and is recreated with defaults on first run, so local edits never show up in `git status`.
+- `stats.json` follows the same rule: per-machine watch statistics (per-video runs, watch time, channel snapshots), created on the first recorded run and never committed.
 - `logs/*.log` and `runtime/` are generated at runtime and are not tracked (`logs/.gitkeep` keeps the folder in the repo).

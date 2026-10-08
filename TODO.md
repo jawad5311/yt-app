@@ -52,13 +52,23 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] **Rename cascades, delete detaches** — renaming a channel keeps its videos attached; deleting one moves them to *Uncategorized* (videos are never deleted).
 - [x] **Persistence & hygiene** — `channels` key added to `ConfigManager` defaults; blanks, non-dicts, and duplicate names are stripped from `settings.json` on load.
 
+### Watch statistics
+
+- [x] **`WatchResult`** (`src/models/watch_stats.py`) — `watch_video()` returns measured `watched_seconds` (main-video playback only, ad/paused gaps excluded), `ad_seconds`, `completed`, `interrupted` and a `reason`; `bool(result)` keeps the old contract.
+- [x] **`TaskOutcome`** — `_run_task()` returns one recordable outcome per task; retries fold into it (`attempts` + accumulated watch time) and a **⏹ Stop** is `interrupted` (a run, never a failure).
+- [x] **Stable identity** — records are keyed by the resolved video ID (`driver.current_url`, then the task URL, then `url:`/`task:` fallbacks) with the task-derived key kept as an alias; a first failed run folds into the later resolved one.
+- [x] **`StatsStore`** (`src/config/stats_store.py`) — versioned `stats.json` (`version: 1`), lock-guarded read-modify-write, one atomic tmp+replace write per completed task, corrupt files quarantined to `stats.json.bak`.
+- [x] **Channel snapshot attribution** — the channel name is stored at run time; rename/delete hooks cascade into the stats so history survives reassignment, deletion and channel removal.
+- [x] **UI** — queue card line (`▶ 12 runs · 4h 32m watched · last ✅`), channel section header totals, Channels row totals, a Dashboard **Total Watch Time** card, and a **🗑 Reset Stats** button (confirmed).
+- [x] **Git hygiene** — `stats.json` is git-ignored alongside `settings.json`.
+
 ### Quality features
 
-- [x] `tests/` pytest suite — **97 passing tests**: duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel model/grouping, ad-state/policy, ad-blocker provisioning (scripted-WebSocket DevTools loader).
+- [x] `tests/` pytest suite — **146 passing tests**: duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel model/grouping, watch-statistics models + `StatsStore` (identity, folding, cascades, concurrency), worker outcome mapping, ad-state/policy, ad-blocker provisioning (scripted-WebSocket DevTools loader).
 - [x] `pyproject.toml` — pytest, ruff (`E,F,W,I`), and mypy (`check_untyped_defs`) configuration.
 - [x] `requirements-dev.txt` — pinned `pytest`, `ruff`, `mypy`.
 - [x] `.github/workflows/ci.yml` — ruff + mypy, pytest on Python 3.11/3.12 (Windows).
-- [x] `ruff check .` → clean · `mypy` → clean (36 files) · `pytest` → 97 passed.
+- [x] `ruff check .` → clean · `mypy` → clean (41 files) · `pytest` → 146 passed.
 - [x] Dead imports and unsorted import blocks cleaned up across the codebase.
 
 ## 🧪 Testing (manual / runtime)
@@ -81,11 +91,13 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [ ] Account import: `accounts.txt` with both `:` and `,` separators, plus legacy `settings.json` migration to `credentials.json`.
 - [ ] Settings screen: change appearance/default duration/timeout, save, restart, confirm they persist.
 - [ ] **Ad handling** (full checklist in [TESTING.md](TESTING.md) Stage 11): blocker loads (`Ad blocker loaded (efdmj…)`), ads blocked or skipped after 30–35 s, `SkipAds` off watches ads up to the cap, up-next countdown not treated as an ad.
+- [ ] **Watch statistics** (full checklist in [TESTING.md](TESTING.md) Stage 3c): card line appears after a run, ad seconds excluded, a retried task counts as one run, **⏹ Stop** shows `last ⏸` without raising the failure count, channel rename/delete follows the totals, counters survive a restart, `git check-ignore stats.json` → ignored.
 
 ## 📄 Documentation
 
 - [x] Refresh README (architecture tree, queue/settings/usage sections, removed duplicated "Legacy Account File Format" section).
 - [x] Document the new Settings controls and the Dashboard progress/status line.
+- [x] Document watch statistics (README §2c, FEATURES "Watch Statistics", TESTING Stage 3c).
 - [x] Add a Development section (pytest / ruff / mypy / CI) to the README.
 - [x] Add `FEATURES.md` (stable / testing / to-be-implemented).
 - [x] Add `TODO.md`.

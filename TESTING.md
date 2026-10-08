@@ -16,14 +16,14 @@ Record results in the checklist at the bottom. Estimated full pass: ~60–90 min
 ```powershell
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m ruff check .          # expect: All checks passed!
-python -m mypy                  # expect: Success: no issues found in 36 source files
-python -m pytest                # expect: 97 passed
+python -m mypy                  # expect: Success: no issues found in 41 source files
+python -m pytest                # expect: 146 passed
 python -m compileall -q main.py src tests   # expect: silent, exit 0
 ```
 
 - [x] ruff clean
 - [x] mypy clean
-- [x] 97 tests pass
+- [x] 146 tests pass
 - [x] `python -c "import main"` succeeds
 
 ## Stage 1 — App boot & configuration 🖱 (no browser)
@@ -105,6 +105,25 @@ python -m compileall -q main.py src tests   # expect: silent, exit 0
    - [ ] Notice: *… video(s) moved to Uncategorized*; those videos reappear under **Uncategorized**
 8. Restart the app
    - [ ] Channels and the video → channel relation survive (`settings.json` → `channels`)
+
+## Stage 3c — Watch statistics 🖱 (one short browser run)
+
+1. Reset: Video Queue → **🗑 Reset Stats** → confirm
+   - [ ] Every card shows `▶ Not run yet`; the Dashboard **Total Watch Time** card shows `0s`
+   - [ ] Channel headers show no `runs …` fragment until a run is recorded
+2. Run the Stage 5 task (30 Seconds) once
+   - [ ] Its card shows `▶ 1 run · NNs watched · last ✅` — ad seconds excluded from the total
+   - [ ] If the video is in a channel: the section header and the Channels row show `1 run · … watched`
+   - [ ] Dashboard **Total Watch Time** shows the same number
+   - [ ] `stats.json` exists next to `settings.json`, contains `version: 1`, and `git check-ignore stats.json` → ignored
+3. Run the same task again
+   - [ ] `2 runs`, roughly doubled watch time — one record, not two
+4. **⏹ Stop** mid-run (Stage 8.4 setup)
+   - [ ] The card's result becomes `last ⏸`; `runs` goes up but `failures` does not (the session summary still reports it as not watched)
+5. Rename / delete the channel (Stage 3b steps 6–7)
+   - [ ] Channel totals follow the rename; deleting the channel moves them to *Uncategorized* instead of erasing them
+6. Restart the app
+   - [ ] All counters survive — they live in `stats.json`, not in `settings.json`
 
 ## Stage 4 — Browser diagnostics 🖱
 
@@ -214,9 +233,9 @@ Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monet
 
 ## Stage 13 — Clean-clone / CI ✅
 
-- [ ] Fresh `git clone` → `python -m pip install -r requirements.txt -r requirements-dev.txt` → `python -m pytest` → 97 passed
+- [ ] Fresh `git clone` → `python -m pip install -r requirements.txt -r requirements-dev.txt` → `python -m pytest` → 146 passed
 - [ ] Push a branch → GitHub Actions **CI** job: `lint` (ruff+mypy) and `test` (3.11, 3.12) all green
-- [ ] `git status` clean after a full run except intended changes (`settings.json` and `credentials.json` are git-ignored, so queue/channel edits do not show up)
+- [ ] `git status` clean after a full run except intended changes (`settings.json`, `stats.json` and `credentials.json` are git-ignored, so queue/channel edits and watch statistics do not show up)
 
 ---
 
@@ -229,6 +248,7 @@ Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monet
 | 2 Accounts | | |
 | 3 Queue | | |
 | 3b Channels | | |
+| 3c Watch statistics | | |
 | 4 Diagnostics | | |
 | 5 Happy path | | |
 | 6 Organic search | | |

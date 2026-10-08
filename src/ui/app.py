@@ -7,8 +7,10 @@ import customtkinter as ctk
 
 from ..automation.worker import AutomationWorker
 from ..config.manager import ConfigManager
+from ..config.stats_store import StatsStore
 from ..models.account import Account
 from ..models.video_task import VideoTask
+from ..models.watch_stats import format_duration
 from ..utils.logger import emit, init_logging
 from .views.accounts_view import AccountsView
 from .views.channels_view import ChannelsView
@@ -19,9 +21,10 @@ from .views.settings_view import SettingsView
 
 
 class YTBotApp(ctk.CTk):
-    def __init__(self, config_mgr: Optional[ConfigManager] = None):
+    def __init__(self, config_mgr: Optional[ConfigManager] = None, stats_store: Optional[StatsStore] = None):
         super().__init__()
         self.config_mgr = config_mgr or ConfigManager()
+        self.stats_store = stats_store or StatsStore()
 
         self.title("YouTube Playback Automation Tool - V2.1 (Modular)")
         self.geometry("1100x700")
@@ -115,6 +118,20 @@ class YTBotApp(ctk.CTk):
             len(self.queued_video_tasks),
             "Idle",
         )
+        self.refresh_watch_stats()
+
+    def refresh_watch_stats(self) -> None:
+        """Re-render everything that shows watch statistics (main thread only)."""
+        if not hasattr(self, "views"):
+            return
+        for name in ("queue", "channels"):
+            view = self.views.get(name)
+            if view is not None and hasattr(view, "refresh_list"):
+                view.refresh_list()
+        dashboard = self.views.get("dashboard")
+        if dashboard is not None:
+            totals = self.stats_store.lifetime_totals()
+            dashboard.update_watch_totals(format_duration(totals.watch_seconds))
 
     def show_view(self, name: str):
         for view_name, view_widget in self.views.items():
@@ -189,6 +206,7 @@ class YTBotApp(ctk.CTk):
                 stop_event=self.stop_event,
                 event_queue=self.event_queue,
                 worker_id=worker_id,
+                stats_store=self.stats_store,
             )
             thread = threading.Thread(target=worker.run, daemon=True)
             self.active_threads.append(thread)
@@ -227,11 +245,14 @@ class YTBotApp(ctk.CTk):
             done_sum = sum(d for d, _ in self.worker_progress.values())
             total_sum = sum(t for _, t in self.worker_progress.values())
             self.views["dashboard"].set_progress(done_sum, total_sum)
+            # Watch counters are written when a task finishes: repaint them.
+            self.refresh_watch_stats()
         elif kind == "status" and len(event) == 3:
             _, message, level = event
             self.views["dashboard"].set_status(message, level)
         elif kind == "finished":
             self.views["dashboard"].set_running_state(False)
+            self.refresh_watch_stats()
 
     def _poll_log_queue(self):
         try:

@@ -8,24 +8,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from ..models.video_task import VideoTask
-from ..utils.helpers import human_like_delay, slow_type
+from ..utils.helpers import extract_video_id, human_like_delay, slow_type
 from ..utils.logger import emit
-
-
-def extract_video_id(url: Optional[str]) -> Optional[str]:
-    """Extract YouTube video ID from URL string."""
-    if not url:
-        return None
-    import re
-    patterns = [
-        r"(?:v=|\/vi\/|youtu\.be\/|\/v\/|\/embed\/|\/shorts\/)([A-Za-z0-9_\-]{11})",
-        r"^([A-Za-z0-9_\-]{11})$",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
 
 
 def safe_get(driver: Any, url: str, timeout: int = 45, log_queue: Optional[queue.Queue] = None) -> None:

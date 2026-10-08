@@ -6,6 +6,7 @@ import customtkinter as ctk
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
+from ...models.watch_stats import format_totals_line, format_watch_line
 
 
 class QueueView(ctk.CTkFrame):
@@ -47,6 +48,14 @@ class QueueView(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_frame,
+            text="🗑 Reset Stats",
+            fg_color="#616161",
+            hover_color="#3F3F3F",
+            command=self.reset_stats,
+        ).pack(side="right", padx=(0, 10))
+
+        ctk.CTkButton(
+            btn_frame,
             text="🗑 Clear Queue",
             fg_color="#D32F2F",
             hover_color="#9A0007",
@@ -64,6 +73,19 @@ class QueueView(ctk.CTkFrame):
         """Default duration for newly created tasks (Settings -> Default Watch Duration)."""
         configured = self.app_controller.config_mgr.get_setting("WatchtimeDuration", DEFAULT_WATCHTIME_DURATION)
         return configured if configured in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION
+
+    def _stats(self):
+        """Watch statistics store (None when the app controller has none)."""
+        return getattr(self.app_controller, "stats_store", None)
+
+    def _group_totals_line(self, group: VideoGroup) -> str:
+        """``27 runs · 12h 04m watched`` for one channel section."""
+        store = self._stats()
+        if store is None:
+            return ""
+        channel_name = "" if group.is_uncategorized else group.channel.name
+        totals = store.channel_totals(channel_name)
+        return format_totals_line(totals) if totals.runs else ""
 
     @staticmethod
     def _restore_video_modal_grab(modal):
@@ -112,6 +134,9 @@ class QueueView(ctk.CTkFrame):
                 changed = True
         if changed:
             self.save_queue()
+        store = self._stats()
+        if store is not None:
+            store.rename_channel(old_name, new_name)
         self.refresh_list()
 
     def unassign_channel(self, name: str) -> int:
@@ -123,6 +148,9 @@ class QueueView(ctk.CTkFrame):
                 count += 1
         if count:
             self.save_queue()
+        store = self._stats()
+        if store is not None:
+            store.unassign_channel(name)
         self.refresh_list()
         return count
 
@@ -134,6 +162,9 @@ class QueueView(ctk.CTkFrame):
                 changed = True
         if changed:
             self.save_queue()
+        store = self._stats()
+        if store is not None:
+            store.clear_channel_assignments()
         self.refresh_list()
 
     def open_video_url(self, url: str):
@@ -254,6 +285,23 @@ class QueueView(ctk.CTkFrame):
         self.save_queue()
         self.refresh_list()
 
+    def reset_stats(self):
+        """Delete every recorded watch statistic after a confirmation."""
+        store = self._stats()
+        if store is None:
+            return
+        if not messagebox.askyesno(
+            "Reset Statistics",
+            "Delete all recorded watch statistics?\n\nThis cannot be undone.",
+        ):
+            return
+        store.clear_all()
+        refresh = getattr(self.app_controller, "refresh_watch_stats", None)
+        if callable(refresh):
+            refresh()
+        else:
+            self.refresh_list()
+
     def refresh_list(self):
         for child in self.scroll_frame.winfo_children():
             child.destroy()
@@ -280,6 +328,9 @@ class QueueView(ctk.CTkFrame):
         header.grid_columnconfigure(0, weight=1)
 
         title = f"📺 {group.name}  •  {group.count} video(s)"
+        totals_line = self._group_totals_line(group)
+        if totals_line:
+            title += f"  •  {totals_line}"
         ctk.CTkLabel(
             header,
             text=title,
@@ -349,11 +400,24 @@ class QueueView(ctk.CTkFrame):
 
         info_text = f"#{position}. {t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration}"
         lbl = ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13), anchor="w")
-        lbl.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
+        lbl.grid(row=0, column=0, padx=15, pady=(10, 0), sticky="ew")
+
+        # Lifetime watch statistics for this video (recorded runs only).
+        store = self._stats()
+        record = store.find_for_task(task) if store is not None else None
+        stats_lbl = ctk.CTkLabel(
+            card,
+            text=format_watch_line(record),
+            justify="left",
+            font=ctk.CTkFont(size=12),
+            anchor="w",
+            text_color=("gray30", "gray70"),
+        )
+        stats_lbl.grid(row=1, column=0, padx=15, pady=(2, 10), sticky="ew")
 
         # Action Buttons Frame (Fixed to column 1 on the right edge)
         action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        action_btn_frame.grid(row=0, column=1, padx=10, pady=10, sticky="e")
+        action_btn_frame.grid(row=0, column=1, rowspan=2, padx=10, pady=10, sticky="e")
 
         ctk.CTkButton(
             action_btn_frame,

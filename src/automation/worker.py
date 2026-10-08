@@ -4,8 +4,10 @@ import threading
 from typing import Any, List, Optional, Tuple
 
 from ..config.manager import ConfigManager
+from ..config.stats_store import StatsStore
 from ..models.account import Account
 from ..models.video_task import VideoTask
+from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.logger import emit
 from .adblock import ensure_adblock
 from .driver import close_driver, setup_driver
@@ -29,6 +31,7 @@ class AutomationWorker:
         stop_event: Optional[threading.Event] = None,
         event_queue: Optional[queue.Queue] = None,
         worker_id: int = 0,
+        stats_store: Optional[StatsStore] = None,
     ):
         self.account = account
         self.video_tasks = video_tasks
@@ -37,6 +40,7 @@ class AutomationWorker:
         self.stop_event = stop_event or threading.Event()
         self.event_queue = event_queue
         self.worker_id = worker_id
+        self.stats_store = stats_store
         self.driver: Any = None
         self.skip_ads = True
         self.max_ad_seconds = 32
@@ -75,12 +79,26 @@ class AutomationWorker:
 
     # ------------------------------------------------------------------- tasks
 
-    def _run_task(self, task: VideoTask, direct_link_fallback: bool) -> bool:
-        """Run one task with a single retry. Returns True when the watch completed."""
+    def _run_task(self, task: VideoTask, direct_link_fallback: bool) -> TaskOutcome:
+        """Run one task with a single retry, returning one recordable outcome.
+
+        Retries fold into a single outcome: ``attempts`` counts the tries and
+        ``watched_seconds`` accumulates the watch time actually delivered.
+        """
+        label = task.title or task.keywords or task.url
+        task_key = resolve_video_key(task)
+        outcome = TaskOutcome(
+            video_key=task_key,
+            task_key=task_key,
+            label=label,
+            channel=task.channel,
+        )
         for attempt in range(1, MAX_ATTEMPTS_PER_TASK + 1):
             if self.stop_event.is_set():
-                return False
+                outcome.interrupted = True
+                return outcome
 
+            outcome.attempts = attempt
             if attempt > 1:
                 emit(self.log_queue, f"Retrying task once (attempt {attempt}/{MAX_ATTEMPTS_PER_TASK})...")
 
@@ -96,11 +114,18 @@ class AutomationWorker:
                 nav_ok = False
 
             if not nav_ok:
-                emit(self.log_queue, f"Could not navigate to task #{task.title or task.keywords or task.url}.", logging.WARNING)
+                emit(self.log_queue, f"Could not navigate to task #{label}.", logging.WARNING)
                 continue
 
+            # The resolved page URL identifies keyword-only tasks across runs.
             try:
-                if watch_video(
+                resolved_url = str(getattr(self.driver, "current_url", "") or "")
+            except Exception:
+                resolved_url = ""
+            outcome.video_key = resolve_video_key(task, resolved_url)
+
+            try:
+                result = watch_video(
                     self.driver,
                     task.parse_duration_seconds(),
                     log_queue=self.log_queue,
@@ -108,16 +133,33 @@ class AutomationWorker:
                     full_timeout_seconds=self._full_video_timeout_seconds(),
                     skip_ads=self.skip_ads,
                     max_ad_seconds=self.max_ad_seconds,
-                ):
-                    return True
+                )
+                outcome.watched_seconds += max(0.0, result.watched_seconds)
+                outcome.ad_seconds += max(0.0, result.ad_seconds)
+                if result:
+                    outcome.success = True
+                    return outcome
+                if result.interrupted:
+                    outcome.interrupted = True
+                    return outcome
             except Exception as exc:
                 emit(self.log_queue, f"Watch error: {exc}", logging.ERROR)
 
             if self.stop_event.is_set():
-                return False
+                outcome.interrupted = True
+                return outcome
 
         emit(self.log_queue, "Task failed after retry. Skipping to next task.", logging.ERROR)
-        return False
+        return outcome
+
+    def _record(self, outcome: TaskOutcome) -> None:
+        """Persist one finished task; a stats error never aborts a session."""
+        if self.stats_store is None or not outcome.attempts:
+            return
+        try:
+            self.stats_store.record(outcome)
+        except Exception as exc:
+            emit(self.log_queue, f"Could not record watch statistics: {exc}", logging.WARNING)
 
     # -------------------------------------------------------------------- run
 
@@ -168,11 +210,12 @@ class AutomationWorker:
 
                 emit(self.log_queue, f"\n--- Processing Video Task {idx}/{total}: {task.title or task.keywords or task.url} ---")
 
-                success = self._run_task(task, direct_link_fallback)
+                outcome = self._run_task(task, direct_link_fallback)
 
                 processed += 1
-                if success:
+                if outcome.success:
                     succeeded += 1
+                self._record(outcome)
                 self._report_progress(processed, total)
 
                 if self.stop_event.is_set():

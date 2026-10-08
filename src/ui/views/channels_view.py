@@ -5,6 +5,7 @@ from typing import Callable, List, Optional
 import customtkinter as ctk
 
 from ...models.channel import UNCATEGORIZED_LABEL, Channel
+from ...models.watch_stats import format_totals_line
 
 # Called with the saved channel so callers (e.g. the queue modal) can react.
 OnChannelSaved = Callable[[Channel], None]
@@ -77,6 +78,14 @@ class ChannelsView(ctk.CTkFrame):
     def video_count(self, channel_name: str) -> int:
         tasks = getattr(self.app_controller, "queued_video_tasks", None) or []
         return sum(1 for task in tasks if task.channel == channel_name)
+
+    def channel_stats_line(self, channel_name: str) -> str:
+        """``27 runs · 12h 04m watched`` for one channel row, or ``""``."""
+        store = getattr(self.app_controller, "stats_store", None)
+        if store is None:
+            return ""
+        totals = store.channel_totals(channel_name)
+        return format_totals_line(totals) if totals.runs else ""
 
     # ------------------------------------------------------------------ modal
 
@@ -212,6 +221,9 @@ class ChannelsView(ctk.CTkFrame):
             count = self.video_count(channel.name)
             subtitle = channel.url or "No URL"
             info_text = f"{idx + 1}. {channel.name}\n{subtitle}  |  {count} video(s)"
+            stats_line = self.channel_stats_line(channel.name)
+            if stats_line:
+                info_text += f"\n{stats_line}"
             ctk.CTkLabel(
                 row,
                 text=info_text,

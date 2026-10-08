@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from selenium.webdriver.common.by import By
 
+from ..models.watch_stats import WatchResult
 from ..utils.logger import emit
 from .ads import PLAYER_STATE_JS, AdWatchState
 
@@ -91,7 +92,7 @@ def watch_video(
     full_timeout_seconds: int = DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     skip_ads: bool = True,
     max_ad_seconds: int = 32,
-) -> bool:
+) -> WatchResult:
     """Watch the target video for a fixed duration or its full length.
 
     Args:
@@ -103,10 +104,11 @@ def watch_video(
         max_ad_seconds: cumulative ad-watch cap used when ``skip_ads`` is off.
 
     Returns:
-        True  -> the watch finished normally (duration reached, video finished,
-                 or the Full Video safety timeout tripped).
-        False -> the watch was interrupted by the user or failed (e.g. no video
-                 element could be found); callers may retry.
+        A :class:`WatchResult`; ``bool(result)`` is True when the watch finished
+        normally (duration reached, video finished, or the Full Video safety
+        timeout tripped) and False when it was interrupted or failed (e.g. no
+        video element could be found). ``watched_seconds`` counts main-video
+        playback only: ad seconds and paused gaps are excluded.
     """
     is_full_mode = duration_seconds is None or duration_seconds <= 0
     ad_state = AdWatchState()
@@ -132,11 +134,22 @@ def watch_video(
     video_missing_since: Optional[float] = None
     escape_warned = False
     play_attempts = 0
+    # Lifetime counter for this call: main-video playback seconds only.
+    watched_seconds = 0.0
+
+    def _result(completed: bool, reason: str, interrupted: bool = False) -> WatchResult:
+        return WatchResult(
+            completed=completed,
+            interrupted=interrupted,
+            watched_seconds=watched_seconds,
+            ad_seconds=ad_state.total_ad_seconds,
+            reason=reason,
+        )
 
     while True:
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Watchtime interrupted by user.")
-            return False
+            return _result(False, "interrupted", interrupted=True)
 
         now = time.time()
         delta = max(0.0, now - last_tick)
@@ -157,13 +170,19 @@ def watch_video(
                     f"No video element found for {VIDEO_MISSING_LIMIT_SECONDS}s. Aborting watch.",
                     logging.ERROR,
                 )
-                return False
+                return _result(False, "no_video")
             time.sleep(3)
             continue
 
         video_missing_since = None
         is_ad = bool(video_state.get("isAd"))
         ad_state.tick(is_ad, delta)
+
+        # Watch time is main-video playback only: ad seconds and paused gaps
+        # are excluded so "watch all ads" mode cannot inflate the total.
+        paused = bool(video_state.get("paused", False))
+        if not is_ad and not paused:
+            watched_seconds += delta
 
         # ------------------------------------------------------------ ads ----
         if is_ad:
@@ -202,7 +221,7 @@ def watch_video(
                     f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.",
                     logging.WARNING,
                 )
-                return True
+                return _result(True, "full_timeout")
 
             time.sleep(3)
             continue
@@ -212,12 +231,11 @@ def watch_video(
         ended = bool(video_state.get("ended", False))
         curr_time = float(video_state.get("currentTime", 0.0))
         video_duration = float(video_state.get("duration", 0.0))
-        paused = bool(video_state.get("paused", False))
 
         # Playback finished
         if video_duration > 0 and (ended or curr_time >= (video_duration - 1.5)):
             emit(log_queue, f"Video playback finished! (Watched full length: {_format_clock(video_duration)})")
-            return True
+            return _result(True, "ended")
 
         # Paused mid-video -> resume (JS first, real play button as fallback)
         if paused and not ended and (video_duration == 0 or curr_time < (video_duration - 2)):
@@ -254,7 +272,7 @@ def watch_video(
                 f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.",
                 logging.WARNING,
             )
-            return True
+            return _result(True, "full_timeout")
 
         # Fixed-duration budget counts *watching* time only: seconds spent in
         # ads are excluded so "watch all ads" mode cannot eat the whole budget.
@@ -262,7 +280,7 @@ def watch_video(
             watched_elapsed = elapsed - ad_state.total_ad_seconds
             if watched_elapsed >= duration_seconds:
                 emit(log_queue, f"Reached watch duration limit ({duration_seconds}s).")
-                return True
+                return _result(True, "duration_reached")
 
         time.sleep(3)
 

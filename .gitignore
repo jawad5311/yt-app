@@ -49,5 +49,8 @@ extensions/
 # Created with defaults on first run, so it never needs to be committed.
 settings.json
 
+# Per-video / per-channel watch statistics (created on first recorded run)
+stats.json
+
 # Configuration files with credentials (never commit)
 credentials.json

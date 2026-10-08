@@ -10,7 +10,7 @@ class DashboardView(ctk.CTkFrame):
         super().__init__(parent, corner_radius=10)
         self.app_controller = app_controller
 
-        self.grid_columnconfigure((0, 1, 2), weight=1)
+        self.grid_columnconfigure((0, 1, 2, 3), weight=1)
         self.grid_rowconfigure(2, weight=1)
 
         # Title
@@ -19,16 +19,17 @@ class DashboardView(ctk.CTkFrame):
             text="Dashboard Overview",
             font=ctk.CTkFont(size=22, weight="bold"),
         )
-        self.title_label.grid(row=0, column=0, columnspan=3, padx=20, pady=(20, 10), sticky="w")
+        self.title_label.grid(row=0, column=0, columnspan=4, padx=20, pady=(20, 10), sticky="w")
 
         # Stats Cards
         self.card_accounts = self._create_card("Loaded Accounts", "0", row=1, col=0)
         self.card_videos = self._create_card("Queued Videos", "0", row=1, col=1)
         self.card_status = self._create_card("Bot Status", "Idle", row=1, col=2)
+        self.card_watch_time = self._create_card("Total Watch Time", "0s", row=1, col=3)
 
         # Action Frame
         self.action_frame = ctk.CTkFrame(self, corner_radius=8)
-        self.action_frame.grid(row=2, column=0, columnspan=3, padx=20, pady=20, sticky="nsew")
+        self.action_frame.grid(row=2, column=0, columnspan=4, padx=20, pady=20, sticky="nsew")
         self.action_frame.grid_columnconfigure(0, weight=1)
 
         self.start_btn = ctk.CTkButton(
@@ -77,6 +78,10 @@ class DashboardView(ctk.CTkFrame):
         self.card_accounts.configure(text=str(accounts_count))
         self.card_videos.configure(text=str(videos_count))
         self.card_status.configure(text=status)
+
+    def update_watch_totals(self, formatted_duration: str):
+        """Lifetime watch time delivered across every recorded video."""
+        self.card_watch_time.configure(text=formatted_duration)
 
     def reset_progress(self):
         """Clear the progress bar and status line before a run starts."""

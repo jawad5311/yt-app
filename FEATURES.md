@@ -79,11 +79,11 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 
 ### Queue & Dashboard UI
 
-- **Video Queue**: add / edit / delete / clear tasks; each card shows title, keywords, and watch duration.
-- Queue is rendered **grouped by channel** — one section header per channel (name, URL, video count) with an **Uncategorized** section for videos that belong to no channel.
+- **Video Queue**: add / edit / delete / clear tasks; each card shows title, keywords, watch duration, and its recorded watch statistics.
+- Queue is rendered **grouped by channel** — one section header per channel (name, URL, video count, run/watch-time totals) with an **Uncategorized** section for videos that belong to no channel.
 - **🔗 View** button opens the queued video URL in the system browser.
 - Responsive card grid that does not clip buttons in small windows.
-- **Dashboard**: live cards for *Loaded Accounts*, *Queued Videos*, *Bot Status*, plus Start/Stop controls.
+- **Dashboard**: live cards for *Loaded Accounts*, *Queued Videos*, *Bot Status*, *Total Watch Time*, plus Start/Stop controls.
 - Queue and settings persist in `settings.json` (thread-safe, atomic write via temp-file replace).
 
 ### Channels
@@ -95,6 +95,16 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 - Renaming a channel **cascades** to its videos; deleting a channel moves its videos to *Uncategorized* (never deletes videos).
 - URLs are normalized (`youtube.com/@x` → `https://youtube.com/@x`); duplicate/blank names are rejected in the UI and stripped from `settings.json` on load.
 - Channels persist in `settings.json` under the `channels` key (atomic write, like the queue).
+
+### Watch Statistics
+
+- **What is tracked** (`src/models/watch_stats.py` + `src/config/stats_store.py`): per-video `runs`, `successes`, `failures`, `attempts`, `watch_seconds`, `ad_seconds`, `last_run` and `last_result`; a channel's totals are the sum of its videos' records.
+- **Measured, not configured**: `watch_video()` now returns a `WatchResult` (`completed`, `interrupted`, `watched_seconds`, `ad_seconds`, `reason`) and only accumulates seconds while the main video is actually playing — ad time and paused gaps are excluded, so "watch all ads" mode can never inflate the number.
+- **One record per task**: `_run_task()` returns a `TaskOutcome` and its automatic retry folds into the same record (`attempts` counts the tries, watch time accumulates across them). A run stopped with **⏹** is recorded as `interrupted`: it counts as a run but never as a failure.
+- **Identity**: records are keyed by the resolved video ID (`driver.current_url` after navigation, falling back to the task URL) with the task-derived key kept as an alias — keyword-only tasks show their card, and an early failed run folds into the later resolved one instead of duplicating.
+- **Channel attribution is a snapshot**: the channel name is stored on the record when the run happens. Renaming a channel cascades into the stats, deleting a channel moves its records to *Uncategorized*, and deleting a video never erases watch time already delivered.
+- **Where it shows**: queue card line `▶ 12 runs · 4h 32m watched · last ✅` (`⏸` = stopped, `❌` = failed); channel section header and Channels row `27 runs · 12h 04m watched`; Dashboard **Total Watch Time** card (lifetime).
+- **Storage**: `stats.json` next to `settings.json` — versioned schema (`version: 1`), atomic tmp+replace write, one small write per completed task, lock-guarded for parallel workers, corrupt files quarantined to `stats.json.bak`, git-ignored from the start. Reset with **🗑 Reset Stats** in the queue header.
 
 ### Settings
 
@@ -113,7 +123,7 @@ Retired keys (`AccessKey`, `AIProvider`, `OpenAIKey`, `GeminiKey`, `OpenRouterKe
 
 ### Quality & CI
 
-- **Test suite**: 97 pytest cases covering duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel serialization + queue grouping, ad-state parsing/policy, and ad-blocker provisioning (including the DevTools loader with a scripted WebSocket).
+- **Test suite**: 146 pytest cases covering duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel serialization + queue grouping, watch-statistics models (identity keys, counter merging, formatting) and `StatsStore` (persistence, identity folding, channel cascades, multi-threaded increments), worker outcome mapping, ad-state parsing/policy, and ad-blocker provisioning (including the DevTools loader with a scripted WebSocket).
 - **Lint**: `ruff` (`E`, `F`, `W`, `I` rules) configured in `pyproject.toml`.
 - **Type check**: `mypy` over `src/` and `tests/` with `check_untyped_defs`.
 - **CI**: `.github/workflows/ci.yml` runs ruff + mypy, and pytest on Python 3.11/3.12 (Windows).
