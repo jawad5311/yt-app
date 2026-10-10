@@ -32,6 +32,7 @@ class ConfigManager:
             "FullVideoTimeoutMinutes": 360,
             "SkipAds": True,
             "MaxAdWatchSeconds": 32,
+            "AutoplayEndBufferSeconds": 10,
         },
         "accounts": [],
         "videos": [],

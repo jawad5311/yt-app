@@ -91,6 +91,16 @@ class SettingsView(ctk.CTkFrame):
         self.full_timeout_entry.insert(0, str(self.config_mgr.get_int("FullVideoTimeoutMinutes", 360)))
         self.full_timeout_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
+        # Full Video early stop buffer (to avoid autoplay)
+        ctk.CTkLabel(
+            container,
+            text="Full Video Stop Buffer (seconds before end, 0 = randomized 7-12s):",
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(5, 2))
+        self.stop_buffer_entry = ctk.CTkEntry(container, width=100)
+        self.stop_buffer_entry.insert(0, str(self.config_mgr.get_int("AutoplayEndBufferSeconds", 10)))
+        self.stop_buffer_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
         # Appearance Mode
         ctk.CTkLabel(container, text="Appearance Mode:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
@@ -138,6 +148,14 @@ class SettingsView(ctk.CTkFrame):
             self.config_mgr.set_setting("FullVideoTimeoutMinutes", str(timeout))
         except ValueError:
             messagebox.showerror("Error", "Full Video timeout must be a valid integer (minutes).")
+            return
+
+        try:
+            buffer_val = int(self.stop_buffer_entry.get().strip())
+            buffer_val = max(0, min(120, buffer_val))
+            self.config_mgr.set_setting("AutoplayEndBufferSeconds", str(buffer_val))
+        except ValueError:
+            messagebox.showerror("Error", "Stop buffer must be a valid integer (seconds).")
             return
 
         self.config_mgr.set_setting("WatchtimeDuration", self.duration_menu.get())

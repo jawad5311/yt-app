@@ -77,6 +77,11 @@ class AutomationWorker:
             max_ad_seconds = 0
         return skip_ads, max_ad_seconds
 
+    def _end_buffer_seconds(self) -> float:
+        """Early stop buffer in seconds (5-15s) to avoid autoplay. 0 = randomized 7-12s."""
+        buffer_val = self.config_mgr.get_int("AutoplayEndBufferSeconds", 10)
+        return float(max(0, buffer_val))
+
     # ------------------------------------------------------------------- tasks
 
     def _run_task(self, task: VideoTask, direct_link_fallback: bool) -> TaskOutcome:
@@ -133,6 +138,7 @@ class AutomationWorker:
                     full_timeout_seconds=self._full_video_timeout_seconds(),
                     skip_ads=self.skip_ads,
                     max_ad_seconds=self.max_ad_seconds,
+                    end_buffer_seconds=self._end_buffer_seconds(),
                 )
                 outcome.watched_seconds += max(0.0, result.watched_seconds)
                 outcome.ad_seconds += max(0.0, result.ad_seconds)

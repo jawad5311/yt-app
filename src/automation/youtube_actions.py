@@ -8,6 +8,7 @@ from typing import Any, Optional
 from selenium.webdriver.common.by import By
 
 from ..models.watch_stats import WatchResult
+from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .ads import PLAYER_STATE_JS, AdWatchState
 
@@ -84,6 +85,51 @@ def _format_clock(seconds: float) -> str:
     return f"{int(seconds // 60):02d}:{int(seconds % 60):02d}"
 
 
+DISABLE_AUTOPLAY_JS = """
+try {
+    var btn = document.querySelector('.ytp-autonav-toggle-button, button[data-tooltip-target-id="ytp-autonav-toggle-button"]');
+    if (btn) {
+        var isChecked = btn.getAttribute('aria-checked') === 'true' || btn.classList.contains('ytp-autonav-toggle-button-checked');
+        if (isChecked) {
+            btn.click();
+            return true;
+        }
+    }
+} catch (e) {}
+try {
+    var player = document.getElementById('movie_player');
+    if (player && typeof player.setAutonavState === 'function') {
+        player.setAutonavState(1);
+        return true;
+    }
+} catch (e) {}
+return false;
+"""
+
+
+def disable_player_autoplay(driver: Any) -> bool:
+    """Turn off YouTube native Autoplay toggle if it is currently enabled."""
+    try:
+        return bool(driver.execute_script(DISABLE_AUTOPLAY_JS))
+    except Exception:
+        return False
+
+
+def calculate_end_buffer(video_duration: float, target_buffer: float = 10.0) -> float:
+    """Determine how many seconds before video end to stop playback.
+
+    Stops 5-15 seconds early so YouTube's autoplay countdown overlay and next-video
+    transition never trigger. Scales down smoothly for short videos (< 60s)
+    so at least ~85-90% of the video is watched.
+    """
+    if video_duration <= 0:
+        return 1.5
+    # Cap buffer to 12% of duration for shorter videos, with a minimum of 1.5s
+    max_allowed = max(1.5, video_duration * 0.12)
+    return min(target_buffer, max_allowed)
+
+
+
 def watch_video(
     driver: Any,
     duration_seconds: Optional[int],
@@ -92,6 +138,7 @@ def watch_video(
     full_timeout_seconds: int = DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     skip_ads: bool = True,
     max_ad_seconds: int = 32,
+    end_buffer_seconds: float = 0.0,
 ) -> WatchResult:
     """Watch the target video for a fixed duration or its full length.
 
@@ -102,6 +149,8 @@ def watch_video(
             monetisation window; ``False`` -> watch ads, escaping only once
             cumulative ad time reaches ``max_ad_seconds`` (``0`` = never).
         max_ad_seconds: cumulative ad-watch cap used when ``skip_ads`` is off.
+        end_buffer_seconds: early stop buffer before video ends (5-15s) to prevent
+            YouTube autoplay. ``0`` selects a randomized 7-12s buffer.
 
     Returns:
         A :class:`WatchResult`; ``bool(result)`` is True when the watch finished
@@ -112,6 +161,18 @@ def watch_video(
     """
     is_full_mode = duration_seconds is None or duration_seconds <= 0
     ad_state = AdWatchState()
+    target_buffer = (
+        random.uniform(7.0, 12.0)
+        if (end_buffer_seconds is None or end_buffer_seconds <= 0)
+        else float(end_buffer_seconds)
+    )
+
+    initial_video_id: Optional[str] = None
+    try:
+        initial_video_id = extract_video_id(getattr(driver, "current_url", None))
+    except Exception:
+        pass
+    autoplay_disabled = False
 
     if is_full_mode:
         emit(log_queue, "Watching full video until playback finishes...")
@@ -175,6 +236,32 @@ def watch_video(
             continue
 
         video_missing_since = None
+
+        # Proactively turn off YouTube's native autoplay switch once playback starts
+        if not autoplay_disabled:
+            if disable_player_autoplay(driver):
+                emit(log_queue, "Disabled YouTube native autoplay toggle.")
+            autoplay_disabled = True
+
+        # Safety net: detect if YouTube navigated away to an autoplayed next video
+        if initial_video_id:
+            try:
+                curr_url = getattr(driver, "current_url", "")
+                curr_vid = extract_video_id(curr_url)
+                if curr_vid and curr_vid != initial_video_id:
+                    emit(
+                        log_queue,
+                        f"Video transition detected ({initial_video_id} -> {curr_vid}). "
+                        "Halting task to prevent counting next video.",
+                    )
+                    try:
+                        driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
+                    except Exception:
+                        pass
+                    return _result(True, "autoplay_transition")
+            except Exception:
+                pass
+
         is_ad = bool(video_state.get("isAd"))
         ad_state.tick(is_ad, delta)
 
@@ -232,13 +319,23 @@ def watch_video(
         curr_time = float(video_state.get("currentTime", 0.0))
         video_duration = float(video_state.get("duration", 0.0))
 
-        # Playback finished
-        if video_duration > 0 and (ended or curr_time >= (video_duration - 1.5)):
-            emit(log_queue, f"Video playback finished! (Watched full length: {_format_clock(video_duration)})")
+        # Playback finished (stops before autoplay countdown or next-video navigation triggers)
+        effective_buffer = calculate_end_buffer(video_duration, target_buffer)
+        if video_duration > 0 and (ended or curr_time >= (video_duration - effective_buffer)):
+            remaining = max(0.0, video_duration - curr_time)
+            emit(
+                log_queue,
+                f"Video playback finished! (Watched: {_format_clock(curr_time)} / "
+                f"{_format_clock(video_duration)}, completed {remaining:.1f}s early to prevent autoplay)",
+            )
+            try:
+                driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
+            except Exception:
+                pass
             return _result(True, "ended")
 
         # Paused mid-video -> resume (JS first, real play button as fallback)
-        if paused and not ended and (video_duration == 0 or curr_time < (video_duration - 2)):
+        if paused and not ended and (video_duration == 0 or curr_time < (video_duration - effective_buffer - 1.0)):
             try:
                 driver.execute_script("var v = document.querySelector('video'); if (v) v.play();")
                 play_attempts += 1
