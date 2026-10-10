@@ -184,7 +184,7 @@ class QueueView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
-        modal.geometry("520x620")
+        modal.geometry("520x560")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
@@ -206,25 +206,20 @@ class QueueView(ctk.CTkFrame):
         url_entry.bind("<Control-v>", lambda e: modal.after(50, _auto_clean_url))
         url_entry.bind("<Control-V>", lambda e: modal.after(50, _auto_clean_url))
 
-        ctk.CTkLabel(modal, text="Search Keywords Line 1 (Primary):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        kw1_entry = ctk.CTkEntry(modal, placeholder_text="Primary keywords (Attempt 1)", width=460)
-        kw1_entry.insert(0, target_task.keywords)
-        kw1_entry.pack(padx=20, pady=(0, 6))
+        ctk.CTkLabel(modal, text="Video Title 1 (Primary):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        title1_entry = ctk.CTkEntry(modal, placeholder_text="Primary video title or query (Attempt 1)", width=460)
+        title1_entry.insert(0, target_task.title)
+        title1_entry.pack(padx=20, pady=(0, 6))
 
-        ctk.CTkLabel(modal, text="Search Keywords Line 2 (Retry 2 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        kw2_entry = ctk.CTkEntry(modal, placeholder_text="Alternative query (Attempt 2 if 1 fails)", width=460)
-        kw2_entry.insert(0, target_task.keywords_2)
-        kw2_entry.pack(padx=20, pady=(0, 6))
+        ctk.CTkLabel(modal, text="Video Title 2 (Retry 2 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        title2_entry = ctk.CTkEntry(modal, placeholder_text="Alternative title or variation (Attempt 2 if 1 fails)", width=460)
+        title2_entry.insert(0, target_task.title_2)
+        title2_entry.pack(padx=20, pady=(0, 6))
 
-        ctk.CTkLabel(modal, text="Search Keywords Line 3 (Retry 3 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        kw3_entry = ctk.CTkEntry(modal, placeholder_text="Alternative query (Attempt 3 if 2 fails)", width=460)
-        kw3_entry.insert(0, target_task.keywords_3)
-        kw3_entry.pack(padx=20, pady=(0, 10))
-
-        ctk.CTkLabel(modal, text="Video Title (Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        title_entry = ctk.CTkEntry(modal, placeholder_text="Exact or partial video title", width=460)
-        title_entry.insert(0, target_task.title)
-        title_entry.pack(padx=20, pady=(0, 10))
+        ctk.CTkLabel(modal, text="Video Title 3 (Retry 3 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        title3_entry = ctk.CTkEntry(modal, placeholder_text="Alternative title or variation (Attempt 3 if 2 fails)", width=460)
+        title3_entry.insert(0, target_task.title_3)
+        title3_entry.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Watch Duration:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         duration_option = ctk.CTkOptionMenu(modal, values=WATCHTIME_OPTIONS, width=460)
@@ -270,20 +265,21 @@ class QueueView(ctk.CTkFrame):
 
         def on_submit():
             url = clean_youtube_url(url_entry.get().strip())
-            kw1 = kw1_entry.get().strip()
-            kw2 = kw2_entry.get().strip()
-            kw3 = kw3_entry.get().strip()
-            title = title_entry.get().strip()
-            if not url and not kw1 and not kw2 and not kw3 and not title:
-                messagebox.showerror("Error", "Please provide at least a URL or Search Keywords!", parent=modal)
+            t1 = title1_entry.get().strip()
+            t2 = title2_entry.get().strip()
+            t3 = title3_entry.get().strip()
+            if not url and not t1 and not t2 and not t3:
+                messagebox.showerror("Error", "Please provide at least a URL or Video Title!", parent=modal)
                 return
 
             updated_task = VideoTask(
                 url=url,
-                keywords=kw1,
-                keywords_2=kw2,
-                keywords_3=kw3,
-                title=title,
+                title=t1,
+                title_2=t2,
+                title_3=t3,
+                keywords=t1,
+                keywords_2=t2,
+                keywords_3=t3,
                 watchtime_duration=duration_option.get(),
                 channel="" if channel_option.get() == NO_CHANNEL_VALUE else channel_option.get(),
                 enabled=target_task.enabled,
@@ -462,28 +458,34 @@ class QueueView(ctk.CTkFrame):
             width=24,
             command=_toggle_task,
         )
-        if task.enabled:
-            task_chk.select()
-        else:
+        if not channel_enabled:
             task_chk.deselect()
+            task_chk.configure(state="disabled")
+        else:
+            task_chk.configure(state="normal")
+            if task.enabled:
+                task_chk.select()
+            else:
+                task_chk.deselect()
+
         task_chk.grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=10, sticky="w")
 
-        t_text = task.title or task.keywords or task.url
+        t_text = task.title or task.url
         if len(t_text) > 55:
             t_text = t_text[:52] + "..."
 
-        kws = [k for k in [task.keywords, task.keywords_2, task.keywords_3] if k]
-        kw_text = " | ".join(kws) if kws else "N/A"
-        if len(kw_text) > 40:
-            kw_text = kw_text[:37] + "..."
+        titles = [t for t in [task.title, task.title_2, task.title_3] if t]
+        title_summary = " | ".join(titles) if titles else "N/A"
+        if len(title_summary) > 42:
+            title_summary = title_summary[:39] + "..."
 
         status_prefix = ""
-        if not task.enabled:
-            status_prefix = "[DISABLED] "
-        elif not channel_enabled:
+        if not channel_enabled:
             status_prefix = "[CHANNEL DISABLED] "
+        elif not task.enabled:
+            status_prefix = "[DISABLED] "
 
-        info_text = f"#{position}. {status_prefix}{t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration}"
+        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}"
         lbl = ctk.CTkLabel(
             card,
             text=info_text,

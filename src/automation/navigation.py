@@ -134,7 +134,8 @@ def navigate_to_video_organically(
                         break
 
             # Pass 2: If not found using URL, increase timeout/wait and check by Titles
-            if not selected_link and task.title:
+            candidate_titles = task.get_title_queries()
+            if not selected_link and candidate_titles:
                 emit(
                     log_queue,
                     "[Step 4/6] Video not found by URL in initial scan. Increasing timeout and checking for Title match...",
@@ -165,14 +166,19 @@ def navigate_to_video_organically(
                             emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID/URL ('{target_video_id}') after scroll!")
                             break
 
-                # If still not found by URL, check by Title
+                # If still not found by URL, check by any of the candidate titles
                 if not selected_link:
-                    target_title_lower = task.title.strip().lower()
-                    for idx, link in enumerate(results[:35]):
-                        title_text = (link.get_attribute("title") or link.text or "").strip().lower()
-                        if target_title_lower and (target_title_lower in title_text or title_text in target_title_lower):
-                            selected_link = link
-                            emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Title ('{task.title}')!")
+                    for cand_title in candidate_titles:
+                        target_title_lower = cand_title.strip().lower()
+                        if not target_title_lower:
+                            continue
+                        for idx, link in enumerate(results[:35]):
+                            title_text = (link.get_attribute("title") or link.text or "").strip().lower()
+                            if target_title_lower in title_text or title_text in target_title_lower:
+                                selected_link = link
+                                emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Title ('{cand_title}')!")
+                                break
+                        if selected_link:
                             break
 
             if selected_link:

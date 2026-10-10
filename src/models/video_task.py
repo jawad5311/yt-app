@@ -28,6 +28,8 @@ class VideoTask:
     """Represents a YouTube Video task in the execution queue."""
     url: str = ""
     title: str = ""
+    title_2: str = ""
+    title_3: str = ""
     keywords: str = ""
     keywords_2: str = ""
     keywords_3: str = ""
@@ -37,13 +39,32 @@ class VideoTask:
     # Whether this video task is enabled for automation.
     enabled: bool = True
 
+    def __post_init__(self):
+        # Synchronize titles and keywords so both properties remain interchangeable
+        if not self.title and self.keywords:
+            self.title = self.keywords
+        elif not self.keywords and self.title:
+            self.keywords = self.title
+
+        if not self.title_2 and self.keywords_2:
+            self.title_2 = self.keywords_2
+        elif not self.keywords_2 and self.title_2:
+            self.keywords_2 = self.title_2
+
+        if not self.title_3 and self.keywords_3:
+            self.title_3 = self.keywords_3
+        elif not self.keywords_3 and self.title_3:
+            self.keywords_3 = self.title_3
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "url": self.url,
             "title": self.title,
-            "keywords": self.keywords,
-            "keywords_2": self.keywords_2,
-            "keywords_3": self.keywords_3,
+            "title_2": self.title_2,
+            "title_3": self.title_3,
+            "keywords": self.keywords or self.title,
+            "keywords_2": self.keywords_2 or self.title_2,
+            "keywords_3": self.keywords_3 or self.title_3,
             "watchtime_duration": self.watchtime_duration,
             "channel": self.channel,
             "enabled": self.enabled,
@@ -51,14 +72,37 @@ class VideoTask:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VideoTask":
-        raw_kw = str(data.get("keywords", data.get("title", "")) or "")
-        kw_2 = str(data.get("keywords_2", "") or "")
-        kw_3 = str(data.get("keywords_3", "") or "")
-        if "\n" in raw_kw and not kw_2:
-            lines = [line.strip() for line in raw_kw.splitlines() if line.strip()]
-            raw_kw = lines[0] if lines else ""
-            kw_2 = lines[1] if len(lines) > 1 else ""
-            kw_3 = lines[2] if len(lines) > 2 else ""
+        raw_t1 = str(data.get("title", "") or "")
+        raw_t2 = str(data.get("title_2", "") or "")
+        raw_t3 = str(data.get("title_3", "") or "")
+
+        raw_kw1 = str(data.get("keywords", "") or "")
+        raw_kw2 = str(data.get("keywords_2", "") or "")
+        raw_kw3 = str(data.get("keywords_3", "") or "")
+
+        if "\n" in raw_kw1 and not raw_kw2 and not raw_t2:
+            lines = [line.strip() for line in raw_kw1.splitlines() if line.strip()]
+            raw_kw1 = lines[0] if lines else ""
+            raw_kw2 = lines[1] if len(lines) > 1 else ""
+            raw_kw3 = lines[2] if len(lines) > 2 else ""
+            raw_t1 = raw_kw1
+            raw_t2 = raw_kw2
+            raw_t3 = raw_kw3
+
+        if not raw_t1 and raw_kw1:
+            raw_t1 = raw_kw1
+        if not raw_kw1 and raw_t1:
+            raw_kw1 = raw_t1
+
+        if not raw_t2 and raw_kw2:
+            raw_t2 = raw_kw2
+        if not raw_kw2 and raw_t2:
+            raw_kw2 = raw_t2
+
+        if not raw_t3 and raw_kw3:
+            raw_t3 = raw_kw3
+        if not raw_kw3 and raw_t3:
+            raw_kw3 = raw_t3
 
         enabled_val = data.get("enabled", True)
         if isinstance(enabled_val, str):
@@ -66,24 +110,28 @@ class VideoTask:
 
         return cls(
             url=data.get("url", ""),
-            title=data.get("title", ""),
-            keywords=raw_kw,
-            keywords_2=kw_2,
-            keywords_3=kw_3,
+            title=raw_t1,
+            title_2=raw_t2,
+            title_3=raw_t3,
+            keywords=raw_kw1,
+            keywords_2=raw_kw2,
+            keywords_3=raw_kw3,
             watchtime_duration=data.get("watchtime_duration", DEFAULT_WATCHTIME_DURATION),
             channel=data.get("channel") or "",
             enabled=bool(enabled_val),
         )
 
-    def get_keyword_queries(self) -> List[str]:
-        """Return non-empty keyword search queries (up to 3 lines) for organic search attempts.
-        Falls back to title if no keyword lines are provided.
-        """
-        candidates = [self.keywords.strip(), self.keywords_2.strip(), self.keywords_3.strip()]
+    def get_title_queries(self) -> List[str]:
+        """Return non-empty video title lines (up to 3) for search and matching attempts."""
+        candidates = [self.title.strip(), self.title_2.strip(), self.title_3.strip()]
         queries = [c for c in candidates if c]
-        if not queries and self.title.strip():
-            return [self.title.strip()]
+        if not queries and self.keywords.strip():
+            queries = [self.keywords.strip()]
         return queries
+
+    def get_keyword_queries(self) -> List[str]:
+        """Alias for get_title_queries for backward compatibility."""
+        return self.get_title_queries()
 
     def is_full_video(self) -> bool:
         """Check if task is set to watch full video until playback finishes."""

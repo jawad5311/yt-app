@@ -192,21 +192,21 @@ def test_clean_youtube_url(raw_url, expected_clean):
 # 4. Three Title Keywords Lines & Retry Query Resolution
 # ============================================================================
 
-def test_video_task_three_keyword_lines():
+def test_video_task_three_title_lines():
     task = VideoTask(
-        title="Main Title",
-        keywords="Keyword Line 1",
-        keywords_2="Keyword Line 2",
-        keywords_3="Keyword Line 3",
+        title="Title Line 1",
+        title_2="Title Line 2",
+        title_3="Title Line 3",
     )
-    assert task.get_keyword_queries() == ["Keyword Line 1", "Keyword Line 2", "Keyword Line 3"]
+    assert task.get_title_queries() == ["Title Line 1", "Title Line 2", "Title Line 3"]
+    assert task.get_keyword_queries() == ["Title Line 1", "Title Line 2", "Title Line 3"]
 
     # Roundtrip serialization
     restored = VideoTask.from_dict(task.to_dict())
-    assert restored.keywords == "Keyword Line 1"
-    assert restored.keywords_2 == "Keyword Line 2"
-    assert restored.keywords_3 == "Keyword Line 3"
-    assert restored.get_keyword_queries() == ["Keyword Line 1", "Keyword Line 2", "Keyword Line 3"]
+    assert restored.title == "Title Line 1"
+    assert restored.title_2 == "Title Line 2"
+    assert restored.title_3 == "Title Line 3"
+    assert restored.get_title_queries() == ["Title Line 1", "Title Line 2", "Title Line 3"]
 
 
 def test_video_task_legacy_multiline_split():
@@ -311,3 +311,37 @@ def test_navigation_prioritizes_url_over_title(monkeypatch):
     # Crucial check: elem_right_id was clicked, NOT elem_wrong_id_right_title!
     assert elem_right_id.clicked is True
     assert elem_wrong_id_right_title.clicked is False
+
+
+def test_navigation_matches_title_when_url_not_found(monkeypatch):
+    """Ensure that if URL is not in results, Pass 2 matches by alternative Video Title 2."""
+    elem_diff_id_matching_title2 = MockElement(
+        href="https://www.youtube.com/watch?v=SOME_OTHER_ID",
+        title="Podcast Episode 2: The Truth",
+    )
+
+    mock_driver = MockDriver([elem_diff_id_matching_title2])
+    task = VideoTask(
+        url="https://www.youtube.com/watch?v=TARGET_NOT_IN_RESULTS",
+        title="Podcast Ep 1",
+        title_2="Podcast Episode 2: The Truth",
+    )
+
+    from selenium.webdriver.support.ui import WebDriverWait
+    monkeypatch.setattr("src.automation.navigation.safe_get", lambda *a, **k: None)
+    monkeypatch.setattr("src.automation.navigation.human_like_delay", lambda *a, **k: None)
+    monkeypatch.setattr("src.automation.navigation.slow_type", lambda *a, **k: None)
+
+    until_calls = {"count": 0}
+
+    def fake_until(self, ec):
+        until_calls["count"] += 1
+        if until_calls["count"] == 1:
+            return MockSearchBox()
+        return mock_driver.results
+
+    monkeypatch.setattr(WebDriverWait, "until", fake_until)
+
+    success = navigate_to_video_organically(mock_driver, task, direct_link_fallback=False)
+    assert success is True
+    assert elem_diff_id_matching_title2.clicked is True

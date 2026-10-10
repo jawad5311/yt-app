@@ -119,7 +119,7 @@ class AutomationWorker:
                 active_query = task.title or ""
 
             if attempt > 1:
-                emit(self.log_queue, f"Retrying task (attempt {attempt}/{MAX_ATTEMPTS_PER_TASK}) using keywords: '{active_query}'...")
+                emit(self.log_queue, f"Retrying task (attempt {attempt}/{MAX_ATTEMPTS_PER_TASK}) using title: '{active_query}'...")
 
             try:
                 nav_ok = navigate_to_video_organically(
