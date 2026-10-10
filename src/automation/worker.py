@@ -16,8 +16,10 @@ from .login import perform_google_login
 from .navigation import navigate_to_video_organically
 from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_video
 
-# Retry a failed task across up to 3 keyword lines before skipping it.
-MAX_ATTEMPTS_PER_TASK = 3
+# Retry a failed task across up to 3 titles, with 3 attempts per title (up to 9 attempts total).
+ATTEMPTS_PER_TITLE = 3
+MAX_TITLES_PER_TASK = 3
+MAX_ATTEMPTS_PER_TASK = MAX_TITLES_PER_TASK * ATTEMPTS_PER_TITLE  # 9
 
 
 class AutomationWorker:
@@ -101,77 +103,85 @@ class AutomationWorker:
             label=label,
             channel=task.channel,
         )
-        kw_queries = task.get_keyword_queries()
-        for attempt in range(1, MAX_ATTEMPTS_PER_TASK + 1):
-            if self.stop_event.is_set():
-                outcome.interrupted = True
-                return outcome
+        title_queries = task.get_title_queries()
+        if not title_queries:
+            title_queries = [task.title or task.keywords or ""]
 
-            outcome.attempts = attempt
-            if kw_queries:
-                if attempt == 1:
-                    active_query = kw_queries[0]
-                elif attempt == 2:
-                    active_query = kw_queries[1] if len(kw_queries) > 1 else kw_queries[0]
-                else:
-                    active_query = kw_queries[2] if len(kw_queries) > 2 else kw_queries[-1]
-            else:
-                active_query = task.title or ""
+        # Each configured title line is attempted ATTEMPTS_PER_TITLE times (e.g. 3 titles * 3 tries = 9 max attempts)
+        total_max_attempts = len(title_queries) * ATTEMPTS_PER_TITLE
+        overall_attempt = 0
 
-            if attempt > 1:
-                emit(self.log_queue, f"Retrying task (attempt {attempt}/{MAX_ATTEMPTS_PER_TASK}) using title: '{active_query}'...")
-
-            try:
-                nav_ok = navigate_to_video_organically(
-                    self.driver,
-                    task,
-                    direct_link_fallback=direct_link_fallback,
-                    log_queue=self.log_queue,
-                    search_query_override=active_query,
-                )
-            except Exception as exc:
-                emit(self.log_queue, f"Navigation error: {exc}", logging.ERROR)
-                nav_ok = False
-
-            if not nav_ok:
-                emit(self.log_queue, f"Could not navigate to task #{label}.", logging.WARNING)
-                continue
-
-            # The resolved page URL identifies keyword-only tasks across runs.
-            try:
-                resolved_url = str(getattr(self.driver, "current_url", "") or "")
-            except Exception:
-                resolved_url = ""
-            outcome.video_key = resolve_video_key(task, resolved_url)
-
-            try:
-                result = watch_video(
-                    self.driver,
-                    task.parse_duration_seconds(),
-                    log_queue=self.log_queue,
-                    stop_event=self.stop_event,
-                    full_timeout_seconds=self._full_video_timeout_seconds(),
-                    skip_ads=self.skip_ads,
-                    max_ad_seconds=self.max_ad_seconds,
-                    end_buffer_seconds=self._end_buffer_seconds(),
-                )
-                outcome.watched_seconds += max(0.0, result.watched_seconds)
-                outcome.ad_seconds += max(0.0, result.ad_seconds)
-                if result:
-                    outcome.success = True
-                    return outcome
-                if result.interrupted:
+        for title_idx, active_query in enumerate(title_queries, start=1):
+            for try_num in range(1, ATTEMPTS_PER_TITLE + 1):
+                if self.stop_event.is_set():
                     outcome.interrupted = True
                     return outcome
-            except Exception as exc:
-                emit(self.log_queue, f"Watch error: {exc}", logging.ERROR)
 
-            if self.stop_event.is_set():
-                outcome.interrupted = True
-                return outcome
+                overall_attempt += 1
+                outcome.attempts = overall_attempt
 
-        emit(self.log_queue, "Task failed after retry. Skipping to next task.", logging.ERROR)
+                if overall_attempt > 1:
+                    emit(
+                        self.log_queue,
+                        f"Retrying task (attempt {overall_attempt}/{total_max_attempts} - Title {title_idx}/{len(title_queries)}, try {try_num}/{ATTEMPTS_PER_TITLE}) using title: '{active_query}'...",
+                    )
+
+                # Fallback to direct navigation URL only on the final possible attempt
+                is_last_attempt = (overall_attempt == total_max_attempts)
+                allow_direct = direct_link_fallback if is_last_attempt else False
+
+                try:
+                    nav_ok = navigate_to_video_organically(
+                        self.driver,
+                        task,
+                        direct_link_fallback=allow_direct,
+                        log_queue=self.log_queue,
+                        search_query_override=active_query,
+                    )
+                except Exception as exc:
+                    emit(self.log_queue, f"Navigation error: {exc}", logging.ERROR)
+                    nav_ok = False
+
+                if not nav_ok:
+                    emit(self.log_queue, f"Could not navigate to task #{label} (attempt {overall_attempt}/{total_max_attempts}).", logging.WARNING)
+                    continue
+
+                # The resolved page URL identifies keyword-only tasks across runs.
+                try:
+                    resolved_url = str(getattr(self.driver, "current_url", "") or "")
+                except Exception:
+                    resolved_url = ""
+                outcome.video_key = resolve_video_key(task, resolved_url)
+
+                try:
+                    result = watch_video(
+                        self.driver,
+                        task.parse_duration_seconds(),
+                        log_queue=self.log_queue,
+                        stop_event=self.stop_event,
+                        full_timeout_seconds=self._full_video_timeout_seconds(),
+                        skip_ads=self.skip_ads,
+                        max_ad_seconds=self.max_ad_seconds,
+                        end_buffer_seconds=self._end_buffer_seconds(),
+                    )
+                    outcome.watched_seconds += max(0.0, result.watched_seconds)
+                    outcome.ad_seconds += max(0.0, result.ad_seconds)
+                    if result:
+                        outcome.success = True
+                        return outcome
+                    if result.interrupted:
+                        outcome.interrupted = True
+                        return outcome
+                except Exception as exc:
+                    emit(self.log_queue, f"Watch error: {exc}", logging.ERROR)
+
+                if self.stop_event.is_set():
+                    outcome.interrupted = True
+                    return outcome
+
+        emit(self.log_queue, f"Task failed after {overall_attempt} attempts across {len(title_queries)} titles. Skipping to next task.", logging.ERROR)
         return outcome
+
 
     def _record(self, outcome: TaskOutcome) -> None:
         """Persist one finished task; a stats error never aborts a session."""

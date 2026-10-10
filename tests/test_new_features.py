@@ -345,3 +345,100 @@ def test_navigation_matches_title_when_url_not_found(monkeypatch):
     success = navigate_to_video_organically(mock_driver, task, direct_link_fallback=False)
     assert success is True
     assert elem_diff_id_matching_title2.clicked is True
+
+
+def test_worker_retries_each_title_three_times(tmp_path, monkeypatch):
+    """Verify that worker attempts each title 3 times, yielding 9 attempts for 3 titles."""
+    from src.automation import worker as worker_module
+    from src.automation.worker import AutomationWorker
+    from src.config.manager import ConfigManager
+    from src.config.stats_store import StatsStore
+    from src.models.account import Account
+    from src.models.watch_stats import WatchResult
+
+    config = ConfigManager(config_file=tmp_path / "settings.json")
+    store = StatsStore(stats_file=tmp_path / "stats.json")
+    worker = AutomationWorker(
+        account=Account(email="test@example.com", password="pw"),
+        video_tasks=[],
+        config_mgr=config,
+        stats_store=store,
+    )
+    class DummyDriver:
+        current_url = ""
+    worker.driver = DummyDriver()
+
+    task = VideoTask(
+        title="Title 1",
+        title_2="Title 2",
+        title_3="Title 3",
+    )
+
+    attempted_queries = []
+    fallback_flags = []
+
+    def mock_navigate(driver, task_arg, direct_link_fallback=False, log_queue=None, search_query_override=None):
+        attempted_queries.append(search_query_override)
+        fallback_flags.append(direct_link_fallback)
+        return False  # Force failure so all attempts are tried
+
+    monkeypatch.setattr(worker_module, "navigate_to_video_organically", mock_navigate)
+
+    outcome = worker._run_task(task, direct_link_fallback=True)
+
+    # 3 titles x 3 attempts each = 9 total attempts
+    assert outcome.attempts == 9
+    assert outcome.success is False
+    assert len(attempted_queries) == 9
+    assert attempted_queries == [
+        "Title 1", "Title 1", "Title 1",
+        "Title 2", "Title 2", "Title 2",
+        "Title 3", "Title 3", "Title 3",
+    ]
+    # Direct link fallback should ONLY be allowed on the 9th (last) attempt
+    assert fallback_flags == [False, False, False, False, False, False, False, False, True]
+
+
+def test_worker_succeeds_on_nth_attempt(tmp_path, monkeypatch):
+    """Verify that worker stops immediately upon success during the 9 attempts."""
+    from src.automation import worker as worker_module
+    from src.automation.worker import AutomationWorker
+    from src.config.manager import ConfigManager
+    from src.models.account import Account
+    from src.models.watch_stats import WatchResult
+
+    config = ConfigManager(config_file=tmp_path / "settings.json")
+    worker = AutomationWorker(
+        account=Account(email="test@example.com", password="pw"),
+        video_tasks=[],
+        config_mgr=config,
+    )
+    class DummyDriver:
+        current_url = "https://www.youtube.com/watch?v=SUCCESS123"
+    worker.driver = DummyDriver()
+
+    task = VideoTask(
+        title="Title 1",
+        title_2="Title 2",
+        title_3="Title 3",
+    )
+
+    attempt_count = {"calls": 0}
+
+    def mock_navigate(driver, task_arg, direct_link_fallback=False, log_queue=None, search_query_override=None):
+        attempt_count["calls"] += 1
+        # Succeed on 5th attempt (which is Title 2, try 2)
+        return attempt_count["calls"] == 5
+
+    monkeypatch.setattr(worker_module, "navigate_to_video_organically", mock_navigate)
+    monkeypatch.setattr(
+        worker_module,
+        "watch_video",
+        lambda *a, **k: WatchResult(completed=True, watched_seconds=30.0, reason="duration_reached"),
+    )
+
+    outcome = worker._run_task(task, direct_link_fallback=True)
+    assert outcome.success is True
+    assert outcome.attempts == 5
+    assert attempt_count["calls"] == 5
+
