@@ -1,4 +1,3 @@
-import threading
 from unittest.mock import MagicMock
 
 from src.automation.youtube_actions import (

@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import List
+from typing import Dict, List, Optional
 
 import pytest
 
@@ -9,7 +9,6 @@ from src.automation.navigation import extract_video_id, navigate_to_video_organi
 from src.models.channel import Channel, is_video_task_runnable
 from src.models.video_task import VideoTask
 from src.utils.helpers import clean_youtube_url
-
 
 # ============================================================================
 # 1. Check/Uncheck or Enable/Disable
@@ -75,7 +74,7 @@ def test_task_dispatcher_random_and_non_overlapping():
 
     currently_playing = set()
     collision_detected = False
-    processed_by_worker = {0: [], 1: []}
+    processed_by_worker: Dict[int, List[Optional[str]]] = {0: [], 1: []}
     lock = threading.Lock()
 
     def run_simulated_worker(worker_id: int):
@@ -354,7 +353,6 @@ def test_worker_retries_each_title_three_times(tmp_path, monkeypatch):
     from src.config.manager import ConfigManager
     from src.config.stats_store import StatsStore
     from src.models.account import Account
-    from src.models.watch_stats import WatchResult
 
     config = ConfigManager(config_file=tmp_path / "settings.json")
     store = StatsStore(stats_file=tmp_path / "stats.json")
