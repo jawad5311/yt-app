@@ -10,13 +10,14 @@ from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.logger import emit
 from .adblock import ensure_adblock
+from .dispatcher import TaskDispatcher
 from .driver import close_driver, setup_driver
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
 from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_video
 
-# Retry a failed task (navigation failure or watch error) once before skipping it.
-MAX_ATTEMPTS_PER_TASK = 2
+# Retry a failed task across up to 3 keyword lines before skipping it.
+MAX_ATTEMPTS_PER_TASK = 3
 
 
 class AutomationWorker:
@@ -32,6 +33,7 @@ class AutomationWorker:
         event_queue: Optional[queue.Queue] = None,
         worker_id: int = 0,
         stats_store: Optional[StatsStore] = None,
+        dispatcher: Optional[TaskDispatcher] = None,
     ):
         self.account = account
         self.video_tasks = video_tasks
@@ -41,6 +43,7 @@ class AutomationWorker:
         self.event_queue = event_queue
         self.worker_id = worker_id
         self.stats_store = stats_store
+        self.dispatcher = dispatcher
         self.driver: Any = None
         self.skip_ads = True
         self.max_ad_seconds = 32
@@ -98,14 +101,25 @@ class AutomationWorker:
             label=label,
             channel=task.channel,
         )
+        kw_queries = task.get_keyword_queries()
         for attempt in range(1, MAX_ATTEMPTS_PER_TASK + 1):
             if self.stop_event.is_set():
                 outcome.interrupted = True
                 return outcome
 
             outcome.attempts = attempt
+            if kw_queries:
+                if attempt == 1:
+                    active_query = kw_queries[0]
+                elif attempt == 2:
+                    active_query = kw_queries[1] if len(kw_queries) > 1 else kw_queries[0]
+                else:
+                    active_query = kw_queries[2] if len(kw_queries) > 2 else kw_queries[-1]
+            else:
+                active_query = task.title or ""
+
             if attempt > 1:
-                emit(self.log_queue, f"Retrying task once (attempt {attempt}/{MAX_ATTEMPTS_PER_TASK})...")
+                emit(self.log_queue, f"Retrying task (attempt {attempt}/{MAX_ATTEMPTS_PER_TASK}) using keywords: '{active_query}'...")
 
             try:
                 nav_ok = navigate_to_video_organically(
@@ -113,6 +127,7 @@ class AutomationWorker:
                     task,
                     direct_link_fallback=direct_link_fallback,
                     log_queue=self.log_queue,
+                    search_query_override=active_query,
                 )
             except Exception as exc:
                 emit(self.log_queue, f"Navigation error: {exc}", logging.ERROR)
@@ -173,7 +188,12 @@ class AutomationWorker:
         """Main execution flow for account thread."""
         emit(self.log_queue, f"Starting automation session for account: {self.account.email}")
         direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", True)
-        total = len(self.video_tasks)
+
+        if self.dispatcher is not None:
+            total = self.dispatcher.register_worker(self.worker_id)
+        else:
+            total = len(self.video_tasks)
+
         processed = 0
         succeeded = 0
 
@@ -209,14 +229,25 @@ class AutomationWorker:
                 return
 
             # Iterate through video tasks
-            for idx, task in enumerate(self.video_tasks, 1):
-                if self.stop_event.is_set():
-                    emit(self.log_queue, "Automation stopped by user.")
-                    break
+            task_idx = 0
+            while not self.stop_event.is_set():
+                if self.dispatcher is not None:
+                    task = self.dispatcher.acquire_next_task(self.worker_id, stop_event=self.stop_event)
+                    if task is None:
+                        break
+                else:
+                    if task_idx >= len(self.video_tasks):
+                        break
+                    task = self.video_tasks[task_idx]
 
-                emit(self.log_queue, f"\n--- Processing Video Task {idx}/{total}: {task.title or task.keywords or task.url} ---")
+                task_idx += 1
+                emit(self.log_queue, f"\n--- Processing Video Task {task_idx}/{total}: {task.title or task.keywords or task.url} ---")
 
-                outcome = self._run_task(task, direct_link_fallback)
+                try:
+                    outcome = self._run_task(task, direct_link_fallback)
+                finally:
+                    if self.dispatcher is not None:
+                        self.dispatcher.release_task(task)
 
                 processed += 1
                 if outcome.success:

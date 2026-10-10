@@ -101,8 +101,8 @@ def test_failed_task_records_a_single_failure(tmp_path, monkeypatch):
 
     assert outcome.success is False
     assert outcome.interrupted is False
-    assert outcome.attempts == 2
-    assert outcome.watched_seconds == 16.0  # both attempts contributed
+    assert outcome.attempts == 3
+    assert outcome.watched_seconds == 24.0  # all 3 attempts contributed
 
     record = store.find_for_task(task)
     assert record.runs == 1

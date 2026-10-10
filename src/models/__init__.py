@@ -1,5 +1,5 @@
 from .account import Account
-from .channel import Channel, VideoGroup, group_videos_by_channel
+from .channel import Channel, VideoGroup, group_videos_by_channel, is_video_task_runnable
 from .video_task import VideoTask
 from .watch_stats import StatRecord, TaskOutcome, Totals, WatchResult
 
@@ -13,4 +13,5 @@ __all__ = [
     "VideoTask",
     "WatchResult",
     "group_videos_by_channel",
+    "is_video_task_runnable",
 ]

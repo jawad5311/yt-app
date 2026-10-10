@@ -1,3 +1,4 @@
+from .dispatcher import TaskDispatcher
 from .driver import close_driver, setup_driver
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
@@ -11,4 +12,5 @@ __all__ = [
     "navigate_to_video_organically",
     "watch_video",
     "AutomationWorker",
+    "TaskDispatcher",
 ]

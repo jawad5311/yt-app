@@ -7,6 +7,7 @@ import customtkinter as ctk
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
 from ...models.watch_stats import format_totals_line, format_watch_line
+from ...utils.helpers import clean_youtube_url
 
 
 class QueueView(ctk.CTkFrame):
@@ -183,31 +184,55 @@ class QueueView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
-        modal.geometry("500x480")
+        modal.geometry("520x620")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
-        url_entry = ctk.CTkEntry(modal, placeholder_text="https://www.youtube.com/watch?v=...", width=440)
+        url_entry = ctk.CTkEntry(modal, placeholder_text="https://www.youtube.com/watch?v=...", width=460)
         url_entry.insert(0, target_task.url)
         url_entry.pack(padx=20, pady=(0, 10))
 
-        ctk.CTkLabel(modal, text="Search Keywords (for Organic Search):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        keywords_entry = ctk.CTkEntry(modal, placeholder_text="e.g., python automation tutorial", width=440)
-        keywords_entry.insert(0, target_task.keywords)
-        keywords_entry.pack(padx=20, pady=(0, 10))
+        def _auto_clean_url(*_):
+            raw = url_entry.get().strip()
+            if raw:
+                cleaned = clean_youtube_url(raw)
+                if cleaned and cleaned != raw:
+                    url_entry.delete(0, "end")
+                    url_entry.insert(0, cleaned)
+
+        url_entry.bind("<FocusOut>", _auto_clean_url)
+        url_entry.bind("<KeyRelease>", lambda e: modal.after(50, _auto_clean_url))
+        url_entry.bind("<<Paste>>", lambda e: modal.after(50, _auto_clean_url))
+        url_entry.bind("<Control-v>", lambda e: modal.after(50, _auto_clean_url))
+        url_entry.bind("<Control-V>", lambda e: modal.after(50, _auto_clean_url))
+
+        ctk.CTkLabel(modal, text="Search Keywords Line 1 (Primary):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        kw1_entry = ctk.CTkEntry(modal, placeholder_text="Primary keywords (Attempt 1)", width=460)
+        kw1_entry.insert(0, target_task.keywords)
+        kw1_entry.pack(padx=20, pady=(0, 6))
+
+        ctk.CTkLabel(modal, text="Search Keywords Line 2 (Retry 2 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        kw2_entry = ctk.CTkEntry(modal, placeholder_text="Alternative query (Attempt 2 if 1 fails)", width=460)
+        kw2_entry.insert(0, target_task.keywords_2)
+        kw2_entry.pack(padx=20, pady=(0, 6))
+
+        ctk.CTkLabel(modal, text="Search Keywords Line 3 (Retry 3 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        kw3_entry = ctk.CTkEntry(modal, placeholder_text="Alternative query (Attempt 3 if 2 fails)", width=460)
+        kw3_entry.insert(0, target_task.keywords_3)
+        kw3_entry.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Video Title (Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        title_entry = ctk.CTkEntry(modal, placeholder_text="Exact or partial video title", width=440)
+        title_entry = ctk.CTkEntry(modal, placeholder_text="Exact or partial video title", width=460)
         title_entry.insert(0, target_task.title)
         title_entry.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Watch Duration:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        duration_option = ctk.CTkOptionMenu(modal, values=WATCHTIME_OPTIONS, width=440)
+        duration_option = ctk.CTkOptionMenu(modal, values=WATCHTIME_OPTIONS, width=460)
         duration_option.set(target_task.watchtime_duration or self._default_watch_duration())
         duration_option.pack(padx=20, pady=(0, 10))
 
         ctk.CTkLabel(modal, text="Channel:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        channel_option = ctk.CTkOptionMenu(modal, values=self._channel_values(), width=440)
+        channel_option = ctk.CTkOptionMenu(modal, values=self._channel_values(), width=460)
         channel_option.set(target_task.channel if target_task.channel in self._channel_values() else NO_CHANNEL_VALUE)
         channel_option.pack(padx=20, pady=(0, 6))
 
@@ -244,19 +269,24 @@ class QueueView(ctk.CTkFrame):
         ).pack(anchor="w", padx=20, pady=(0, 10))
 
         def on_submit():
-            url = url_entry.get().strip()
-            keywords = keywords_entry.get().strip()
+            url = clean_youtube_url(url_entry.get().strip())
+            kw1 = kw1_entry.get().strip()
+            kw2 = kw2_entry.get().strip()
+            kw3 = kw3_entry.get().strip()
             title = title_entry.get().strip()
-            if not url and not keywords and not title:
-                messagebox.showerror("Error", "Please provide at least a URL or Search Keywords!")
+            if not url and not kw1 and not kw2 and not kw3 and not title:
+                messagebox.showerror("Error", "Please provide at least a URL or Search Keywords!", parent=modal)
                 return
 
             updated_task = VideoTask(
                 url=url,
-                keywords=keywords,
+                keywords=kw1,
+                keywords_2=kw2,
+                keywords_3=kw3,
                 title=title,
                 watchtime_duration=duration_option.get(),
                 channel="" if channel_option.get() == NO_CHANNEL_VALUE else channel_option.get(),
+                enabled=target_task.enabled,
             )
 
             if is_editing:
@@ -325,9 +355,38 @@ class QueueView(ctk.CTkFrame):
 
         header = ctk.CTkFrame(container, corner_radius=6, fg_color=("gray88", "gray22"))
         header.grid(row=0, column=0, sticky="ew")
-        header.grid_columnconfigure(0, weight=1)
+        header.grid_columnconfigure(1, weight=1)
 
-        title = f"📺 {group.name}  •  {group.count} video(s)"
+        col_offset = 0
+        if not group.is_uncategorized:
+            def _toggle_channel():
+                new_state = bool(ch_chk.get())
+                group.channel.enabled = new_state
+                channels = self._channels()
+                for ch in channels:
+                    if ch.name.lower() == group.channel.name.lower():
+                        ch.enabled = new_state
+                self.app_controller.config_mgr.set_channels([c.to_dict() for c in channels])
+                self.refresh_list()
+
+            ch_chk = ctk.CTkCheckBox(
+                header,
+                text="",
+                width=24,
+                command=_toggle_channel,
+            )
+            if group.channel.enabled:
+                ch_chk.select()
+            else:
+                ch_chk.deselect()
+            ch_chk.grid(row=0, column=0, rowspan=2, padx=(10, 2), pady=6, sticky="w")
+            col_offset = 1
+
+        title = f"📺 {group.name}"
+        if not group.is_uncategorized and not group.channel.enabled:
+            title += " [DISABLED]"
+        title += f"  •  {group.count} video(s)"
+
         totals_line = self._group_totals_line(group)
         if totals_line:
             title += f"  •  {totals_line}"
@@ -337,7 +396,8 @@ class QueueView(ctk.CTkFrame):
             font=ctk.CTkFont(size=14, weight="bold"),
             justify="left",
             anchor="w",
-        ).grid(row=0, column=0, padx=12, pady=(6, 0), sticky="ew")
+            text_color=("gray50", "gray50") if (not group.is_uncategorized and not group.channel.enabled) else None,
+        ).grid(row=0, column=col_offset, padx=12, pady=(6, 0), sticky="ew")
 
         if group.url:
             ctk.CTkLabel(
@@ -347,10 +407,10 @@ class QueueView(ctk.CTkFrame):
                 text_color=("gray30", "gray70"),
                 justify="left",
                 anchor="w",
-            ).grid(row=1, column=0, padx=12, pady=(0, 6), sticky="ew")
+            ).grid(row=1, column=col_offset, padx=12, pady=(0, 6), sticky="ew")
 
         header_btns = ctk.CTkFrame(header, fg_color="transparent")
-        header_btns.grid(row=0, column=1, rowspan=2, padx=8, pady=6, sticky="e")
+        header_btns.grid(row=0, column=col_offset + 1, rowspan=2, padx=8, pady=6, sticky="e")
 
         if group.url:
             ctk.CTkButton(
@@ -381,26 +441,58 @@ class QueueView(ctk.CTkFrame):
             return
 
         for row, (index, task) in enumerate(group.videos, start=1):
-            card = self._build_task_card(container, row, task, index)
+            card = self._build_task_card(container, row, task, index, channel_enabled=group.channel.enabled if not group.is_uncategorized else True)
             card.grid(row=row, column=0, sticky="ew", pady=(0, 5))
 
-    def _build_task_card(self, parent, position: int, task: VideoTask, index: int):
+    def _build_task_card(self, parent, position: int, task: VideoTask, index: int, channel_enabled: bool = True):
         """Build a single video card; ``index`` is the task's real queue index."""
         card = ctk.CTkFrame(parent, corner_radius=6)
-        card.grid_columnconfigure(0, weight=1)
-        card.grid_columnconfigure(1, weight=0)
+        card.grid_columnconfigure(0, weight=0)
+        card.grid_columnconfigure(1, weight=1)
+        card.grid_columnconfigure(2, weight=0)
+
+        def _toggle_task():
+            task.enabled = bool(task_chk.get())
+            self.save_queue()
+            self.refresh_list()
+
+        task_chk = ctk.CTkCheckBox(
+            card,
+            text="",
+            width=24,
+            command=_toggle_task,
+        )
+        if task.enabled:
+            task_chk.select()
+        else:
+            task_chk.deselect()
+        task_chk.grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=10, sticky="w")
 
         t_text = task.title or task.keywords or task.url
         if len(t_text) > 55:
             t_text = t_text[:52] + "..."
 
-        kw_text = task.keywords or "N/A"
-        if len(kw_text) > 35:
-            kw_text = kw_text[:32] + "..."
+        kws = [k for k in [task.keywords, task.keywords_2, task.keywords_3] if k]
+        kw_text = " | ".join(kws) if kws else "N/A"
+        if len(kw_text) > 40:
+            kw_text = kw_text[:37] + "..."
 
-        info_text = f"#{position}. {t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration}"
-        lbl = ctk.CTkLabel(card, text=info_text, justify="left", font=ctk.CTkFont(size=13), anchor="w")
-        lbl.grid(row=0, column=0, padx=15, pady=(10, 0), sticky="ew")
+        status_prefix = ""
+        if not task.enabled:
+            status_prefix = "[DISABLED] "
+        elif not channel_enabled:
+            status_prefix = "[CHANNEL DISABLED] "
+
+        info_text = f"#{position}. {status_prefix}{t_text}\nKeywords: {kw_text} | Watchtime: {task.watchtime_duration}"
+        lbl = ctk.CTkLabel(
+            card,
+            text=info_text,
+            justify="left",
+            font=ctk.CTkFont(size=13),
+            anchor="w",
+            text_color=("gray50", "gray50") if (not task.enabled or not channel_enabled) else None,
+        )
+        lbl.grid(row=0, column=1, padx=10, pady=(10, 0), sticky="ew")
 
         # Lifetime watch statistics for this video (recorded runs only).
         store = self._stats()
@@ -411,13 +503,13 @@ class QueueView(ctk.CTkFrame):
             justify="left",
             font=ctk.CTkFont(size=12),
             anchor="w",
-            text_color=("gray30", "gray70"),
+            text_color=("gray40", "gray60"),
         )
-        stats_lbl.grid(row=1, column=0, padx=15, pady=(2, 10), sticky="ew")
+        stats_lbl.grid(row=1, column=1, padx=10, pady=(2, 10), sticky="ew")
 
-        # Action Buttons Frame (Fixed to column 1 on the right edge)
+        # Action Buttons Frame (Fixed to column 2 on the right edge)
         action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        action_btn_frame.grid(row=0, column=1, rowspan=2, padx=10, pady=10, sticky="e")
+        action_btn_frame.grid(row=0, column=2, rowspan=2, padx=10, pady=10, sticky="e")
 
         ctk.CTkButton(
             action_btn_frame,

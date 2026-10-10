@@ -5,10 +5,12 @@ from typing import Any, Dict, List, Optional
 
 import customtkinter as ctk
 
+from ..automation.dispatcher import TaskDispatcher
 from ..automation.worker import AutomationWorker
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
+from ..models.channel import Channel, is_video_task_runnable
 from ..models.video_task import VideoTask
 from ..models.watch_stats import format_duration
 from ..utils.logger import emit, init_logging
@@ -180,6 +182,17 @@ class YTBotApp(ctk.CTk):
             emit(self.log_queue, "Please add at least one video task to the queue before starting!")
             return
 
+        channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
+        active_video_tasks = [t for t in self.queued_video_tasks if is_video_task_runnable(t, channels)]
+        if not active_video_tasks:
+            self.show_view("queue")
+            emit(
+                self.log_queue,
+                "No enabled video tasks to run! Check the box next to at least one video or channel.",
+                logging.WARNING,
+            )
+            return
+
         self.is_running = True
         self.stop_event.clear()
         self.worker_progress.clear()
@@ -196,17 +209,26 @@ class YTBotApp(ctk.CTk):
         self.active_threads.clear()
         parallel_limit = self.config_mgr.get_int("ParallelBrowsers", 1)
 
+        # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
+        dispatcher = TaskDispatcher(tasks=active_video_tasks, randomize=True)
+        active_workers_count = min(len(self.loaded_accounts), parallel_limit)
+        emit(
+            self.log_queue,
+            f"Dispatching {len(active_video_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
+        )
+
         # Distribute accounts across worker threads
         for worker_id, acc in enumerate(self.loaded_accounts[:parallel_limit]):
             worker = AutomationWorker(
                 account=acc,
-                video_tasks=self.queued_video_tasks,
+                video_tasks=active_video_tasks,
                 config_mgr=self.config_mgr,
                 log_queue=self.log_queue,
                 stop_event=self.stop_event,
                 event_queue=self.event_queue,
                 worker_id=worker_id,
                 stats_store=self.stats_store,
+                dispatcher=dispatcher,
             )
             thread = threading.Thread(target=worker.run, daemon=True)
             self.active_threads.append(thread)

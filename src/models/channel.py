@@ -27,21 +27,29 @@ class Channel:
 
     name: str = ""
     url: str = ""
+    enabled: bool = True
 
-    def to_dict(self) -> Dict[str, str]:
-        return {"name": self.name, "url": self.url}
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"name": self.name, "url": self.url}
+        if not self.enabled:
+            data["enabled"] = False
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> "Channel":
         if not isinstance(data, dict):
             return cls()
+        enabled_val = data.get("enabled", True)
+        if isinstance(enabled_val, str):
+            enabled_val = enabled_val.lower() in ("true", "1", "yes")
         return cls(
             name=str(data.get("name") or "").strip(),
             url=normalize_channel_url(str(data.get("url") or "")),
+            enabled=bool(enabled_val),
         )
 
     @classmethod
-    def parse(cls, name: str, url: str, existing: Sequence["Channel"] = ()) -> "Channel":
+    def parse(cls, name: str, url: str, existing: Sequence["Channel"] = (), enabled: bool = True) -> "Channel":
         """Build a validated channel. Raises ValueError with a user-facing message."""
         clean_name = (name or "").strip()
         if not clean_name:
@@ -49,7 +57,21 @@ class Channel:
         for channel in existing:
             if channel.name.lower() == clean_name.lower():
                 raise ValueError(f"A channel named '{channel.name}' already exists.")
-        return cls(name=clean_name, url=normalize_channel_url(url))
+        return cls(name=clean_name, url=normalize_channel_url(url), enabled=enabled)
+
+
+def is_video_task_runnable(task: VideoTask, channels: Sequence[Channel]) -> bool:
+    """Determine whether a video task is enabled and runnable for automation.
+    A task runs only if task.enabled is True AND (if assigned to a channel)
+    the corresponding channel is also enabled.
+    """
+    if not task.enabled:
+        return False
+    if task.channel:
+        for ch in channels:
+            if ch.name.lower() == task.channel.lower():
+                return ch.enabled
+    return True
 
 
 @dataclass

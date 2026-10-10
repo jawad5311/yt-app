@@ -22,7 +22,7 @@ def extract_video_id(url: Optional[str]) -> Optional[str]:
     if not url:
         return None
     patterns = [
-        r"(?:v=|\/vi\/|youtu\.be\/|\/v\/|\/embed\/|\/shorts\/)([A-Za-z0-9_\-]{11})",
+        r"(?:v=|\/vi\/|youtu\.be\/|\/v\/|\/embed\/|\/shorts\/|\/live\/)([A-Za-z0-9_\-]{11})",
         r"^([A-Za-z0-9_\-]{11})$",
     ]
     for pattern in patterns:
@@ -30,6 +30,20 @@ def extract_video_id(url: Optional[str]) -> Optional[str]:
         if match:
             return match.group(1)
     return None
+
+
+def clean_youtube_url(url: Optional[str]) -> str:
+    """Clean a YouTube video URL by stripping timestamps, playlists, and tracking parameters.
+
+    Returns canonical https://www.youtube.com/watch?v={video_id} if a video ID is detected.
+    """
+    if not url:
+        return ""
+    cleaned = url.strip()
+    vid = extract_video_id(cleaned)
+    if vid:
+        return f"https://www.youtube.com/watch?v={vid}"
+    return cleaned
 
 
 def sanitize_text(text: str) -> str:

@@ -121,7 +121,9 @@ class ChannelsView(ctk.CTkFrame):
         def on_submit() -> None:
             candidates = [ch for i, ch in enumerate(self.channels) if not is_editing or i != index]
             try:
-                channel = Channel.parse(name_entry.get(), url_entry.get(), existing=candidates)
+                channel = Channel.parse(
+                    name_entry.get(), url_entry.get(), existing=candidates, enabled=target.enabled
+                )
             except ValueError as exc:
                 messagebox.showerror("Error", str(exc), parent=modal)
                 return
@@ -216,11 +218,33 @@ class ChannelsView(ctk.CTkFrame):
         for idx, channel in enumerate(self.channels):
             row = ctk.CTkFrame(self.scroll_frame, corner_radius=6)
             row.pack(fill="x", padx=5, pady=4)
-            row.grid_columnconfigure(0, weight=1)
+            row.grid_columnconfigure(0, weight=0)
+            row.grid_columnconfigure(1, weight=1)
+            row.grid_columnconfigure(2, weight=0)
+
+            def _toggle_channel(ch=channel):
+                ch.enabled = bool(chk.get())
+                self.save_channels()
+                queue = self._queue_view()
+                if queue is not None:
+                    queue.refresh_list()
+
+            chk = ctk.CTkCheckBox(
+                row,
+                text="",
+                width=24,
+                command=_toggle_channel,
+            )
+            if channel.enabled:
+                chk.select()
+            else:
+                chk.deselect()
+            chk.grid(row=0, column=0, padx=(12, 4), pady=8, sticky="w")
 
             count = self.video_count(channel.name)
             subtitle = channel.url or "No URL"
-            info_text = f"{idx + 1}. {channel.name}\n{subtitle}  |  {count} video(s)"
+            status_tag = "" if channel.enabled else " [DISABLED]"
+            info_text = f"{idx + 1}. {channel.name}{status_tag}\n{subtitle}  |  {count} video(s)"
             stats_line = self.channel_stats_line(channel.name)
             if stats_line:
                 info_text += f"\n{stats_line}"
@@ -230,10 +254,11 @@ class ChannelsView(ctk.CTkFrame):
                 font=ctk.CTkFont(size=13),
                 justify="left",
                 anchor="w",
-            ).grid(row=0, column=0, padx=15, pady=8, sticky="ew")
+                text_color=("gray50", "gray50") if not channel.enabled else None,
+            ).grid(row=0, column=1, padx=10, pady=8, sticky="ew")
 
             action_frame = ctk.CTkFrame(row, fg_color="transparent")
-            action_frame.grid(row=0, column=1, padx=10, pady=8, sticky="e")
+            action_frame.grid(row=0, column=2, padx=10, pady=8, sticky="e")
 
             if channel.url:
                 ctk.CTkButton(
