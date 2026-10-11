@@ -18,6 +18,14 @@ def test_creates_default_file_when_missing(tmp_path):
     assert mgr.get_int("ParallelBrowsers", 1) == 1
     assert mgr.get_setting("WatchtimeDuration") == "5 Minutes"
     assert mgr.get_bool("DirectLinkFallback", True) is True
+    assert mgr.get_int("AutomationLoops", 1) == 1
+
+
+def test_automation_loops_roundtrip(tmp_path):
+    mgr = make_manager(tmp_path)
+    mgr.set_setting("AutomationLoops", "3")
+    reloaded = ConfigManager(config_file=mgr.config_file)
+    assert reloaded.get_int("AutomationLoops", 1) == 3
 
 
 def test_defaults_do_not_contain_retired_keys(tmp_path):

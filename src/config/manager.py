@@ -33,6 +33,7 @@ class ConfigManager:
             "SkipAds": True,
             "MaxAdWatchSeconds": 32,
             "AutoplayEndBufferSeconds": 10,
+            "AutomationLoops": 1,
         },
         "accounts": [],
         "videos": [],

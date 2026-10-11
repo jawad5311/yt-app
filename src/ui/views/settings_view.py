@@ -101,6 +101,16 @@ class SettingsView(ctk.CTkFrame):
         self.stop_buffer_entry.insert(0, str(self.config_mgr.get_int("AutoplayEndBufferSeconds", 10)))
         self.stop_buffer_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
+        # Default Automation Loops (Recurring Runs)
+        ctk.CTkLabel(
+            container,
+            text="Default Automation Loops (how many times to loop all tasks):",
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(5, 2))
+        self.loop_entry = ctk.CTkEntry(container, width=100)
+        self.loop_entry.insert(0, str(self.config_mgr.get_int("AutomationLoops", 1)))
+        self.loop_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
         # Appearance Mode
         ctk.CTkLabel(container, text="Appearance Mode:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
@@ -156,6 +166,14 @@ class SettingsView(ctk.CTkFrame):
             self.config_mgr.set_setting("AutoplayEndBufferSeconds", str(buffer_val))
         except ValueError:
             messagebox.showerror("Error", "Stop buffer must be a valid integer (seconds).")
+            return
+
+        try:
+            loop_val = int(self.loop_entry.get().strip())
+            loop_val = max(1, min(1000, loop_val))
+            self.config_mgr.set_setting("AutomationLoops", str(loop_val))
+        except ValueError:
+            messagebox.showerror("Error", "Automation Loops must be a valid positive integer.")
             return
 
         self.config_mgr.set_setting("WatchtimeDuration", self.duration_menu.get())

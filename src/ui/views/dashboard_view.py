@@ -32,6 +32,30 @@ class DashboardView(ctk.CTkFrame):
         self.action_frame.grid(row=2, column=0, columnspan=4, padx=20, pady=20, sticky="nsew")
         self.action_frame.grid_columnconfigure(0, weight=1)
 
+        # Loop / Recurring Runs Control
+        self.loop_frame = ctk.CTkFrame(self.action_frame, fg_color="transparent")
+        self.loop_frame.pack(padx=30, pady=(25, 10), fill="x")
+
+        self.loop_label = ctk.CTkLabel(
+            self.loop_frame,
+            text="Run Automation times:",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        self.loop_label.pack(side="left", padx=(0, 10))
+
+        initial_loops = self.app_controller.config_mgr.get_int("AutomationLoops", 1)
+        self.loop_entry = ctk.CTkEntry(self.loop_frame, width=90, font=ctk.CTkFont(size=13))
+        self.loop_entry.insert(0, str(max(1, initial_loops)))
+        self.loop_entry.pack(side="left")
+
+        self.loop_hint = ctk.CTkLabel(
+            self.loop_frame,
+            text="(e.g. 2 = run all queue tasks 2 times sequentially)",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+        )
+        self.loop_hint.pack(side="left", padx=(12, 0))
+
         self.start_btn = ctk.CTkButton(
             self.action_frame,
             text="▶ Start Automation",
@@ -41,7 +65,7 @@ class DashboardView(ctk.CTkFrame):
             height=45,
             command=self.app_controller.start_automation,
         )
-        self.start_btn.pack(padx=30, pady=(40, 10), fill="x")
+        self.start_btn.pack(padx=30, pady=(10, 10), fill="x")
 
         self.stop_btn = ctk.CTkButton(
             self.action_frame,
@@ -101,12 +125,22 @@ class DashboardView(ctk.CTkFrame):
         color = STATUS_ERROR_COLOR if level == "error" else STATUS_INFO_COLOR
         self.progress_label.configure(text=message, text_color=color)
 
+    def get_loop_count(self) -> int:
+        """Read and validate the configured number of automation loops."""
+        try:
+            val = int(self.loop_entry.get().strip())
+            return max(1, val)
+        except (ValueError, AttributeError):
+            return 1
+
     def set_running_state(self, is_running: bool):
         if is_running:
             self.start_btn.configure(state="disabled")
             self.stop_btn.configure(state="normal")
+            self.loop_entry.configure(state="disabled")
             self.card_status.configure(text="Running", text_color="#2FA572")
         else:
             self.start_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
+            self.loop_entry.configure(state="normal")
             self.card_status.configure(text="Idle", text_color="white")

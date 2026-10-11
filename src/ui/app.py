@@ -194,6 +194,12 @@ class YTBotApp(ctk.CTk):
             )
             return
 
+        # Read loop count from dashboard entry and persist
+        total_loops = 1
+        if "dashboard" in self.views and hasattr(self.views["dashboard"], "get_loop_count"):
+            total_loops = self.views["dashboard"].get_loop_count()
+        self.config_mgr.set_setting("AutomationLoops", str(total_loops))
+
         self.is_running = True
         self.stop_event.clear()
         self.worker_progress.clear()
@@ -204,57 +210,83 @@ class YTBotApp(ctk.CTk):
                 break
         self.views["dashboard"].set_running_state(True)
         self.views["dashboard"].reset_progress()
-        emit(self.log_queue, "=== Starting YouTube Automation Session ===")
 
-        # Spawn worker thread(s)
-        self.active_threads.clear()
+        # Run the full automation session across the requested number of loops in a background manager thread
+        threading.Thread(
+            target=self._run_automation_session,
+            args=(active_video_tasks, total_loops),
+            daemon=True,
+        ).start()
+
+    def _run_automation_session(self, active_video_tasks: List[VideoTask], total_loops: int):
+        """Execute the automation session across the requested number of loops."""
         parallel_limit = self.config_mgr.get_int("ParallelBrowsers", 1)
 
-        # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
-        dispatcher = TaskDispatcher(tasks=active_video_tasks, randomize=True)
-        active_workers_count = min(len(self.loaded_accounts), parallel_limit)
-        emit(
-            self.log_queue,
-            f"Dispatching {len(active_video_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
-        )
+        for current_loop in range(1, total_loops + 1):
+            if self.stop_event.is_set():
+                break
 
-        # Distribute accounts across worker threads
-        for worker_id, acc in enumerate(self.loaded_accounts[:parallel_limit]):
-            worker = AutomationWorker(
-                account=acc,
-                video_tasks=active_video_tasks,
-                config_mgr=self.config_mgr,
-                log_queue=self.log_queue,
-                stop_event=self.stop_event,
-                event_queue=self.event_queue,
-                worker_id=worker_id,
-                stats_store=self.stats_store,
-                dispatcher=dispatcher,
+            loop_header = (
+                f"=== Starting YouTube Automation Session (Loop {current_loop}/{total_loops}) ==="
+                if total_loops > 1
+                else "=== Starting YouTube Automation Session ==="
             )
-            thread = threading.Thread(target=worker.run, daemon=True)
-            self.active_threads.append(thread)
-            thread.start()
+            emit(self.log_queue, loop_header)
 
-        # Monitor thread completion
-        threading.Thread(target=self._monitor_execution_finish, daemon=True).start()
+            self.worker_progress.clear()
+            self.active_threads.clear()
+
+            # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
+            dispatcher = TaskDispatcher(tasks=active_video_tasks, randomize=True)
+            active_workers_count = min(len(self.loaded_accounts), parallel_limit)
+            emit(
+                self.log_queue,
+                f"Dispatching {len(active_video_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
+            )
+
+            # Distribute accounts across worker threads
+            for worker_id, acc in enumerate(self.loaded_accounts[:parallel_limit]):
+                worker = AutomationWorker(
+                    account=acc,
+                    video_tasks=active_video_tasks,
+                    config_mgr=self.config_mgr,
+                    log_queue=self.log_queue,
+                    stop_event=self.stop_event,
+                    event_queue=self.event_queue,
+                    worker_id=worker_id,
+                    stats_store=self.stats_store,
+                    dispatcher=dispatcher,
+                )
+                thread = threading.Thread(target=worker.run, daemon=True)
+                self.active_threads.append(thread)
+                thread.start()
+
+            # Wait for all workers in this loop iteration to finish
+            for t in self.active_threads:
+                t.join()
+
+            if self.stop_event.is_set():
+                emit(self.log_queue, "Automation stopped by user.")
+                break
+
+            if current_loop < total_loops:
+                emit(
+                    self.log_queue,
+                    f"Completed automation loop {current_loop}/{total_loops}. Restarting queue for loop {current_loop + 1}/{total_loops}...",
+                )
+
+        self.is_running = False
+        try:
+            self.event_queue.put_nowait(("finished",))
+        except queue.Full:
+            pass
+        emit(self.log_queue, "=== Automation Session Completed ===")
 
     def stop_automation(self):
         if not self.is_running:
             return
         emit(self.log_queue, "Stopping automation session... Please wait for workers to cleanup.")
         self.stop_event.set()
-
-    def _monitor_execution_finish(self):
-        for t in self.active_threads:
-            t.join()
-
-        self.is_running = False
-        # Cross-thread UI updates must go through the event queue, not tk directly.
-        try:
-            self.event_queue.put_nowait(("finished",))
-        except queue.Full:
-            pass
-        emit(self.log_queue, "=== Automation Session Completed ===")
 
     def _handle_worker_event(self, event) -> None:
         """Apply a structured worker event to the dashboard (main thread only)."""
