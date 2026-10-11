@@ -1,5 +1,8 @@
 import logging
+import os
 import queue
+import time
+from pathlib import Path
 from typing import Any, Optional
 
 from selenium.webdriver.common.by import By
@@ -10,6 +13,51 @@ from selenium.webdriver.support.ui import WebDriverWait
 from ..models.video_task import VideoTask
 from ..utils.helpers import extract_video_id, human_like_delay, slow_type
 from ..utils.logger import emit
+
+
+def dismiss_youtube_dialogs(driver: Any, log_queue: Optional[queue.Queue] = None) -> None:
+    """Dismiss YouTube consent, sign-in promo, or 'Still watching?' / modal dialogs."""
+    try:
+        # 1. Cookie / consent buttons
+        consent_buttons = driver.find_elements(
+            By.XPATH,
+            "//button[contains(., 'Accept all') or contains(., 'I agree') or contains(., 'Accept the use') or contains(., 'Reject all')]",
+        )
+        for btn in consent_buttons:
+            if btn.is_displayed():
+                btn.click()
+                emit(log_queue, "Dismissed YouTube consent banner.")
+                break
+    except Exception:
+        pass
+
+    try:
+        # 2. 'No thanks' / 'Dismiss' promos (e.g. YouTube Premium promo, sign-in promo)
+        dismiss_buttons = driver.find_elements(
+            By.XPATH,
+            "//ytd-button-renderer[contains(@id, 'dismiss-button')]//button | //button[normalize-space()='No thanks' or normalize-space()='Not now' or normalize-space()='Dismiss']",
+        )
+        for btn in dismiss_buttons:
+            if btn.is_displayed():
+                btn.click()
+                emit(log_queue, "Dismissed YouTube promotional dialog.")
+                break
+    except Exception:
+        pass
+
+    try:
+        # 3. 'Still watching? / Video paused' prompt
+        confirm_buttons = driver.find_elements(
+            By.XPATH,
+            "//yt-confirm-dialog-renderer//button[contains(., 'Yes') or contains(., 'Continue')]",
+        )
+        for btn in confirm_buttons:
+            if btn.is_displayed():
+                btn.click()
+                emit(log_queue, "Dismissed 'Still watching?' prompt.")
+                break
+    except Exception:
+        pass
 
 
 def safe_get(driver: Any, url: str, timeout: int = 45, log_queue: Optional[queue.Queue] = None) -> None:
@@ -68,15 +116,8 @@ def navigate_to_video_organically(
             safe_get(driver, "https://www.youtube.com", timeout=45, log_queue=log_queue)
             human_like_delay(2.0, 3.5)
 
-            # Accept cookies dialog if shown
-            try:
-                reject_or_accept = driver.find_elements(By.XPATH, "//button[contains(., 'Accept') or contains(., 'I agree')]")
-                if reject_or_accept:
-                    reject_or_accept[0].click()
-                    emit(log_queue, "[Step 2/6] Accepted cookie/consent banner.")
-                    human_like_delay(1.0, 1.5)
-            except Exception:
-                pass
+            # Dismiss any consent dialogs or overlays
+            dismiss_youtube_dialogs(driver, log_queue=log_queue)
 
             # 3. Simulated Human Typing
             emit(log_queue, "[Step 3/6] Locating search input box...")
@@ -88,36 +129,57 @@ def navigate_to_video_organically(
                     )
                 )
             )
-            search_box.click()
-            search_box.clear()
+            try:
+                search_box.click()
+            except Exception:
+                driver.execute_script("arguments[0].focus();", search_box)
+
+            # Clear search box reliably across browsers
+            try:
+                search_box.clear()
+            except Exception:
+                pass
+            try:
+                search_box.send_keys(Keys.CONTROL + "a")
+                search_box.send_keys(Keys.BACKSPACE)
+            except Exception:
+                pass
+
             emit(log_queue, f"[Step 3/6] Typing search query '{search_query}' character-by-character with human micro-delays...")
             slow_type(search_box, search_query)
             human_like_delay(0.5, 1.0)
 
             emit(log_queue, "[Step 3/6] Submitting search query via ENTER key...")
             search_box.send_keys(Keys.ENTER)
-            human_like_delay(3.0, 4.0)
+            human_like_delay(2.5, 3.5)
 
-            # Verify if submission navigated or if search button click is required
-            try:
-                if "results" not in str(getattr(driver, "current_url", "") or ""):
-                    search_btns = driver.find_elements(
-                        By.XPATH,
-                        "//button[@id='search-icon-legacy' or @aria-label='Search' or contains(@class, 'yt-searchbox-button')]",
-                    )
-                    if search_btns:
+            # Check if ENTER triggered navigation; if not, click the search button
+            current_url = str(getattr(driver, "current_url", "") or "")
+            if "results" not in current_url:
+                search_btns = driver.find_elements(
+                    By.XPATH,
+                    "//button[@id='search-icon-legacy' or @aria-label='Search' or contains(@class, 'yt-searchbox-button')] | //button[contains(@class, 'search-icon')]",
+                )
+                if search_btns:
+                    try:
                         search_btns[0].click()
-                        human_like_delay(2.0, 3.0)
-            except Exception:
-                pass
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", search_btns[0])
+                    human_like_delay(2.5, 3.5)
+
+            # Dismiss any popup/dialog that might have appeared after searching
+            dismiss_youtube_dialogs(driver, log_queue=log_queue)
 
             # 4. Search Result Matching
-            # Increased timeout to 35 seconds to prevent premature failure
             emit(log_queue, "[Step 4/6] Waiting for video search results to load...")
+            results_selector = (
+                "ytd-video-renderer a#video-title, "
+                "ytd-video-renderer a#video-title-link, "
+                "ytd-item-section-renderer a#video-title, "
+                "a#video-title"
+            )
             results = WebDriverWait(driver, 35).until(
-                EC.presence_of_all_elements_located(
-                    (By.CSS_SELECTOR, "ytd-video-renderer a#video-title, ytd-video-renderer a#video-title-link, a#video-title")
-                )
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, results_selector))
             )
 
             emit(log_queue, f"[Step 4/6] Found {len(results)} search results. Scanning top results for matching Video URL/ID...")
@@ -127,31 +189,32 @@ def navigate_to_video_organically(
             # Pass 1: Match by Video URL / Video ID ONLY (do not match titles yet)
             if target_video_id:
                 for idx, link in enumerate(results[:25]):
-                    href = link.get_attribute("href") or ""
-                    if target_video_id in href:
-                        selected_link = link
-                        emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID/URL ('{target_video_id}')!")
-                        break
+                    try:
+                        href = link.get_attribute("href") or ""
+                        if target_video_id in href:
+                            selected_link = link
+                            emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID/URL ('{target_video_id}')!")
+                            break
+                    except Exception:
+                        continue
 
             # Pass 2: If not found using URL, increase timeout/wait and check by Titles
             candidate_titles = task.get_title_queries()
             if not selected_link and candidate_titles:
                 emit(
                     log_queue,
-                    "[Step 4/6] Video not found by URL in initial scan. Increasing timeout and checking for Title match...",
+                    "[Step 4/6] Video not found by URL in initial scan. Scrolling down and checking for match...",
                     logging.INFO,
                 )
                 try:
                     driver.execute_script("window.scrollBy(0, 600);")
                 except Exception:
                     pass
-                human_like_delay(2.5, 3.5)
+                human_like_delay(2.0, 3.0)
 
                 try:
                     more_results = WebDriverWait(driver, 15).until(
-                        EC.presence_of_all_elements_located(
-                            (By.CSS_SELECTOR, "ytd-video-renderer a#video-title, ytd-video-renderer a#video-title-link, a#video-title")
-                        )
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, results_selector))
                     )
                     results = more_results
                 except Exception:
@@ -160,11 +223,14 @@ def navigate_to_video_organically(
                 # Check if video ID appeared after scrolling
                 if target_video_id:
                     for idx, link in enumerate(results[:35]):
-                        href = link.get_attribute("href") or ""
-                        if target_video_id in href:
-                            selected_link = link
-                            emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID/URL ('{target_video_id}') after scroll!")
-                            break
+                        try:
+                            href = link.get_attribute("href") or ""
+                            if target_video_id in href:
+                                selected_link = link
+                                emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID/URL ('{target_video_id}') after scroll!")
+                                break
+                        except Exception:
+                            continue
 
                 # If still not found by URL, check by any of the candidate titles
                 if not selected_link:
@@ -173,22 +239,31 @@ def navigate_to_video_organically(
                         if not target_title_lower:
                             continue
                         for idx, link in enumerate(results[:35]):
-                            title_text = (link.get_attribute("title") or link.text or "").strip().lower()
-                            if target_title_lower in title_text or title_text in target_title_lower:
-                                selected_link = link
-                                emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Title ('{cand_title}')!")
-                                break
+                            try:
+                                title_text = (link.get_attribute("title") or link.text or "").strip().lower()
+                                if target_title_lower in title_text or title_text in target_title_lower:
+                                    selected_link = link
+                                    emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Title ('{cand_title}')!")
+                                    break
+                            except Exception:
+                                continue
                         if selected_link:
                             break
 
             if selected_link:
                 # 5. Smooth Scroll & Organic Click
                 emit(log_queue, "[Step 5/6] Smooth scrolling target video into view...")
-                driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", selected_link)
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", selected_link)
+                except Exception:
+                    pass
                 human_like_delay(1.5, 2.5)
 
                 emit(log_queue, "[Step 5/6] Clicking target video link organically...")
-                selected_link.click()
+                try:
+                    selected_link.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", selected_link)
                 human_like_delay(3.0, 5.0)
                 organic_success = True
                 emit(log_queue, "[Step 5/6] Successfully opened video from YouTube organic search results!")
@@ -197,7 +272,10 @@ def navigate_to_video_organically(
                 emit(log_queue, "[Step 4/6] Target video not found in search results by URL or Title.", logging.WARNING)
 
         except Exception as exc:
-            emit(log_queue, f"Organic search attempt failed: {exc}", logging.WARNING)
+            err_msg = f"{type(exc).__name__}: {exc}".strip()
+            if err_msg.endswith(":"):
+                err_msg = type(exc).__name__
+            emit(log_queue, f"Organic search attempt failed: {err_msg}", logging.WARNING)
 
     # 6. Direct Link Fallback
     if not organic_success:
