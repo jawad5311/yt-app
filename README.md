@@ -48,19 +48,49 @@ G:\Projects\yt-tool\
 
 ## Setup & Running
 
-### 1. Install Dependencies
+### 1. Python Version & Virtual Environment
 
-Use Python 3.11+:
+> [!IMPORTANT]
+> **Recommended Python Version: Python 3.11 or 3.12**
+> The project and its automated test pipeline (CI) are verified against Python 3.11 and 3.12. Using newer Python versions (e.g. 3.15+) can cause dependency conflicts (such as PyInstaller reporting `Requires-Python <3.15` / `No matching distribution found`).
 
-```powershell
-python -m pip install -r requirements.txt
-```
+1. Check your installed Python versions:
+   ```powershell
+   py --list
+   ```
+
+2. If Python 3.11 or 3.12 is not installed, install it using Windows Package Manager (`winget`):
+   ```powershell
+   winget install Python.Python.3.11
+   ```
+   *(Restart your PowerShell terminal after installation)*
+
+3. Create and activate a dedicated virtual environment:
+   ```powershell
+   py -3.11 -m venv venv
+   # or: py -3.12 -m venv venv
+   .\venv\Scripts\Activate.ps1
+   ```
+
+4. Install dependencies:
+   ```powershell
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements.txt
+   ```
+
+> [!TIP]
+> **Troubleshooting `pyinstaller` version errors:**
+> If you see `ERROR: Could not find a version that satisfies the requirement pyinstaller==...` or `Requires-Python <3.15`, your active environment is running a newer Python version that the pinned package does not support. Either recreate your virtual environment with Python 3.11/3.12 as shown above, or relax the requirement in `requirements.txt` to `pyinstaller>=6.21.0`.
 
 ### 2. Launch Application
 
-```powershell
-python main.py
-```
+- **One-click silent launch (no terminal window):**
+  Double-click `run.bat` in the project root. It uses `pythonw.exe` from your virtual environment to launch the UI directly without keeping a command prompt open.
+
+- **Or launch manually from terminal:**
+  ```powershell
+  python main.py
+  ```
 
 ### 3. Run Browser Diagnostics
 
