@@ -1,8 +1,5 @@
 import logging
-import os
 import queue
-import time
-from pathlib import Path
 from typing import Any, Optional
 
 from selenium.webdriver.common.by import By
