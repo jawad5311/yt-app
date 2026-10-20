@@ -192,6 +192,7 @@ def setup_driver(
     cleanup_profile_locks(profile_dir)
 
     emit(log_queue, f"Initializing Chrome driver for account: {account.email}")
+    emit(log_queue, f"Using persistent Chrome profile: {profile_dir}")
 
     options = uc.ChromeOptions()
     options.page_load_strategy = "eager"

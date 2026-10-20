@@ -590,14 +590,32 @@ class QueueView(ctk.CTkFrame):
             command=lambda i=index: self.remove_task(i),
         ).pack(side="left")
 
-        # Green progress bar: shows how much runs remain until limit is full (e.g. 50% filled if half remains)
+        # Progress bar with dynamic color transition:
+        # Interpolates from light yellow to light green for 0 to (limit - 1),
+        # and turns dark green when the final target limit is reached.
         if task.max_runs > 0:
             ratio = min(1.0, max(0.0, current_runs / task.max_runs))
+            if current_runs >= task.max_runs:
+                # Target limit reached: Dark Green
+                p_color = ("#1B5E20", "#2E7D32")
+            else:
+                # Interpolate from light yellow to light green from 0 up to (limit - 1)
+                sub_ratio = min(1.0, max(0.0, current_runs / max(1, task.max_runs - 1)))
+                # Light mode: #FFF176 (255, 241, 118) -> #81C784 (129, 199, 132)
+                r_light = int(255 + (129 - 255) * sub_ratio)
+                g_light = int(241 + (199 - 241) * sub_ratio)
+                b_light = int(118 + (132 - 118) * sub_ratio)
+                # Dark mode: #FBC02D (251, 192, 45) -> #66BB6A (102, 187, 106)
+                r_dark = int(251 + (102 - 251) * sub_ratio)
+                g_dark = int(192 + (187 - 192) * sub_ratio)
+                b_dark = int(45 + (106 - 45) * sub_ratio)
+                p_color = (f"#{r_light:02X}{g_light:02X}{b_light:02X}", f"#{r_dark:02X}{g_dark:02X}{b_dark:02X}")
+
             bar = ctk.CTkProgressBar(
                 card,
                 height=8,
                 corner_radius=4,
-                progress_color=("#4EBA6F", "#3EA860"),
+                progress_color=p_color,
                 fg_color=("gray85", "gray26"),
             )
             bar.set(ratio)

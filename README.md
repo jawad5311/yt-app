@@ -9,6 +9,7 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 - **Organic Keyword Search & Navigation**: Opens the YouTube home page, types the target keyword character-by-character with human micro-delays, scans the top 15 results for a matching video ID or title, then smooth-scrolls and clicks the result. A direct-URL fallback runs only when no organic match is found (and can be disabled in Settings).
 - **Stealth Browser Engine**: Powered by `undetected-chromedriver` and `selenium`, with the installed Chrome major version auto-detected from the Windows registry and a separate Chrome profile preserved per account under `runtime/chrome_profiles/`.
 - **Multi-Account & Multi-Threaded Execution**: Supports loading multiple accounts (`email:password`) and running 1–10 parallel browser sessions.
+- **Persistent Account Profiles**: Each account uses its own profile directory under `runtime/chrome_profiles`, preserving cookies, sessions, and browser settings between runs.
 - **Playback-Only Automation**: Automated likes and comments are intentionally disabled.
 - **Ad Handling**: The *Skip Ads* switch (default **on**) installs uBlock Origin Lite (pinned MV3 build, SHA-256 verified) into every session so most ads never render, then clicks through anything that still plays after a randomized **30–35 s** (past the monetisation window). With the switch **off**, ads are watched up to a cumulative *Max Ad Watch* cap before an escape-skip fires.
 - **Configurable Watch Durations**: Presets from 30 Seconds up to 24 Hours, plus a *Full Video* mode (still under testing — see [FEATURES.md](FEATURES.md)).
@@ -155,6 +156,16 @@ Create or edit the file in the project folder with this structure:
 Restart the app after editing the file. Use accounts you control, and do not commit this file to Git.
 
 > Accounts left in legacy `settings.json` are migrated into `credentials.json` automatically on first load.
+
+## Persistent Chrome Sessions
+
+The first time an account runs, Google may require a normal sign-in or a manual CAPTCHA/2-Step Verification check. After that, the account’s cookies and session data are retained in its dedicated profile directory:
+
+```text
+runtime/chrome_profiles/profile_<account-name>/
+```
+
+On later runs, the app reuses that profile and normally does not need to sign in again. Google can still expire a session or request verification, so a repeat login may occasionally be necessary.
 
 ### 2. Add Video Tasks
 
