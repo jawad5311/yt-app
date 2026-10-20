@@ -38,6 +38,8 @@ class VideoTask:
     channel: str = ""
     # Whether this video task is enabled for automation.
     enabled: bool = True
+    # Maximum lifetime automation runs allowed for this video (0 = unlimited).
+    max_runs: int = 0
 
     def __post_init__(self):
         # Synchronize titles and keywords so both properties remain interchangeable
@@ -68,6 +70,7 @@ class VideoTask:
             "watchtime_duration": self.watchtime_duration,
             "channel": self.channel,
             "enabled": self.enabled,
+            "max_runs": self.max_runs,
         }
 
     @classmethod
@@ -108,6 +111,12 @@ class VideoTask:
         if isinstance(enabled_val, str):
             enabled_val = enabled_val.lower() in ("true", "1", "yes")
 
+        raw_max_runs = data.get("max_runs", 0)
+        try:
+            max_runs_val = max(0, int(raw_max_runs))
+        except (TypeError, ValueError):
+            max_runs_val = 0
+
         return cls(
             url=data.get("url", ""),
             title=raw_t1,
@@ -119,7 +128,18 @@ class VideoTask:
             watchtime_duration=data.get("watchtime_duration", DEFAULT_WATCHTIME_DURATION),
             channel=data.get("channel") or "",
             enabled=bool(enabled_val),
+            max_runs=max_runs_val,
         )
+
+    def is_run_limit_reached(self, current_runs: int) -> bool:
+        """Return True if positive max_runs limit is reached or exceeded."""
+        return self.max_runs > 0 and current_runs >= self.max_runs
+
+    def remaining_runs(self, current_runs: int) -> Optional[int]:
+        """Return remaining runs until max_runs is reached, or None if unlimited."""
+        if self.max_runs <= 0:
+            return None
+        return max(0, self.max_runs - current_runs)
 
     def get_title_queries(self) -> List[str]:
         """Return non-empty video title lines (up to 3) for search and matching attempts."""

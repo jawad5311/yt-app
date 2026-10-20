@@ -251,13 +251,31 @@ def format_duration(seconds: float) -> str:
     return f"{total // 3600}h {(total % 3600) // 60:02d}m"
 
 
-def format_watch_line(record: Optional[StatRecord]) -> str:
-    """Queue-card line: ``▶ 12 runs · 4h 32m watched · last ✅``."""
-    if record is None or record.runs == 0:
+def format_watch_line(record: Optional[StatRecord], max_runs: int = 0) -> str:
+    """Queue-card line: ``▶ 12 runs · 4h 32m watched · last ✅`` or with limit progress."""
+    current_runs = record.runs if record is not None else 0
+    if max_runs > 0:
+        if current_runs >= max_runs:
+            runs_str = f"{current_runs}/{max_runs} runs (Limit reached)"
+        else:
+            remaining = max_runs - current_runs
+            rem_str = "1 remaining" if remaining == 1 else f"{remaining} remaining"
+            runs_str = f"{current_runs}/{max_runs} runs ({rem_str})"
+    else:
+        if current_runs == 0:
+            runs_str = ""
+        elif current_runs == 1:
+            runs_str = "1 run"
+        else:
+            runs_str = f"{current_runs} runs"
+
+    if current_runs == 0:
+        if max_runs > 0:
+            return f"▶ {runs_str}"
         return "▶ Not run yet"
-    runs = f"{record.runs} run" if record.runs == 1 else f"{record.runs} runs"
-    line = f"▶ {runs} · {format_duration(record.watch_seconds)} watched"
-    if record.last_result:
+
+    line = f"▶ {runs_str} · {format_duration(record.watch_seconds)} watched"
+    if record is not None and record.last_result:
         icon = RESULT_ICONS.get(record.last_result)
         if icon:
             line += f" · last {icon}"

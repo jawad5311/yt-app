@@ -1,7 +1,7 @@
 """Channel model: named YouTube channels used to group queued video tasks."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .video_task import VideoTask
 
@@ -60,13 +60,24 @@ class Channel:
         return cls(name=clean_name, url=normalize_channel_url(url), enabled=enabled)
 
 
-def is_video_task_runnable(task: VideoTask, channels: Sequence[Channel]) -> bool:
+def is_video_task_runnable(
+    task: VideoTask,
+    channels: Sequence[Channel],
+    stats_store: Optional[Any] = None,
+) -> bool:
     """Determine whether a video task is enabled and runnable for automation.
-    A task runs only if task.enabled is True AND (if assigned to a channel)
-    the corresponding channel is also enabled.
+    A task runs only if:
+    1. task.enabled is True
+    2. (if assigned to a channel) the corresponding channel is also enabled
+    3. (if max_runs > 0 and stats_store is provided) current runs have not reached max_runs.
     """
     if not task.enabled:
         return False
+    if stats_store is not None and task.max_runs > 0:
+        record = stats_store.find_for_task(task)
+        current_runs = record.runs if record is not None else 0
+        if current_runs >= task.max_runs:
+            return False
     if task.channel:
         for ch in channels:
             if ch.name.lower() == task.channel.lower():

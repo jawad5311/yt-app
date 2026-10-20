@@ -184,12 +184,12 @@ class YTBotApp(ctk.CTk):
             return
 
         channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
-        active_video_tasks = [t for t in self.queued_video_tasks if is_video_task_runnable(t, channels)]
+        active_video_tasks = [t for t in self.queued_video_tasks if is_video_task_runnable(t, channels, self.stats_store)]
         if not active_video_tasks:
             self.show_view("queue")
             emit(
                 self.log_queue,
-                "No enabled video tasks to run! Check the box next to at least one video or channel.",
+                "No runnable video tasks to run! Check that videos or channels are enabled and have not reached their run limit.",
                 logging.WARNING,
             )
             return
@@ -226,6 +226,13 @@ class YTBotApp(ctk.CTk):
             if self.stop_event.is_set():
                 break
 
+            # Filter tasks to ensure any video that reached its run limit is excluded
+            channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
+            current_tasks = [t for t in active_video_tasks if is_video_task_runnable(t, channels, self.stats_store)]
+            if not current_tasks:
+                emit(self.log_queue, "All active video tasks have reached their run limit. Ending automation session.")
+                break
+
             loop_header = (
                 f"=== Starting YouTube Automation Session (Loop {current_loop}/{total_loops}) ==="
                 if total_loops > 1
@@ -237,11 +244,11 @@ class YTBotApp(ctk.CTk):
             self.active_threads.clear()
 
             # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
-            dispatcher = TaskDispatcher(tasks=active_video_tasks, randomize=True)
+            dispatcher = TaskDispatcher(tasks=current_tasks, randomize=True, stats_store=self.stats_store)
             active_workers_count = min(len(self.loaded_accounts), parallel_limit)
             emit(
                 self.log_queue,
-                f"Dispatching {len(active_video_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
+                f"Dispatching {len(current_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
             )
 
             # Distribute accounts across worker threads

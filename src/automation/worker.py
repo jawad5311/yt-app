@@ -251,6 +251,17 @@ class AutomationWorker:
                     task = self.video_tasks[task_idx]
 
                 task_idx += 1
+                if self.stats_store is not None and task.max_runs > 0:
+                    rec = self.stats_store.find_for_task(task)
+                    if rec is not None and rec.runs >= task.max_runs:
+                        emit(
+                            self.log_queue,
+                            f"Skipping task '{task.title or task.keywords or task.url}': reached run limit of {task.max_runs}.",
+                        )
+                        if self.dispatcher is not None:
+                            self.dispatcher.release_task(task)
+                        continue
+
                 emit(self.log_queue, f"\n--- Processing Video Task {task_idx}/{total}: {task.title or task.keywords or task.url} ---")
 
                 try:

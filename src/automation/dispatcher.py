@@ -1,6 +1,6 @@
 import random
 import threading
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from ..models.video_task import VideoTask
 from ..models.watch_stats import resolve_video_key
@@ -14,9 +14,15 @@ class TaskDispatcher:
     2. At any given moment, no two browser workers process or play the same video simultaneously.
     """
 
-    def __init__(self, tasks: List[VideoTask], randomize: bool = True):
+    def __init__(
+        self,
+        tasks: List[VideoTask],
+        randomize: bool = True,
+        stats_store: Optional[Any] = None,
+    ):
         self.tasks: List[VideoTask] = list(tasks)
         self.randomize = randomize
+        self.stats_store = stats_store
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         # Video keys currently being played by active workers
@@ -59,6 +65,20 @@ class TaskDispatcher:
                 queue = self._worker_queues.get(worker_id)
                 if not queue:
                     return None
+
+                # Drop any tasks that reached their run limit
+                if self.stats_store is not None:
+                    filtered_queue = []
+                    for t in queue:
+                        if t.max_runs > 0:
+                            rec = self.stats_store.find_for_task(t)
+                            if rec is not None and rec.runs >= t.max_runs:
+                                continue
+                        filtered_queue.append(t)
+                    queue = filtered_queue
+                    self._worker_queues[worker_id] = queue
+                    if not queue:
+                        return None
 
                 # Find candidate video not currently being played
                 chosen_idx: Optional[int] = None

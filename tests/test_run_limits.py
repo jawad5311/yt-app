@@ -1,0 +1,148 @@
+"""Tests for video task run limit (max_runs), stats checking, and GUI progress bar logic."""
+
+from unittest.mock import MagicMock
+import pytest
+
+from src.automation.dispatcher import TaskDispatcher
+from src.config.stats_store import StatsStore
+from src.models.channel import Channel, is_video_task_runnable
+from src.models.video_task import VideoTask
+from src.models.watch_stats import (
+    StatRecord,
+    TaskOutcome,
+    format_watch_line,
+    resolve_video_key,
+)
+
+
+def test_video_task_max_runs_defaults_and_roundtrip():
+    # Default is 0 (unlimited)
+    t = VideoTask(title="Test Video")
+    assert t.max_runs == 0
+    assert t.to_dict()["max_runs"] == 0
+
+    # Serialization and deserialization
+    t_limit = VideoTask(title="Limit Video", max_runs=5)
+    data = t_limit.to_dict()
+    assert data["max_runs"] == 5
+    restored = VideoTask.from_dict(data)
+    assert restored.max_runs == 5
+
+    # from_dict handles strings and invalid inputs gracefully
+    assert VideoTask.from_dict({"max_runs": "10"}).max_runs == 10
+    assert VideoTask.from_dict({"max_runs": "-3"}).max_runs == 0
+    assert VideoTask.from_dict({"max_runs": "invalid"}).max_runs == 0
+    assert VideoTask.from_dict({}).max_runs == 0
+
+
+def test_video_task_run_limit_helpers():
+    t = VideoTask(title="Test", max_runs=5)
+    assert t.is_run_limit_reached(0) is False
+    assert t.is_run_limit_reached(4) is False
+    assert t.is_run_limit_reached(5) is True
+    assert t.is_run_limit_reached(6) is True
+
+    assert t.remaining_runs(0) == 5
+    assert t.remaining_runs(3) == 2
+    assert t.remaining_runs(5) == 0
+    assert t.remaining_runs(10) == 0
+
+    # Unlimited (max_runs == 0)
+    t_unlimited = VideoTask(title="Unlimited", max_runs=0)
+    assert t_unlimited.is_run_limit_reached(0) is False
+    assert t_unlimited.is_run_limit_reached(100) is False
+    assert t_unlimited.remaining_runs(50) is None
+
+
+def test_format_watch_line_with_run_limits():
+    # Not run yet without limit
+    assert format_watch_line(None, max_runs=0) == "▶ Not run yet"
+
+    # Not run yet with limit
+    assert format_watch_line(None, max_runs=5) == "▶ 0/5 runs (5 remaining)"
+
+    # Partial runs remaining
+    rec = StatRecord(runs=2, watch_seconds=125.0, last_result="success")
+    line = format_watch_line(rec, max_runs=5)
+    assert "2/5 runs (3 remaining)" in line
+    assert "2m 05s watched" in line
+    assert "last ✅" in line
+
+    # 1 run remaining singular formatting
+    rec_one_left = StatRecord(runs=4, watch_seconds=200.0)
+    assert "4/5 runs (1 remaining)" in format_watch_line(rec_one_left, max_runs=5)
+
+    # Limit reached exactly
+    rec_full = StatRecord(runs=5, watch_seconds=300.0, last_result="success")
+    assert "5/5 runs (Limit reached)" in format_watch_line(rec_full, max_runs=5)
+
+    # Exceeded limit
+    rec_over = StatRecord(runs=7, watch_seconds=420.0)
+    assert "7/5 runs (Limit reached)" in format_watch_line(rec_over, max_runs=5)
+
+
+def test_is_video_task_runnable_respects_run_limit(tmp_path):
+    store = StatsStore(stats_file=tmp_path / "stats.json")
+    task = VideoTask(url="https://www.youtube.com/watch?v=12345678901", max_runs=5)
+    v_key = resolve_video_key(task)
+    channels = [Channel(name="Default")]
+
+    # No runs recorded yet: runnable
+    assert is_video_task_runnable(task, channels, stats_store=store) is True
+
+    # Record 4 runs: still runnable (1 remaining)
+    for _ in range(4):
+        store.record(
+            TaskOutcome(
+                video_key=v_key,
+                task_key=v_key,
+                watched_seconds=30,
+                success=True,
+                attempts=1,
+            )
+        )
+    assert is_video_task_runnable(task, channels, stats_store=store) is True
+
+    # Record 5th run: limit of 5 is now reached in stats.json -> NOT runnable!
+    store.record(
+        TaskOutcome(
+            video_key=v_key,
+            task_key=v_key,
+            watched_seconds=30,
+            success=True,
+            attempts=1,
+        )
+    )
+    rec = store.find_for_task(task)
+    assert rec is not None and rec.runs == 5
+    assert is_video_task_runnable(task, channels, stats_store=store) is False
+
+    # Increasing max_runs to 6 makes it runnable again
+    task.max_runs = 6
+    assert is_video_task_runnable(task, channels, stats_store=store) is True
+
+    # Unlimited (max_runs == 0) makes it runnable
+    task.max_runs = 0
+    assert is_video_task_runnable(task, channels, stats_store=store) is True
+
+
+def test_task_dispatcher_filters_out_tasks_at_run_limit(tmp_path):
+    store = StatsStore(stats_file=tmp_path / "stats.json")
+    t1 = VideoTask(url="https://www.youtube.com/watch?v=11111111111", max_runs=2)
+    t2 = VideoTask(url="https://www.youtube.com/watch?v=22222222222", max_runs=5)
+    k1 = resolve_video_key(t1)
+
+    # Pre-record 2 runs for task1 (limit reached)
+    for _ in range(2):
+        store.record(TaskOutcome(video_key=k1, task_key=k1, attempts=1, success=True))
+
+    dispatcher = TaskDispatcher(tasks=[t1, t2], randomize=False, stats_store=store)
+    dispatcher.register_worker(0)
+
+    # Worker acquires task: task1 has reached limit, so dispatcher gives task2!
+    acquired = dispatcher.acquire_next_task(0)
+    assert acquired is not None
+    assert acquired.url == t2.url
+
+    # No more available tasks
+    assert dispatcher.acquire_next_task(0) is None

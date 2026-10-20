@@ -184,7 +184,7 @@ class QueueView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
-        modal.geometry("520x560")
+        modal.geometry("520x630")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
@@ -263,6 +263,12 @@ class QueueView(ctk.CTkFrame):
             command=open_channel_dialog,
         ).pack(anchor="w", padx=20, pady=(0, 10))
 
+        ctk.CTkLabel(modal, text="Run Limit (Max Runs):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        max_runs_entry = ctk.CTkEntry(modal, placeholder_text="e.g. 5 (0 or blank = unlimited)", width=460)
+        if target_task.max_runs > 0:
+            max_runs_entry.insert(0, str(target_task.max_runs))
+        max_runs_entry.pack(padx=20, pady=(0, 10))
+
         def on_submit():
             url = clean_youtube_url(url_entry.get().strip())
             t1 = title1_entry.get().strip()
@@ -271,6 +277,12 @@ class QueueView(ctk.CTkFrame):
             if not url and not t1 and not t2 and not t3:
                 messagebox.showerror("Error", "Please provide at least a URL or Video Title!", parent=modal)
                 return
+
+            raw_limit = max_runs_entry.get().strip()
+            try:
+                max_runs_val = max(0, int(raw_limit)) if raw_limit else 0
+            except ValueError:
+                max_runs_val = 0
 
             updated_task = VideoTask(
                 url=url,
@@ -283,6 +295,7 @@ class QueueView(ctk.CTkFrame):
                 watchtime_duration=duration_option.get(),
                 channel="" if channel_option.get() == NO_CHANNEL_VALUE else channel_option.get(),
                 enabled=target_task.enabled,
+                max_runs=max_runs_val,
             )
 
             if is_editing:
@@ -470,6 +483,12 @@ class QueueView(ctk.CTkFrame):
 
         task_chk.grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=10, sticky="w")
 
+        # Lifetime watch statistics for this video (recorded runs only).
+        store = self._stats()
+        record = store.find_for_task(task) if store is not None else None
+        current_runs = record.runs if record is not None else 0
+        is_limit_reached = task.max_runs > 0 and current_runs >= task.max_runs
+
         t_text = task.title or task.url
         if len(t_text) > 55:
             t_text = t_text[:52] + "..."
@@ -484,34 +503,65 @@ class QueueView(ctk.CTkFrame):
             status_prefix = "[CHANNEL DISABLED] "
         elif not task.enabled:
             status_prefix = "[DISABLED] "
+        elif is_limit_reached:
+            status_prefix = "[LIMIT REACHED] "
 
-        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}"
+        limit_suffix = f" | Limit: {task.max_runs} runs" if task.max_runs > 0 else ""
+        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{limit_suffix}"
         lbl = ctk.CTkLabel(
             card,
             text=info_text,
             justify="left",
             font=ctk.CTkFont(size=13),
             anchor="w",
-            text_color=("gray50", "gray50") if (not task.enabled or not channel_enabled) else None,
+            text_color=("gray50", "gray50") if (not task.enabled or not channel_enabled or is_limit_reached) else None,
         )
         lbl.grid(row=0, column=1, padx=10, pady=(10, 0), sticky="ew")
 
-        # Lifetime watch statistics for this video (recorded runs only).
-        store = self._stats()
-        record = store.find_for_task(task) if store is not None else None
         stats_lbl = ctk.CTkLabel(
             card,
-            text=format_watch_line(record),
+            text=format_watch_line(record, max_runs=task.max_runs),
             justify="left",
             font=ctk.CTkFont(size=12),
             anchor="w",
             text_color=("gray40", "gray60"),
         )
-        stats_lbl.grid(row=1, column=1, padx=10, pady=(2, 10), sticky="ew")
+        stats_lbl.grid(row=1, column=1, padx=10, pady=(2, 6 if task.max_runs > 0 else 10), sticky="ew")
 
         # Action Buttons Frame (Fixed to column 2 on the right edge)
         action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
         action_btn_frame.grid(row=0, column=2, rowspan=2, padx=10, pady=10, sticky="e")
+
+        limit_lbl = ctk.CTkLabel(action_btn_frame, text="Runs Limit:", font=ctk.CTkFont(size=12, weight="bold"))
+        limit_lbl.pack(side="left", padx=(0, 4))
+
+        limit_entry = ctk.CTkEntry(
+            action_btn_frame,
+            width=52,
+            height=28,
+            placeholder_text="∞",
+            justify="center",
+        )
+        if task.max_runs > 0:
+            limit_entry.insert(0, str(task.max_runs))
+        limit_entry.pack(side="left", padx=(0, 8))
+
+        def _on_limit_change(*_):
+            val_str = limit_entry.get().strip()
+            try:
+                new_val = max(0, int(val_str)) if val_str else 0
+            except ValueError:
+                new_val = task.max_runs
+                limit_entry.delete(0, "end")
+                if new_val > 0:
+                    limit_entry.insert(0, str(new_val))
+            if new_val != task.max_runs:
+                task.max_runs = new_val
+                self.save_queue()
+                self.refresh_list()
+
+        limit_entry.bind("<FocusOut>", _on_limit_change)
+        limit_entry.bind("<Return>", _on_limit_change)
 
         ctk.CTkButton(
             action_btn_frame,
@@ -539,5 +589,18 @@ class QueueView(ctk.CTkFrame):
             hover_color="#9A0007",
             command=lambda i=index: self.remove_task(i),
         ).pack(side="left")
+
+        # Green progress bar: shows how much runs remain until limit is full (e.g. 50% filled if half remains)
+        if task.max_runs > 0:
+            ratio = min(1.0, max(0.0, current_runs / task.max_runs))
+            bar = ctk.CTkProgressBar(
+                card,
+                height=8,
+                corner_radius=4,
+                progress_color=("#4EBA6F", "#3EA860"),
+                fg_color=("gray85", "gray26"),
+            )
+            bar.set(ratio)
+            bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
 
         return card
