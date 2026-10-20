@@ -35,6 +35,8 @@ class WatchResult:
     watched_seconds: float = 0.0
     ad_seconds: float = 0.0
     reason: str = ""
+    video_duration: float = 0.0
+    final_current_time: float = 0.0
 
     def __bool__(self) -> bool:
         return self.completed
@@ -60,12 +62,28 @@ class TaskOutcome:
     task_key: str = ""
     label: str = ""
     channel: str = ""
+    video_duration: float = 0.0
 
     @property
     def result(self) -> str:
         if self.interrupted:
             return RESULT_INTERRUPTED
         return RESULT_SUCCESS if self.success else RESULT_FAILED
+
+
+def calculate_length_equivalent_runs(watch_seconds: float, duration_seconds: float) -> int:
+    """Calculate run count based on cumulative watch time relative to video length:
+    - 0 watch time: 0 runs
+    - 0 < watch time < 2 * duration: 1 run
+    - watch time >= 2 * duration: int(watch_seconds // duration_seconds)
+    """
+    if watch_seconds <= 0:
+        return 0
+    if duration_seconds <= 0:
+        return 1
+    if watch_seconds < 2.0 * duration_seconds:
+        return 1
+    return int(watch_seconds // duration_seconds)
 
 
 @dataclass
@@ -82,6 +100,8 @@ class StatRecord:
     ad_seconds: float = 0.0
     last_run: str = ""
     last_result: str = ""
+    # Video length/duration in seconds (detected from HTML5 player)
+    video_duration: float = 0.0
     # Task-derived keys that resolve to this video (queue-card lookup alias).
     task_keys: List[str] = field(default_factory=list)
 
@@ -116,7 +136,7 @@ class StatRecord:
                 return []
             return [item for item in value if isinstance(item, str) and item]
 
-        return cls(
+        rec = cls(
             label=_str("label"),
             channel=_str("channel"),
             runs=_int("runs"),
@@ -127,8 +147,13 @@ class StatRecord:
             ad_seconds=_float("ad_seconds"),
             last_run=_str("last_run"),
             last_result=_str("last_result"),
+            video_duration=_float("video_duration"),
             task_keys=_str_list("task_keys"),
         )
+        # If video_duration is known, recompute runs based on watch_seconds vs video_duration
+        if rec.video_duration > 0:
+            rec.runs = calculate_length_equivalent_runs(rec.watch_seconds, rec.video_duration)
+        return rec
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -142,15 +167,24 @@ class StatRecord:
             "ad_seconds": round(self.ad_seconds, 3),
             "last_run": self.last_run,
             "last_result": self.last_result,
+            "video_duration": round(self.video_duration, 3),
             "task_keys": list(self.task_keys),
         }
 
     def merge(self, outcome: TaskOutcome, timestamp: str) -> None:
         """Fold one task outcome into this record."""
-        self.runs += 1
         self.attempts += max(1, outcome.attempts)
         self.watch_seconds += max(0.0, outcome.watched_seconds)
         self.ad_seconds += max(0.0, outcome.ad_seconds)
+        if outcome.video_duration > 0:
+            self.video_duration = outcome.video_duration
+
+        # Compute equivalent runs: if video_duration is known, use formula; otherwise increment by 1
+        if self.video_duration > 0:
+            self.runs = calculate_length_equivalent_runs(self.watch_seconds, self.video_duration)
+        else:
+            self.runs += 1
+
         if outcome.success:
             self.successes += 1
         elif not outcome.interrupted:
@@ -174,12 +208,17 @@ def fold_records(primary: StatRecord, secondary: Optional[StatRecord]) -> StatRe
     """
     if secondary is None or secondary is primary:
         return primary
-    primary.runs += secondary.runs
     primary.successes += secondary.successes
     primary.failures += secondary.failures
     primary.attempts += secondary.attempts
     primary.watch_seconds += secondary.watch_seconds
     primary.ad_seconds += secondary.ad_seconds
+    if secondary.video_duration > 0:
+        primary.video_duration = secondary.video_duration
+    if primary.video_duration > 0:
+        primary.runs = calculate_length_equivalent_runs(primary.watch_seconds, primary.video_duration)
+    else:
+        primary.runs += secondary.runs
     if secondary.label and not primary.label:
         primary.label = secondary.label
     if secondary.last_run > primary.last_run:
@@ -308,6 +347,7 @@ __all__ = [
     "TaskOutcome",
     "Totals",
     "WatchResult",
+    "calculate_length_equivalent_runs",
     "fold_records",
     "format_duration",
     "format_totals_line",

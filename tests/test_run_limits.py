@@ -146,3 +146,83 @@ def test_task_dispatcher_filters_out_tasks_at_run_limit(tmp_path):
 
     # No more available tasks
     assert dispatcher.acquire_next_task(0) is None
+
+
+def test_length_equivalent_runs_calculation():
+    from src.models.watch_stats import calculate_length_equivalent_runs
+
+    # 100-minute video (6000 seconds)
+    dur = 100 * 60.0
+
+    # 0 watch time -> 0 runs
+    assert calculate_length_equivalent_runs(0, dur) == 0
+
+    # 90 minutes -> 1 run (started and watched, but less than 2x length)
+    assert calculate_length_equivalent_runs(90 * 60, dur) == 1
+
+    # 100 minutes -> 1 run
+    assert calculate_length_equivalent_runs(100 * 60, dur) == 1
+
+    # 190 minutes -> 1 run (less than 200m)
+    assert calculate_length_equivalent_runs(190 * 60, dur) == 1
+
+    # 200 minutes -> 2 runs (doubled length reached!)
+    assert calculate_length_equivalent_runs(200 * 60, dur) == 2
+
+    # 310 minutes -> 3 runs (tripled length reached)
+    assert calculate_length_equivalent_runs(310 * 60, dur) == 3
+
+    # 490 minutes -> 4 runs
+    assert calculate_length_equivalent_runs(490 * 60, dur) == 4
+
+    # 500 minutes -> 5 runs
+    assert calculate_length_equivalent_runs(500 * 60, dur) == 5
+
+
+def test_stat_record_updates_runs_from_video_duration(tmp_path):
+    store = StatsStore(stats_file=tmp_path / "stats.json")
+    task = VideoTask(url="https://www.youtube.com/watch?v=12345678901", max_runs=5)
+    v_key = resolve_video_key(task)
+
+    # Video is 100 minutes (6000s)
+    dur = 6000.0
+
+    # First session: watch 90 minutes (5400s) -> 1 run
+    store.record(TaskOutcome(
+        video_key=v_key,
+        task_key=v_key,
+        watched_seconds=5400.0,
+        video_duration=dur,
+        success=True,
+        attempts=1,
+    ))
+    rec = store.find_for_task(task)
+    assert rec is not None
+    assert rec.runs == 1
+    assert rec.video_duration == dur
+
+    # Second session: watch another 90 minutes (total 180m = 10800s) -> still 1 run (< 200m)
+    store.record(TaskOutcome(
+        video_key=v_key,
+        task_key=v_key,
+        watched_seconds=5400.0,
+        video_duration=dur,
+        success=True,
+        attempts=1,
+    ))
+    rec = store.find_for_task(task)
+    assert rec is not None
+    assert rec.runs == 1
+
+    # Third session: watch 30 minutes (total 210m = 12600s) -> reaches 2 runs (>= 200m)
+    store.record(TaskOutcome(
+        video_key=v_key,
+        task_key=v_key,
+        watched_seconds=1800.0,
+        video_duration=dur,
+        success=True,
+        attempts=1,
+    ))
+    rec = store.find_for_task(task)
+    assert rec is not None
+    assert rec.runs == 2

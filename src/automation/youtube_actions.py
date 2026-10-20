@@ -192,19 +192,28 @@ def watch_video(
     last_tick = started_at
     last_progress_log = 0.0
     last_ad_log = 0.0
+    last_heartbeat_log = 0.0
     video_missing_since: Optional[float] = None
     escape_warned = False
     play_attempts = 0
     # Lifetime counter for this call: main-video playback seconds only.
     watched_seconds = 0.0
+    last_known_duration = 0.0
+    last_known_current_time = 0.0
 
     def _result(completed: bool, reason: str, interrupted: bool = False) -> WatchResult:
+        # Determine final effective watch seconds for this single run:
+        # If currentTime is greater than watched_seconds, use currentTime
+        # (reflects exact point reached on timeline).
+        final_watched = max(watched_seconds, last_known_current_time)
         return WatchResult(
             completed=completed,
             interrupted=interrupted,
-            watched_seconds=watched_seconds,
+            watched_seconds=final_watched,
             ad_seconds=ad_state.total_ad_seconds,
             reason=reason,
+            video_duration=last_known_duration,
+            final_current_time=last_known_current_time,
         )
 
     while True:
@@ -318,6 +327,20 @@ def watch_video(
         ended = bool(video_state.get("ended", False))
         curr_time = float(video_state.get("currentTime", 0.0))
         video_duration = float(video_state.get("duration", 0.0))
+        if video_duration > 0:
+            last_known_duration = video_duration
+        if curr_time > 0:
+            last_known_current_time = curr_time
+
+        # Every minute: log live playback timeline heartbeat
+        if now - last_heartbeat_log >= 60.0:
+            last_heartbeat_log = now
+            cur_fmt = _format_clock(curr_time)
+            dur_fmt = _format_clock(video_duration) if video_duration > 0 else "unknown"
+            emit(
+                log_queue,
+                f"Playback timeline update: video currently playing at {cur_fmt} / {dur_fmt} (watchtime counter: {int(watched_seconds // 60)}m {int(watched_seconds % 60):02d}s)",
+            )
 
         # Playback finished (stops before autoplay countdown or next-video navigation triggers)
         effective_buffer = calculate_end_buffer(video_duration, target_buffer)

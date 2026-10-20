@@ -166,6 +166,8 @@ class AutomationWorker:
                     )
                     outcome.watched_seconds += max(0.0, result.watched_seconds)
                     outcome.ad_seconds += max(0.0, result.ad_seconds)
+                    if result.video_duration > 0:
+                        outcome.video_duration = result.video_duration
                     if result:
                         outcome.success = True
                         return outcome
