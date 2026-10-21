@@ -54,6 +54,3 @@ stats.json
 
 # Configuration files with credentials (never commit)
 credentials.json
-
-# Temporary notes and scratch files
-temp_enhancements.md
