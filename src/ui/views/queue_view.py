@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
-from ...models.watch_stats import format_totals_line, format_watch_line
+from ...models.watch_stats import format_totals_line, format_watch_line, totals_for
 from ...utils.helpers import clean_youtube_url
 
 
@@ -84,7 +84,7 @@ class QueueView(ctk.CTkFrame):
         store = self._stats()
         if store is None or not group.videos:
             return ""
-        records = [store.find_for_task(t) for t in group.videos]
+        records = [store.find_for_task(task) for _, task in group.videos]
         active_records = [r for r in records if r is not None]
         totals = totals_for(active_records)
         return format_totals_line(totals) if totals.runs else ""
