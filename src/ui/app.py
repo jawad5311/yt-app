@@ -116,12 +116,27 @@ class YTBotApp(ctk.CTk):
             view.grid(row=0, column=0, sticky="nsew")
 
         self.show_view("dashboard")
-        self.views["dashboard"].update_stats(
-            len(self.loaded_accounts),
-            len(self.queued_video_tasks),
-            "Idle",
-        )
+        self.update_dashboard_stats()
         self.refresh_watch_stats()
+
+    def get_runnable_video_count(self) -> int:
+        """Count only the enabled, runnable video tasks that will be processed by automation."""
+        channels = (
+            [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
+            if hasattr(self, "config_mgr")
+            else []
+        )
+        stats = getattr(self, "stats_store", None)
+        return sum(1 for t in self.queued_video_tasks if is_video_task_runnable(t, channels, stats))
+
+    def update_dashboard_stats(self) -> None:
+        """Refresh dashboard overview cards with live accounts, runnable queue, and status."""
+        if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
+            self.views["dashboard"].update_stats(
+                len(self.loaded_accounts),
+                self.get_runnable_video_count(),
+                "Running" if self.is_running else "Idle",
+            )
 
     def refresh_watch_stats(self) -> None:
         """Re-render everything that shows watch statistics (main thread only)."""
@@ -135,6 +150,7 @@ class YTBotApp(ctk.CTk):
         if dashboard is not None:
             totals = self.stats_store.lifetime_totals()
             dashboard.update_watch_totals(format_duration(totals.watch_seconds))
+            self.update_dashboard_stats()
 
     def show_view(self, name: str):
         for view_name, view_widget in self.views.items():
@@ -153,21 +169,11 @@ class YTBotApp(ctk.CTk):
 
     def on_accounts_changed(self, accounts: List[Account]):
         self.loaded_accounts = accounts
-        if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
-            self.views["dashboard"].update_stats(
-                len(self.loaded_accounts),
-                len(self.queued_video_tasks),
-                "Running" if self.is_running else "Idle",
-            )
+        self.update_dashboard_stats()
 
     def on_queue_changed(self, tasks: List[VideoTask]):
         self.queued_video_tasks = tasks
-        if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
-            self.views["dashboard"].update_stats(
-                len(self.loaded_accounts),
-                len(self.queued_video_tasks),
-                "Running" if self.is_running else "Idle",
-            )
+        self.update_dashboard_stats()
 
     def start_automation(self):
         if self.is_running:
@@ -201,6 +207,7 @@ class YTBotApp(ctk.CTk):
         self.config_mgr.set_setting("AutomationLoops", str(total_loops))
 
         self.is_running = True
+        self.update_dashboard_stats()
         self.stop_event.clear()
         self.worker_progress.clear()
         while not self.event_queue.empty():

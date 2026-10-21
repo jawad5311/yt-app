@@ -242,3 +242,36 @@ def test_stat_record_updates_runs_when_playback_finishes(tmp_path):
     rec = store.find_for_task(task)
     assert rec is not None
     assert rec.runs == 2
+
+
+def test_app_runnable_video_count_excludes_unchecked_and_archived(tmp_path):
+    from unittest.mock import MagicMock
+
+    from src.config.manager import ConfigManager
+    from src.ui.app import YTBotApp
+
+    config = ConfigManager(config_file=tmp_path / "settings.json")
+    store = StatsStore(stats_file=tmp_path / "stats.json")
+
+    config.set_channels([
+        {"name": "ActiveChannel", "enabled": True},
+        {"name": "DisabledChannel", "enabled": False},
+        {"name": "ArchivedChannel", "enabled": True, "archived": True},
+    ])
+
+    app = MagicMock(spec=YTBotApp)
+    app.config_mgr = config
+    app.stats_store = store
+    app.queued_video_tasks = [
+        VideoTask(title="Checked Active", channel="ActiveChannel", enabled=True),
+        VideoTask(title="Unchecked Active", channel="ActiveChannel", enabled=False),
+        VideoTask(title="Checked in Disabled Channel", channel="DisabledChannel", enabled=True),
+        VideoTask(title="Checked in Archived Channel", channel="ArchivedChannel", enabled=True),
+        VideoTask(title="Checked Uncategorized", channel="", enabled=True),
+        VideoTask(title="Unchecked Uncategorized", channel="", enabled=False),
+    ]
+
+    count = YTBotApp.get_runnable_video_count(app)
+    # Only "Checked Active" and "Checked Uncategorized" are runnable (2 out of 6)
+    assert count == 2
+

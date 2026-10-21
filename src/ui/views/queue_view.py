@@ -408,6 +408,9 @@ class QueueView(ctk.CTkFrame):
                         ch.enabled = new_state
                 self.app_controller.config_mgr.set_channels([c.to_dict() for c in channels])
                 self.refresh_list()
+                update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+                if callable(update_dash):
+                    update_dash()
 
             ch_chk = ctk.CTkCheckBox(
                 header,
@@ -470,6 +473,9 @@ class QueueView(ctk.CTkFrame):
                 channels_view = getattr(self.app_controller, "views", {}).get("channels")
                 if channels_view is not None:
                     channels_view.load_channels()
+                update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+                if callable(update_dash):
+                    update_dash()
 
             ctk.CTkButton(
                 header_btns,

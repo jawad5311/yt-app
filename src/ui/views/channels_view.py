@@ -76,6 +76,9 @@ class ChannelsView(ctk.CTkFrame):
     def save_channels(self) -> None:
         self.app_controller.config_mgr.set_channels([ch.to_dict() for ch in self.channels])
         self.refresh_list()
+        update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+        if callable(update_dash):
+            update_dash()
 
     # ------------------------------------------------------- cross-view hooks
 
