@@ -70,6 +70,7 @@ def test_watch_video_stops_early_before_autoplay():
 
     assert result.completed is True
     assert result.reason == "ended"
+    assert result.playback_finished is True
 
 
 def test_watch_video_detects_autoplay_transition_to_new_url():

@@ -225,18 +225,18 @@ def test_format_watch_line_for_a_video_that_never_ran():
 
 def test_format_watch_line_shows_runs_time_and_last_result():
     success = StatRecord(runs=12, watch_seconds=15840, last_result="success")
-    assert format_watch_line(success) == "▶ 12 runs · 4h 24m watched · last ✅"
+    assert format_watch_line(success) == "▶ 12 full runs · 4h 24m watched · last ✅"
 
     single = StatRecord(runs=1, watch_seconds=30, last_result="failed")
-    assert format_watch_line(single) == "▶ 1 run · 30s watched · last ❌"
+    assert format_watch_line(single) == "▶ 1 full run · 30s watched · last ❌"
 
     stopped = StatRecord(runs=3, watch_seconds=61, last_result="interrupted")
-    assert format_watch_line(stopped) == "▶ 3 runs · 1m 01s watched · last ⏸"
+    assert format_watch_line(stopped) == "▶ 3 full runs · 1m 01s watched · last ⏸"
 
     unknown = StatRecord(runs=2, watch_seconds=10)
-    assert format_watch_line(unknown) == "▶ 2 runs · 10s watched"
+    assert format_watch_line(unknown) == "▶ 2 full runs · 10s watched"
 
 
 def test_format_totals_line():
-    assert format_totals_line(Totals(runs=1, watch_seconds=58)) == "1 run · 58s watched"
-    assert format_totals_line(Totals(runs=27, watch_seconds=43440)) == "27 runs · 12h 04m watched"
+    assert format_totals_line(Totals(runs=1, watch_seconds=58)) == "1 full run · 58s watched"
+    assert format_totals_line(Totals(runs=27, watch_seconds=43440)) == "27 full runs · 12h 04m watched"

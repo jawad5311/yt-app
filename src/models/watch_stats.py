@@ -37,6 +37,11 @@ class WatchResult:
     reason: str = ""
     video_duration: float = 0.0
     final_current_time: float = 0.0
+    playback_finished: bool = False
+
+    def __post_init__(self) -> None:
+        if self.reason == "ended":
+            self.playback_finished = True
 
     def __bool__(self) -> bool:
         return self.completed
@@ -63,6 +68,7 @@ class TaskOutcome:
     label: str = ""
     channel: str = ""
     video_duration: float = 0.0
+    playback_finished: bool = False
 
     @property
     def result(self) -> str:
@@ -150,9 +156,6 @@ class StatRecord:
             video_duration=_float("video_duration"),
             task_keys=_str_list("task_keys"),
         )
-        # If video_duration is known, recompute runs based on watch_seconds vs video_duration
-        if rec.video_duration > 0:
-            rec.runs = calculate_length_equivalent_runs(rec.watch_seconds, rec.video_duration)
         return rec
 
     def to_dict(self) -> Dict[str, object]:
@@ -179,10 +182,9 @@ class StatRecord:
         if outcome.video_duration > 0:
             self.video_duration = outcome.video_duration
 
-        # Compute equivalent runs: if video_duration is known, use formula; otherwise increment by 1
-        if self.video_duration > 0:
-            self.runs = calculate_length_equivalent_runs(self.watch_seconds, self.video_duration)
-        else:
+        if outcome.playback_finished:
+            self.runs += 1
+        elif self.video_duration == 0:
             self.runs += 1
 
         if outcome.success:
@@ -215,10 +217,7 @@ def fold_records(primary: StatRecord, secondary: Optional[StatRecord]) -> StatRe
     primary.ad_seconds += secondary.ad_seconds
     if secondary.video_duration > 0:
         primary.video_duration = secondary.video_duration
-    if primary.video_duration > 0:
-        primary.runs = calculate_length_equivalent_runs(primary.watch_seconds, primary.video_duration)
-    else:
-        primary.runs += secondary.runs
+    primary.runs += secondary.runs
     if secondary.label and not primary.label:
         primary.label = secondary.label
     if secondary.last_run > primary.last_run:
@@ -295,18 +294,18 @@ def format_watch_line(record: Optional[StatRecord], max_runs: int = 0) -> str:
     current_runs = record.runs if record is not None else 0
     if max_runs > 0:
         if current_runs >= max_runs:
-            runs_str = f"{current_runs}/{max_runs} runs (Limit reached)"
+            runs_str = f"{current_runs}/{max_runs} full runs (Limit reached)"
         else:
             remaining = max_runs - current_runs
             rem_str = "1 remaining" if remaining == 1 else f"{remaining} remaining"
-            runs_str = f"{current_runs}/{max_runs} runs ({rem_str})"
+            runs_str = f"{current_runs}/{max_runs} full runs ({rem_str})"
     else:
         if current_runs == 0:
             runs_str = ""
         elif current_runs == 1:
-            runs_str = "1 run"
+            runs_str = "1 full run"
         else:
-            runs_str = f"{current_runs} runs"
+            runs_str = f"{current_runs} full runs"
 
     if current_runs == 0:
         if max_runs > 0:
@@ -322,8 +321,8 @@ def format_watch_line(record: Optional[StatRecord], max_runs: int = 0) -> str:
 
 
 def format_totals_line(totals: Totals) -> str:
-    """Compact totals: ``27 runs · 12h 04m watched``."""
-    runs = f"{totals.runs} run" if totals.runs == 1 else f"{totals.runs} runs"
+    """Compact totals: ``27 full runs · 12h 04m watched``."""
+    runs = f"{totals.runs} full run" if totals.runs == 1 else f"{totals.runs} full runs"
     return f"{runs} · {format_duration(totals.watch_seconds)} watched"
 
 

@@ -201,7 +201,12 @@ def watch_video(
     last_known_duration = 0.0
     last_known_current_time = 0.0
 
-    def _result(completed: bool, reason: str, interrupted: bool = False) -> WatchResult:
+    def _result(
+        completed: bool,
+        reason: str,
+        interrupted: bool = False,
+        playback_finished: bool = False,
+    ) -> WatchResult:
         # Determine final effective watch seconds for this single run:
         # If currentTime is greater than watched_seconds, use currentTime
         # (reflects exact point reached on timeline).
@@ -214,6 +219,7 @@ def watch_video(
             reason=reason,
             video_duration=last_known_duration,
             final_current_time=last_known_current_time,
+            playback_finished=playback_finished,
         )
 
     while True:
@@ -355,7 +361,7 @@ def watch_video(
                 driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
             except Exception:
                 pass
-            return _result(True, "ended")
+            return _result(True, "ended", playback_finished=True)
 
         # Paused mid-video -> resume (JS first, real play button as fallback)
         if paused and not ended and (video_duration == 0 or curr_time < (video_duration - effective_buffer - 1.0)):
@@ -400,7 +406,7 @@ def watch_video(
             watched_elapsed = elapsed - ad_state.total_ad_seconds
             if watched_elapsed >= duration_seconds:
                 emit(log_queue, f"Reached watch duration limit ({duration_seconds}s).")
-                return _result(True, "duration_reached")
+                return _result(True, "duration_reached", playback_finished=True)
 
         time.sleep(3)
 

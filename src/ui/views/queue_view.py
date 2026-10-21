@@ -263,7 +263,7 @@ class QueueView(ctk.CTkFrame):
             command=open_channel_dialog,
         ).pack(anchor="w", padx=20, pady=(0, 10))
 
-        ctk.CTkLabel(modal, text="Run Limit (Max Runs):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        ctk.CTkLabel(modal, text="Full Runs Limit (Max Full Runs):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         max_runs_entry = ctk.CTkEntry(modal, placeholder_text="e.g. 5 (0 or blank = unlimited)", width=460)
         if target_task.max_runs > 0:
             max_runs_entry.insert(0, str(target_task.max_runs))
@@ -506,7 +506,7 @@ class QueueView(ctk.CTkFrame):
         elif is_limit_reached:
             status_prefix = "[LIMIT REACHED] "
 
-        limit_suffix = f" | Limit: {task.max_runs} runs" if task.max_runs > 0 else ""
+        limit_suffix = f" | Limit: {task.max_runs} full runs" if task.max_runs > 0 else ""
         info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{limit_suffix}"
         lbl = ctk.CTkLabel(
             card,
@@ -532,7 +532,7 @@ class QueueView(ctk.CTkFrame):
         action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
         action_btn_frame.grid(row=0, column=2, rowspan=2, padx=10, pady=10, sticky="e")
 
-        limit_lbl = ctk.CTkLabel(action_btn_frame, text="Runs Limit:", font=ctk.CTkFont(size=12, weight="bold"))
+        limit_lbl = ctk.CTkLabel(action_btn_frame, text="Full Runs Limit:", font=ctk.CTkFont(size=12, weight="bold"))
         limit_lbl.pack(side="left", padx=(0, 4))
 
         limit_entry = ctk.CTkEntry(

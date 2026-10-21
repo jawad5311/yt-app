@@ -59,26 +59,26 @@ def test_format_watch_line_with_run_limits():
     assert format_watch_line(None, max_runs=0) == "▶ Not run yet"
 
     # Not run yet with limit
-    assert format_watch_line(None, max_runs=5) == "▶ 0/5 runs (5 remaining)"
+    assert format_watch_line(None, max_runs=5) == "▶ 0/5 full runs (5 remaining)"
 
     # Partial runs remaining
     rec = StatRecord(runs=2, watch_seconds=125.0, last_result="success")
     line = format_watch_line(rec, max_runs=5)
-    assert "2/5 runs (3 remaining)" in line
+    assert "2/5 full runs (3 remaining)" in line
     assert "2m 05s watched" in line
     assert "last ✅" in line
 
     # 1 run remaining singular formatting
     rec_one_left = StatRecord(runs=4, watch_seconds=200.0)
-    assert "4/5 runs (1 remaining)" in format_watch_line(rec_one_left, max_runs=5)
+    assert "4/5 full runs (1 remaining)" in format_watch_line(rec_one_left, max_runs=5)
 
     # Limit reached exactly
     rec_full = StatRecord(runs=5, watch_seconds=300.0, last_result="success")
-    assert "5/5 runs (Limit reached)" in format_watch_line(rec_full, max_runs=5)
+    assert "5/5 full runs (Limit reached)" in format_watch_line(rec_full, max_runs=5)
 
     # Exceeded limit
     rec_over = StatRecord(runs=7, watch_seconds=420.0)
-    assert "7/5 runs (Limit reached)" in format_watch_line(rec_over, max_runs=5)
+    assert "7/5 full runs (Limit reached)" in format_watch_line(rec_over, max_runs=5)
 
 
 def test_is_video_task_runnable_respects_run_limit(tmp_path):
@@ -179,7 +179,7 @@ def test_length_equivalent_runs_calculation():
     assert calculate_length_equivalent_runs(500 * 60, dur) == 5
 
 
-def test_stat_record_updates_runs_from_video_duration(tmp_path):
+def test_stat_record_updates_runs_when_playback_finishes(tmp_path):
     store = StatsStore(stats_file=tmp_path / "stats.json")
     task = VideoTask(url="https://www.youtube.com/watch?v=12345678901", max_runs=5)
     v_key = resolve_video_key(task)
@@ -187,26 +187,29 @@ def test_stat_record_updates_runs_from_video_duration(tmp_path):
     # Video is 100 minutes (6000s)
     dur = 6000.0
 
-    # First session: watch 90 minutes (5400s) -> 1 run
+    # First session: watched 90 minutes but did NOT finish (playback_finished=False) -> 0 runs
     store.record(TaskOutcome(
         video_key=v_key,
         task_key=v_key,
         watched_seconds=5400.0,
         video_duration=dur,
+        playback_finished=False,
         success=True,
         attempts=1,
     ))
     rec = store.find_for_task(task)
     assert rec is not None
-    assert rec.runs == 1
+    assert rec.runs == 0
+    assert rec.watch_seconds == 5400.0
     assert rec.video_duration == dur
 
-    # Second session: watch another 90 minutes (total 180m = 10800s) -> still 1 run (< 200m)
+    # Second session: video playback finished! -> increments to 1 run
     store.record(TaskOutcome(
         video_key=v_key,
         task_key=v_key,
         watched_seconds=5400.0,
         video_duration=dur,
+        playback_finished=True,
         success=True,
         attempts=1,
     ))
@@ -214,12 +217,27 @@ def test_stat_record_updates_runs_from_video_duration(tmp_path):
     assert rec is not None
     assert rec.runs == 1
 
-    # Third session: watch 30 minutes (total 210m = 12600s) -> reaches 2 runs (>= 200m)
+    # Third session: another partial session without finishing -> still 1 run
     store.record(TaskOutcome(
         video_key=v_key,
         task_key=v_key,
         watched_seconds=1800.0,
         video_duration=dur,
+        playback_finished=False,
+        success=True,
+        attempts=1,
+    ))
+    rec = store.find_for_task(task)
+    assert rec is not None
+    assert rec.runs == 1
+
+    # Fourth session: playback finishes again! -> reaches 2 runs
+    store.record(TaskOutcome(
+        video_key=v_key,
+        task_key=v_key,
+        watched_seconds=6000.0,
+        video_duration=dur,
+        playback_finished=True,
         success=True,
         attempts=1,
     ))
