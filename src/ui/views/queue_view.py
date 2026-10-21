@@ -80,12 +80,13 @@ class QueueView(ctk.CTkFrame):
         return getattr(self.app_controller, "stats_store", None)
 
     def _group_totals_line(self, group: VideoGroup) -> str:
-        """``27 runs · 12h 04m watched`` for one channel section."""
+        """``27 full runs · 12h 04m watched`` for one channel section."""
         store = self._stats()
-        if store is None:
+        if store is None or not group.videos:
             return ""
-        channel_name = "" if group.is_uncategorized else group.channel.name
-        totals = store.channel_totals(channel_name)
+        records = [store.find_for_task(t) for t in group.videos]
+        active_records = [r for r in records if r is not None]
+        totals = totals_for(active_records)
         return format_totals_line(totals) if totals.runs else ""
 
     @staticmethod
@@ -299,6 +300,10 @@ class QueueView(ctk.CTkFrame):
             )
 
             if is_editing:
+                old_task = self.video_tasks[index]
+                store = self._stats()
+                if store is not None:
+                    store.handle_task_edited(old_task, updated_task)
                 self.video_tasks[index] = updated_task
             else:
                 self.video_tasks.append(updated_task)
@@ -315,6 +320,10 @@ class QueueView(ctk.CTkFrame):
 
     def remove_task(self, index: int):
         if 0 <= index < len(self.video_tasks):
+            removed_task = self.video_tasks[index]
+            store = self._stats()
+            if store is not None:
+                store.remove_for_task(removed_task)
             del self.video_tasks[index]
             self.save_queue()
             self.refresh_list()

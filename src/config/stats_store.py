@@ -30,7 +30,7 @@ class StatsStore:
         if stats_file is None:
             stats_file = Path(__file__).resolve().parent.parent.parent / "stats.json"
         self.stats_file = Path(stats_file)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.records: Dict[str, StatRecord] = {}
         self.load()
 
@@ -181,3 +181,55 @@ class StatsStore:
             del self.records[key]
             self._save_unlocked()
             return True
+
+    def remove_for_task(self, task: VideoTask) -> bool:
+        """Remove a task's record (matching by direct key or alias)."""
+        key = resolve_video_key(task)
+        with self._lock:
+            if key in self.records:
+                del self.records[key]
+                self._save_unlocked()
+                return True
+            for k, candidate in list(self.records.items()):
+                if key in candidate.task_keys:
+                    del self.records[k]
+                    self._save_unlocked()
+                    return True
+            return False
+
+    def update_task_metadata(self, task: VideoTask) -> bool:
+        """Update label and channel on an existing task's stat record."""
+        with self._lock:
+            base = resolve_video_key(task)
+            rec = self.records.get(base)
+            if rec is None:
+                for candidate in self.records.values():
+                    if base in candidate.task_keys:
+                        rec = candidate
+                        break
+            if rec is not None:
+                changed = False
+                new_label = (task.title or task.keywords or "").strip()
+                if new_label and rec.label != new_label:
+                    rec.label = new_label
+                    changed = True
+                new_channel = (task.channel or "").strip()
+                if rec.channel != new_channel:
+                    rec.channel = new_channel
+                    changed = True
+                if changed:
+                    self._save_unlocked()
+                return changed
+            return False
+
+    def handle_task_edited(self, old_task: VideoTask, new_task: VideoTask) -> None:
+        """Sync stats on task edit:
+        - If URL/video identity changed: clear old video stats.
+        - If metadata (title/channel) changed: update the existing stat record.
+        """
+        old_key = resolve_video_key(old_task)
+        new_key = resolve_video_key(new_task)
+        if old_key != new_key:
+            self.remove_for_task(old_task)
+        else:
+            self.update_task_metadata(new_task)

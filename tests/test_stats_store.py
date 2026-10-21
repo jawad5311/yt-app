@@ -235,3 +235,51 @@ def test_parallel_recordings_sum_exactly(tmp_path):
     assert record.watch_seconds == 100.0
     payload = json.loads(store.stats_file.read_text(encoding="utf-8"))
     assert payload["videos"][VIDEO_ID]["runs"] == 100
+
+
+def test_remove_for_task_clears_record(tmp_path):
+    store = make_store(tmp_path)
+    task = VideoTask(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", title="Timer")
+    store.record(outcome())
+    assert store.get(VIDEO_ID) is not None
+
+    assert store.remove_for_task(task) is True
+    assert store.get(VIDEO_ID) is None
+    assert store.remove_for_task(task) is False
+
+
+def test_update_task_metadata_updates_label_and_channel(tmp_path):
+    store = make_store(tmp_path)
+    store.record(outcome(label="Old Title", channel="Cooking"))
+
+    task = VideoTask(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", title="New Title", channel="Gaming")
+    assert store.update_task_metadata(task) is True
+
+    rec = store.get(VIDEO_ID)
+    assert rec.label == "New Title"
+    assert rec.channel == "Gaming"
+
+
+def test_handle_task_edited_url_change_removes_old_record(tmp_path):
+    store = make_store(tmp_path)
+    store.record(outcome(video_key=VIDEO_ID))
+
+    old_task = VideoTask(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", title="Old Video")
+    new_task = VideoTask(url="https://www.youtube.com/watch?v=newVideo1234", title="New Video")
+
+    store.handle_task_edited(old_task, new_task)
+    assert store.get(VIDEO_ID) is None
+
+
+def test_handle_task_edited_metadata_change_updates_existing_record(tmp_path):
+    store = make_store(tmp_path)
+    store.record(outcome(video_key=VIDEO_ID, label="Old Title", channel="Cooking"))
+
+    old_task = VideoTask(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", title="Old Title", channel="Cooking")
+    new_task = VideoTask(url=f"https://www.youtube.com/watch?v={VIDEO_ID}", title="Updated Title", channel="Travel")
+
+    store.handle_task_edited(old_task, new_task)
+    rec = store.get(VIDEO_ID)
+    assert rec is not None
+    assert rec.label == "Updated Title"
+    assert rec.channel == "Travel"
