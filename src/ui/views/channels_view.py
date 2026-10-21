@@ -76,6 +76,9 @@ class ChannelsView(ctk.CTkFrame):
     def save_channels(self) -> None:
         self.app_controller.config_mgr.set_channels([ch.to_dict() for ch in self.channels])
         self.refresh_list()
+        queue = self._queue_view()
+        if queue is not None:
+            queue.refresh_list()
         update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
         if callable(update_dash):
             update_dash()
@@ -278,6 +281,7 @@ class ChannelsView(ctk.CTkFrame):
                 return
 
             queue = self._queue_view()
+            total_chan_vids = len(channel_tasks)
             for pos, (real_idx, task) in enumerate(channel_tasks, start=1):
                 card = ctk.CTkFrame(scroll, corner_radius=6)
                 card.pack(fill="x", padx=5, pady=4)
@@ -306,6 +310,55 @@ class ChannelsView(ctk.CTkFrame):
 
                 card_btns = ctk.CTkFrame(card, fg_color="transparent")
                 card_btns.grid(row=0, column=1, padx=10, pady=8, sticky="e")
+
+                def _move_modal_up(p_idx=pos - 1):
+                    if p_idx > 0 and queue is not None:
+                        curr_real = channel_tasks[p_idx][0]
+                        prev_real = channel_tasks[p_idx - 1][0]
+                        queue.video_tasks[curr_real], queue.video_tasks[prev_real] = (
+                            queue.video_tasks[prev_real],
+                            queue.video_tasks[curr_real],
+                        )
+                        queue.save_queue()
+                        _refresh_modal_videos()
+
+                def _move_modal_down(p_idx=pos - 1):
+                    if p_idx < total_chan_vids - 1 and queue is not None:
+                        curr_real = channel_tasks[p_idx][0]
+                        next_real = channel_tasks[p_idx + 1][0]
+                        queue.video_tasks[curr_real], queue.video_tasks[next_real] = (
+                            queue.video_tasks[next_real],
+                            queue.video_tasks[curr_real],
+                        )
+                        queue.save_queue()
+                        _refresh_modal_videos()
+
+                can_m_up = (pos > 1)
+                can_m_down = (pos < total_chan_vids)
+
+                ctk.CTkButton(
+                    card_btns,
+                    text="▲",
+                    width=30,
+                    height=28,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    fg_color="#374151" if can_m_up else "gray30",
+                    hover_color="#4B5563" if can_m_up else "gray30",
+                    state="normal" if can_m_up else "disabled",
+                    command=_move_modal_up,
+                ).pack(side="left", padx=(0, 2))
+
+                ctk.CTkButton(
+                    card_btns,
+                    text="▼",
+                    width=30,
+                    height=28,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    fg_color="#374151" if can_m_down else "gray30",
+                    hover_color="#4B5563" if can_m_down else "gray30",
+                    state="normal" if can_m_down else "disabled",
+                    command=_move_modal_down,
+                ).pack(side="left", padx=(0, 6))
 
                 def _edit(idx_to_edit=real_idx):
                     if queue is not None:
@@ -405,6 +458,7 @@ class ChannelsView(ctk.CTkFrame):
             ).pack(pady=30)
             return
 
+        total_items = len(current_items)
         for pos, (real_idx, channel) in enumerate(current_items, start=1):
             row = ctk.CTkFrame(self.scroll_frame, corner_radius=6, cursor="hand2")
             row.pack(fill="x", padx=5, pady=4)
@@ -463,6 +517,53 @@ class ChannelsView(ctk.CTkFrame):
 
             action_frame = ctk.CTkFrame(row, fg_color="transparent")
             action_frame.grid(row=0, column=2, padx=10, pady=8, sticky="e")
+
+            def _move_channel_up(p=pos):
+                if p > 1:
+                    curr_real = current_items[p - 1][0]
+                    prev_real = current_items[p - 2][0]
+                    self.channels[curr_real], self.channels[prev_real] = (
+                        self.channels[prev_real],
+                        self.channels[curr_real],
+                    )
+                    self.save_channels()
+
+            def _move_channel_down(p=pos):
+                if p < total_items:
+                    curr_real = current_items[p - 1][0]
+                    next_real = current_items[p][0]
+                    self.channels[curr_real], self.channels[next_real] = (
+                        self.channels[next_real],
+                        self.channels[curr_real],
+                    )
+                    self.save_channels()
+
+            can_up = (pos > 1)
+            can_down = (pos < total_items)
+
+            ctk.CTkButton(
+                action_frame,
+                text="▲",
+                width=30,
+                height=28,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color="#374151" if can_up else "gray30",
+                hover_color="#4B5563" if can_up else "gray30",
+                state="normal" if can_up else "disabled",
+                command=_move_channel_up,
+            ).pack(side="left", padx=(0, 2))
+
+            ctk.CTkButton(
+                action_frame,
+                text="▼",
+                width=30,
+                height=28,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color="#374151" if can_down else "gray30",
+                hover_color="#4B5563" if can_down else "gray30",
+                state="normal" if can_down else "disabled",
+                command=_move_channel_down,
+            ).pack(side="left", padx=(0, 6))
 
             if channel.url:
                 ctk.CTkButton(

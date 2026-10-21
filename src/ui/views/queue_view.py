@@ -1,6 +1,6 @@
 import webbrowser
 from tkinter import TclError, messagebox
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 import customtkinter as ctk
 
@@ -517,11 +517,58 @@ class QueueView(ctk.CTkFrame):
             ).grid(row=1, column=0, padx=14, pady=(0, 8), sticky="w")
             return
 
-        for row, (index, task) in enumerate(group.videos, start=1):
-            card = self._build_task_card(container, row, task, index, channel_enabled=group.channel.enabled if not group.is_uncategorized else True)
-            card.grid(row=row, column=0, sticky="ew", pady=(0, 5))
+        total_in_group = len(group.videos)
+        for g_idx, (real_index, task) in enumerate(group.videos):
+            is_first = (g_idx == 0)
+            is_last = (g_idx == total_in_group - 1)
 
-    def _build_task_card(self, parent, position: int, task: VideoTask, index: int, channel_enabled: bool = True):
+            def _move_up(idx=g_idx):
+                if idx > 0:
+                    curr_real = group.videos[idx][0]
+                    prev_real = group.videos[idx - 1][0]
+                    self.video_tasks[curr_real], self.video_tasks[prev_real] = (
+                        self.video_tasks[prev_real],
+                        self.video_tasks[curr_real],
+                    )
+                    self.save_queue()
+                    self.refresh_list()
+
+            def _move_down(idx=g_idx):
+                if idx < total_in_group - 1:
+                    curr_real = group.videos[idx][0]
+                    next_real = group.videos[idx + 1][0]
+                    self.video_tasks[curr_real], self.video_tasks[next_real] = (
+                        self.video_tasks[next_real],
+                        self.video_tasks[curr_real],
+                    )
+                    self.save_queue()
+                    self.refresh_list()
+
+            card = self._build_task_card(
+                container,
+                g_idx + 1,
+                task,
+                real_index,
+                channel_enabled=group.channel.enabled if not group.is_uncategorized else True,
+                can_move_up=not is_first,
+                can_move_down=not is_last,
+                on_move_up=_move_up,
+                on_move_down=_move_down,
+            )
+            card.grid(row=g_idx + 1, column=0, sticky="ew", pady=(0, 5))
+
+    def _build_task_card(
+        self,
+        parent,
+        position: int,
+        task: VideoTask,
+        index: int,
+        channel_enabled: bool = True,
+        can_move_up: bool = False,
+        can_move_down: bool = False,
+        on_move_up: Optional[Callable[[], None]] = None,
+        on_move_down: Optional[Callable[[], None]] = None,
+    ):
         """Build a single video card; ``index`` is the task's real queue index."""
         card = ctk.CTkFrame(parent, corner_radius=6)
         card.grid_columnconfigure(0, weight=0)
@@ -630,6 +677,30 @@ class QueueView(ctk.CTkFrame):
 
         limit_entry.bind("<FocusOut>", _on_limit_change)
         limit_entry.bind("<Return>", _on_limit_change)
+
+        ctk.CTkButton(
+            action_btn_frame,
+            text="▲",
+            width=30,
+            height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#374151" if can_move_up else "gray30",
+            hover_color="#4B5563" if can_move_up else "gray30",
+            state="normal" if can_move_up else "disabled",
+            command=on_move_up,
+        ).pack(side="left", padx=(0, 2))
+
+        ctk.CTkButton(
+            action_btn_frame,
+            text="▼",
+            width=30,
+            height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#374151" if can_move_down else "gray30",
+            hover_color="#4B5563" if can_move_down else "gray30",
+            state="normal" if can_move_down else "disabled",
+            command=on_move_down,
+        ).pack(side="left", padx=(0, 6))
 
         ctk.CTkButton(
             action_btn_frame,
