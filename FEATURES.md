@@ -50,6 +50,21 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 - **Random micro-scrolls** (~20% chance per cycle) for a more human session footprint.
 - **Playback-only**: likes and comments are intentionally never automated.
 
+### Natural Human Interactivity Simulation
+
+- **Randomized Scrolling & Pausing** (`src/automation/interactivity.py`):
+  - On long videos (>= 90s or Full Video mode), smoothly scrolls down below the player into the description and comments section.
+  - Pauses down there for 4-8 seconds with realistic reading patterns (occasional description expansion, comment-reading jitter).
+  - Smoothly scrolls back up to the video player while video playback continues without interruption.
+- **Variable Playback Speeds & Bandwidth-Saving Quality**:
+  - **Playback Speed**: occasionally sets playback speed to **1.25x** (~35% chance per session) using YouTube's Movie Player API (`setPlaybackRate`) with HTML5 fallback.
+  - **Quality Adjustment**: adjusts quality to **360p** or **720p** to simulate user settings and save immense bandwidth and CPU/GPU usage.
+- **Random Micro-Pauses**:
+  - Briefly pauses video playback for **2-5 seconds** midway through a long video to simulate realistic human distraction.
+  - Resumes playback cleanly without false auto-resume errors or watchtime timeline corruption.
+- **Configurable in Settings**:
+  - Master toggle `EnableHumanInteractivity` with individual switches for scrolling, speed variation, quality adjustment, quality target (360p/720p), and micro-pauses.
+
 ### Ad Handling
 
 - **Detection** (`src/automation/ads.py`): strict signals only — `ytp-showing-ad` class, a non-empty `.video-ads` container, `.ytp-ad-player-container`, or `adformat=` in the player source. The up-next countdown does **not** false-positive as an ad.

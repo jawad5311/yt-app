@@ -17,6 +17,14 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] **Dead config keys** — `AccessKey` removed from defaults and purged from existing files; `WatchtimeDuration` now drives the Add Task default; `AppearanceMode` now drives the real theme.
 - [x] **`logs/.gitkeep` referenced but missing** — created; the `logs/` folder is now kept in the repo.
 
+### Natural Human Interactivity Simulation
+
+- [x] **Randomized Scrolling & Pausing** — simulates scrolling down to read comments or description during long videos, pauses to read with natural jitter and description expand, then scrolls back.
+- [x] **Variable Playback Speeds** — occasionally sets playback speed to 1.25x via YouTube Player API and video element.
+- [x] **Bandwidth Saver Quality** — adjusts video quality to 360p or 720p to save bandwidth and mimic real user settings.
+- [x] **Random Micro-Pauses** — pauses playback for 2-5 seconds midway through long videos to simulate human distraction, resuming cleanly with clock synchronization.
+- [x] **Settings UI & Configuration** — complete suite of controls on the Settings screen with instant persistence in `settings.json`.
+
 ### Reliability features
 
 - [x] One automatic retry per task (`MAX_ATTEMPTS_PER_TASK = 2`) before skipping.

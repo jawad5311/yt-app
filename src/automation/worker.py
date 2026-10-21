@@ -1,7 +1,7 @@
 import logging
 import queue
 import threading
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
@@ -87,6 +87,18 @@ class AutomationWorker:
         buffer_val = self.config_mgr.get_int("AutoplayEndBufferSeconds", 10)
         return float(max(0, buffer_val))
 
+    def _interactivity_settings(self) -> Tuple[bool, Dict[str, Any]]:
+        """Read natural human interactivity simulation settings."""
+        enabled = self.config_mgr.get_bool("EnableHumanInteractivity", True)
+        config: Dict[str, Any] = {
+            "scroll_comments": self.config_mgr.get_bool("RandomScrolling", True),
+            "variable_speed": self.config_mgr.get_bool("VariableSpeed", True),
+            "adjust_quality": self.config_mgr.get_bool("AdjustQuality", True),
+            "quality_level": self.config_mgr.get_setting("QualityLevel", "360p"),
+            "micro_pauses": self.config_mgr.get_bool("RandomMicroPauses", True),
+        }
+        return enabled, config
+
     # ------------------------------------------------------------------- tasks
 
     def _run_task(self, task: VideoTask, direct_link_fallback: bool) -> TaskOutcome:
@@ -163,6 +175,7 @@ class AutomationWorker:
                 outcome.video_key = resolve_video_key(task, resolved_url)
 
                 try:
+                    enable_interactivity, interactivity_cfg = self._interactivity_settings()
                     result = watch_video(
                         self.driver,
                         task.parse_duration_seconds(),
@@ -172,6 +185,8 @@ class AutomationWorker:
                         skip_ads=self.skip_ads,
                         max_ad_seconds=self.max_ad_seconds,
                         end_buffer_seconds=self._end_buffer_seconds(),
+                        enable_interactivity=enable_interactivity,
+                        interactivity_config=interactivity_cfg,
                     )
                     outcome.watched_seconds += max(0.0, result.watched_seconds)
                     outcome.ad_seconds += max(0.0, result.ad_seconds)

@@ -111,6 +111,72 @@ class SettingsView(ctk.CTkFrame):
         self.loop_entry.insert(0, str(self.config_mgr.get_int("AutomationLoops", 1)))
         self.loop_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
+        # Natural Human Interactivity Simulation
+        ctk.CTkLabel(
+            container,
+            text="Natural Human Interactivity Simulation",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(15, 8))
+
+        self.interactivity_switch = ctk.CTkSwitch(
+            container,
+            text="Simulate Natural Human Interactivity (scrolling, speed/quality, micro-pauses)",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        if self.config_mgr.get_bool("EnableHumanInteractivity", True):
+            self.interactivity_switch.select()
+        else:
+            self.interactivity_switch.deselect()
+        self.interactivity_switch.pack(anchor="w", padx=15, pady=(5, 5))
+
+        self.scroll_switch = ctk.CTkSwitch(
+            container,
+            text="Randomized Scrolling & Pausing (browse comments/description during long videos)",
+        )
+        if self.config_mgr.get_bool("RandomScrolling", True):
+            self.scroll_switch.select()
+        else:
+            self.scroll_switch.deselect()
+        self.scroll_switch.pack(anchor="w", padx=30, pady=(2, 4))
+
+        self.speed_switch = ctk.CTkSwitch(
+            container,
+            text="Variable Playback Speeds (occasionally set playback speed to 1.25x)",
+        )
+        if self.config_mgr.get_bool("VariableSpeed", True):
+            self.speed_switch.select()
+        else:
+            self.speed_switch.deselect()
+        self.speed_switch.pack(anchor="w", padx=30, pady=(2, 4))
+
+        self.quality_switch = ctk.CTkSwitch(
+            container,
+            text="Bandwidth Saver Quality (adjust video quality to 360p / 720p)",
+        )
+        if self.config_mgr.get_bool("AdjustQuality", True):
+            self.quality_switch.select()
+        else:
+            self.quality_switch.deselect()
+        self.quality_switch.pack(anchor="w", padx=30, pady=(2, 4))
+
+        ctk.CTkLabel(container, text="Target Bandwidth-Saving Quality:", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=45, pady=(2, 2)
+        )
+        self.quality_menu = ctk.CTkOptionMenu(container, values=["360p", "720p"], width=120)
+        configured_q = self.config_mgr.get_setting("QualityLevel", "360p")
+        self.quality_menu.set(configured_q if configured_q in ["360p", "720p"] else "360p")
+        self.quality_menu.pack(anchor="w", padx=45, pady=(0, 6))
+
+        self.micro_pause_switch = ctk.CTkSwitch(
+            container,
+            text="Random Micro-Pauses (brief 2-5s pause midway simulating human distraction)",
+        )
+        if self.config_mgr.get_bool("RandomMicroPauses", True):
+            self.micro_pause_switch.select()
+        else:
+            self.micro_pause_switch.deselect()
+        self.micro_pause_switch.pack(anchor="w", padx=30, pady=(2, 15))
+
         # Appearance Mode
         ctk.CTkLabel(container, text="Appearance Mode:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
@@ -177,6 +243,13 @@ class SettingsView(ctk.CTkFrame):
         except ValueError:
             messagebox.showerror("Error", "Automation Loops must be a valid positive integer.")
             return
+
+        self.config_mgr.set_setting("EnableHumanInteractivity", str(bool(self.interactivity_switch.get())))
+        self.config_mgr.set_setting("RandomScrolling", str(bool(self.scroll_switch.get())))
+        self.config_mgr.set_setting("VariableSpeed", str(bool(self.speed_switch.get())))
+        self.config_mgr.set_setting("AdjustQuality", str(bool(self.quality_switch.get())))
+        self.config_mgr.set_setting("QualityLevel", self.quality_menu.get())
+        self.config_mgr.set_setting("RandomMicroPauses", str(bool(self.micro_pause_switch.get())))
 
         self.config_mgr.set_setting("WatchtimeDuration", self.duration_menu.get())
         self.config_mgr.set_setting("AppearanceMode", self.appearance_menu.get())

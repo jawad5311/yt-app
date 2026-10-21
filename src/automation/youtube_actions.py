@@ -3,7 +3,7 @@ import queue
 import random
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from selenium.webdriver.common.by import By
 
@@ -11,6 +11,7 @@ from ..models.watch_stats import WatchResult
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .ads import PLAYER_STATE_JS, AdWatchState
+from .interactivity import HumanInteractivitySimulator
 
 # Abort the watch loop when no <video> element is present for this many seconds.
 VIDEO_MISSING_LIMIT_SECONDS = 60
@@ -129,7 +130,6 @@ def calculate_end_buffer(video_duration: float, target_buffer: float = 10.0) -> 
     return min(target_buffer, max_allowed)
 
 
-
 def watch_video(
     driver: Any,
     duration_seconds: Optional[int],
@@ -139,6 +139,8 @@ def watch_video(
     skip_ads: bool = True,
     max_ad_seconds: int = 32,
     end_buffer_seconds: float = 0.0,
+    enable_interactivity: bool = True,
+    interactivity_config: Optional[Dict[str, Any]] = None,
 ) -> WatchResult:
     """Watch the target video for a fixed duration or its full length.
 
@@ -151,6 +153,8 @@ def watch_video(
         max_ad_seconds: cumulative ad-watch cap used when ``skip_ads`` is off.
         end_buffer_seconds: early stop buffer before video ends (5-15s) to prevent
             YouTube autoplay. ``0`` selects a randomized 7-12s buffer.
+        enable_interactivity: whether to simulate human interactivity.
+        interactivity_config: optional dict configuring interactivity features.
 
     Returns:
         A :class:`WatchResult`; ``bool(result)`` is True when the watch finished
@@ -165,6 +169,18 @@ def watch_video(
         random.uniform(7.0, 12.0)
         if (end_buffer_seconds is None or end_buffer_seconds <= 0)
         else float(end_buffer_seconds)
+    )
+
+    cfg = interactivity_config or {}
+    simulator = HumanInteractivitySimulator(
+        enabled=enable_interactivity,
+        scroll_comments=cfg.get("scroll_comments", True),
+        variable_speed=cfg.get("variable_speed", True),
+        adjust_quality=cfg.get("adjust_quality", True),
+        quality_level=cfg.get("quality_level", "360p"),
+        micro_pauses=cfg.get("micro_pauses", True),
+        speed_chance=cfg.get("speed_chance", 0.35),
+        quality_chance=cfg.get("quality_chance", 0.60),
     )
 
     initial_video_id: Optional[str] = None
@@ -408,14 +424,24 @@ def watch_video(
                 emit(log_queue, f"Reached watch duration limit ({duration_seconds}s).")
                 return _result(True, "duration_reached", playback_finished=True)
 
-        time.sleep(3)
+        # Natural human interactivity simulation (scrolling down to comments, variable speed/quality, micro-pauses)
+        interactive_event = simulator.on_playback_tick(
+            driver,
+            curr_time=curr_time,
+            video_duration=video_duration,
+            is_ad=is_ad,
+            paused=paused,
+            stop_event=stop_event,
+            log_queue=log_queue,
+            duration_budget=duration_seconds,
+        )
+        if interactive_event.get("micro_paused"):
+            # Micro-pause took 2-5s with video paused. Reset last_tick so paused
+            # seconds are not accumulated as active watch playback time.
+            last_tick = time.time()
 
-        # Occasional random micro-scroll while the main video plays
-        if random.random() < 0.2:
-            try:
-                scroll_amount = random.randint(100, 300)
-                driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
-                time.sleep(random.uniform(1.0, 2.0))
-                driver.execute_script(f"window.scrollBy(0, -{scroll_amount});")
-            except Exception:
-                pass
+        if stop_event is not None and stop_event.is_set():
+            emit(log_queue, "Watchtime interrupted by user.")
+            return _result(False, "interrupted", interrupted=True)
+
+        time.sleep(3)

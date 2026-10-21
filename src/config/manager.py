@@ -35,6 +35,12 @@ class ConfigManager:
             "MaxAdWatchSeconds": 32,
             "AutoplayEndBufferSeconds": 10,
             "AutomationLoops": 1,
+            "EnableHumanInteractivity": True,
+            "RandomScrolling": True,
+            "VariableSpeed": True,
+            "AdjustQuality": True,
+            "QualityLevel": "360p",
+            "RandomMicroPauses": True,
         },
         "accounts": [],
         "videos": [],
@@ -210,12 +216,12 @@ class ConfigManager:
             self.data["videos"] = video_list
             self._save_unlocked()
 
-    def get_channels(self) -> List[Dict[str, str]]:
+    def get_channels(self) -> List[Dict[str, Any]]:
         """Return the saved channel list (name + url dictionaries)."""
         with self._lock:
             return [dict(entry) for entry in self.data.get("channels", [])]
 
-    def set_channels(self, channel_list: List[Dict[str, str]]) -> None:
+    def set_channels(self, channel_list: List[Dict[str, Any]]) -> None:
         """Persist the channel list, sanitized of blanks and duplicate names."""
         with self._lock:
             self.data["channels"] = self._sanitize_channels(channel_list)

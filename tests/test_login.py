@@ -1,4 +1,5 @@
 import queue
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -121,7 +122,7 @@ def test_perform_google_login_already_logged_in():
     driver = MagicMock()
     driver.current_url = "https://myaccount.google.com/"
     account = Account(email="alreadyin@gmail.com", password="pw")
-    q = queue.Queue()
+    q: queue.Queue[Any] = queue.Queue()
 
     with patch("src.automation.login.safe_get") as mock_safe_get:
         res = perform_google_login(driver, account, log_queue=q)
