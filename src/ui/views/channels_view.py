@@ -43,6 +43,15 @@ class ChannelsView(ctk.CTkFrame):
             command=lambda: self.open_channel_modal(),
         ).pack(side="left", padx=(0, 10))
 
+        self.current_tab = "Active"
+        self.tab_selector = ctk.CTkSegmentedButton(
+            btn_frame,
+            values=["Active", "Archived"],
+            command=self._on_tab_change,
+        )
+        self.tab_selector.set("Active")
+        self.tab_selector.pack(side="left", padx=(0, 10))
+
         ctk.CTkButton(
             btn_frame,
             text="🗑 Clear All",
@@ -167,6 +176,169 @@ class ChannelsView(ctk.CTkFrame):
 
     # --------------------------------------------------------------- actions
 
+    def _on_tab_change(self, selected_val: str) -> None:
+        self.current_tab = "Archived" if "Archived" in selected_val else "Active"
+        self.refresh_list()
+
+    def archive_channel(self, index: int) -> None:
+        if not 0 <= index < len(self.channels):
+            return
+        self.channels[index].archived = True
+        self.save_channels()
+        queue = self._queue_view()
+        if queue is not None:
+            queue.refresh_list()
+
+    def unarchive_channel(self, index: int) -> None:
+        if not 0 <= index < len(self.channels):
+            return
+        self.channels[index].archived = False
+        self.save_channels()
+        queue = self._queue_view()
+        if queue is not None:
+            queue.refresh_list()
+
+    def open_channel_videos_modal(self, channel: Channel):
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Channel Videos — {channel.name}")
+        modal.geometry("680x560")
+        modal.grab_set()
+
+        header = ctk.CTkFrame(modal, fg_color="transparent")
+        header.pack(fill="x", padx=20, pady=(15, 8))
+
+        tag = " [ARCHIVED]" if channel.archived else (" [DISABLED]" if not channel.enabled else "")
+        ctk.CTkLabel(
+            header,
+            text=f"📺 {channel.name}{tag}",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(anchor="w")
+
+        if channel.url:
+            ctk.CTkLabel(
+                header,
+                text=channel.url,
+                font=ctk.CTkFont(size=12),
+                text_color=("gray40", "gray60"),
+            ).pack(anchor="w")
+
+        stats = self.channel_stats_line(channel.name)
+        if stats:
+            ctk.CTkLabel(
+                header,
+                text=stats,
+                font=ctk.CTkFont(size=12, slant="italic"),
+            ).pack(anchor="w", pady=(2, 0))
+
+        modal_actions = ctk.CTkFrame(modal, fg_color="transparent")
+        modal_actions.pack(fill="x", padx=20, pady=(4, 10))
+
+        def _add_video_for_channel():
+            queue = self._queue_view()
+            if queue is None:
+                return
+            queue.open_video_modal(
+                preselected_channel=channel.name,
+                on_saved=lambda _: _refresh_modal_videos(),
+            )
+
+        ctk.CTkButton(
+            modal_actions,
+            text="+ New Video",
+            font=ctk.CTkFont(weight="bold"),
+            fg_color="#2FA572",
+            hover_color="#1E7B52",
+            command=_add_video_for_channel,
+        ).pack(side="left")
+
+        scroll = ctk.CTkScrollableFrame(modal, label_text=f"Videos under '{channel.name}'")
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+
+        def _refresh_modal_videos():
+            for w in scroll.winfo_children():
+                w.destroy()
+
+            tasks = getattr(self.app_controller, "queued_video_tasks", []) or []
+            channel_tasks = [
+                (idx, t) for idx, t in enumerate(tasks)
+                if (t.channel or "").strip().lower() == channel.name.lower()
+            ]
+
+            if not channel_tasks:
+                ctk.CTkLabel(
+                    scroll,
+                    text="No videos in this channel yet.\nClick '+ New Video' above to add one.",
+                    font=ctk.CTkFont(size=14, slant="italic"),
+                    justify="center",
+                ).pack(pady=40)
+                self.refresh_list()
+                return
+
+            queue = self._queue_view()
+            for pos, (real_idx, task) in enumerate(channel_tasks, start=1):
+                card = ctk.CTkFrame(scroll, corner_radius=6)
+                card.pack(fill="x", padx=5, pady=4)
+                card.grid_columnconfigure(0, weight=1)
+                card.grid_columnconfigure(1, weight=0)
+
+                label_parts = [f"{pos}. {task.title or task.keywords or 'Untitled Video'}"]
+                if task.title_2:
+                    label_parts.append(f"Retry 2: {task.title_2}")
+                if task.title_3:
+                    label_parts.append(f"Retry 3: {task.title_3}")
+                if task.url:
+                    label_parts.append(f"URL: {task.url}")
+                status_info = f"Duration: {task.watchtime_duration or 'Full Video'}"
+                if task.max_runs > 0:
+                    status_info += f"  |  Limit: {task.max_runs} runs"
+                label_parts.append(status_info)
+
+                ctk.CTkLabel(
+                    card,
+                    text="\n".join(label_parts),
+                    font=ctk.CTkFont(size=12),
+                    justify="left",
+                    anchor="w",
+                ).grid(row=0, column=0, padx=12, pady=8, sticky="w")
+
+                card_btns = ctk.CTkFrame(card, fg_color="transparent")
+                card_btns.grid(row=0, column=1, padx=10, pady=8, sticky="e")
+
+                def _edit(idx_to_edit=real_idx):
+                    if queue is not None:
+                        queue.open_video_modal(
+                            edit_index=idx_to_edit,
+                            on_saved=lambda _: _refresh_modal_videos(),
+                        )
+
+                def _delete(idx_to_del=real_idx):
+                    if queue is not None:
+                        queue.remove_task(idx_to_del)
+                        _refresh_modal_videos()
+                        self.refresh_list()
+
+                ctk.CTkButton(
+                    card_btns,
+                    text="✏ Edit",
+                    width=60,
+                    fg_color="#1F6AA5",
+                    hover_color="#144870",
+                    command=_edit,
+                ).pack(side="left", padx=(0, 4))
+
+                ctk.CTkButton(
+                    card_btns,
+                    text="🗑 Delete",
+                    width=60,
+                    fg_color="#D32F2F",
+                    hover_color="#9A0007",
+                    command=_delete,
+                ).pack(side="left")
+
+            self.refresh_list()
+
+        _refresh_modal_videos()
+
     def remove_channel(self, index: int) -> None:
         if not 0 <= index < len(self.channels):
             return
@@ -205,18 +377,33 @@ class ChannelsView(ctk.CTkFrame):
         for child in self.scroll_frame.winfo_children():
             child.destroy()
 
-        if not self.channels:
+        active = [(i, ch) for i, ch in enumerate(self.channels) if not ch.archived]
+        archived = [(i, ch) for i, ch in enumerate(self.channels) if ch.archived]
+
+        val_active = f"Active ({len(active)})"
+        val_archived = f"Archived ({len(archived)})"
+        self.tab_selector.configure(values=[val_active, val_archived])
+        self.tab_selector.set(val_archived if self.current_tab == "Archived" else val_active)
+
+        current_items = archived if self.current_tab == "Archived" else active
+
+        if not current_items:
+            empty_msg = (
+                "No archived channels yet."
+                if self.current_tab == "Archived"
+                else "No active channels yet. Click '+ Add Channel' to create one, then attach videos to it in the queue."
+            )
             ctk.CTkLabel(
                 self.scroll_frame,
-                text="No channels yet. Click '+ Add Channel' to create one, then attach videos to it in the queue.",
+                text=empty_msg,
                 font=ctk.CTkFont(size=14, slant="italic"),
                 wraplength=520,
                 justify="left",
             ).pack(pady=30)
             return
 
-        for idx, channel in enumerate(self.channels):
-            row = ctk.CTkFrame(self.scroll_frame, corner_radius=6)
+        for pos, (real_idx, channel) in enumerate(current_items, start=1):
+            row = ctk.CTkFrame(self.scroll_frame, corner_radius=6, cursor="hand2")
             row.pack(fill="x", padx=5, pady=4)
             row.grid_columnconfigure(0, weight=0)
             row.grid_columnconfigure(1, weight=1)
@@ -243,19 +430,33 @@ class ChannelsView(ctk.CTkFrame):
 
             count = self.video_count(channel.name)
             subtitle = channel.url or "No URL"
-            status_tag = "" if channel.enabled else " [DISABLED]"
-            info_text = f"{idx + 1}. {channel.name}{status_tag}\n{subtitle}  |  {count} video(s)"
+            status_tag = ""
+            if channel.archived:
+                status_tag = " [ARCHIVED]"
+            elif not channel.enabled:
+                status_tag = " [DISABLED]"
+
+            info_text = f"{pos}. {channel.name}{status_tag}\n{subtitle}  |  {count} video(s)  (Click to view videos)"
             stats_line = self.channel_stats_line(channel.name)
             if stats_line:
                 info_text += f"\n{stats_line}"
-            ctk.CTkLabel(
+
+            def _on_channel_click(event=None, ch=channel):
+                self.open_channel_videos_modal(ch)
+
+            row.bind("<Button-1>", _on_channel_click)
+
+            lbl = ctk.CTkLabel(
                 row,
                 text=info_text,
                 font=ctk.CTkFont(size=13),
                 justify="left",
                 anchor="w",
+                cursor="hand2",
                 text_color=("gray50", "gray50") if not channel.enabled else None,
-            ).grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+            )
+            lbl.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+            lbl.bind("<Button-1>", _on_channel_click)
 
             action_frame = ctk.CTkFrame(row, fg_color="transparent")
             action_frame.grid(row=0, column=2, padx=10, pady=8, sticky="e")
@@ -272,12 +473,40 @@ class ChannelsView(ctk.CTkFrame):
 
             ctk.CTkButton(
                 action_frame,
+                text="🎬 Videos",
+                width=65,
+                fg_color="#3B82F6",
+                hover_color="#1D4ED8",
+                command=lambda ch=channel: self.open_channel_videos_modal(ch),
+            ).pack(side="left", padx=(0, 4))
+
+            ctk.CTkButton(
+                action_frame,
                 text="✏ Edit",
                 width=60,
                 fg_color="#1F6AA5",
                 hover_color="#144870",
-                command=lambda i=idx: self.open_channel_modal(edit_index=i),
+                command=lambda i=real_idx: self.open_channel_modal(edit_index=i),
             ).pack(side="left", padx=(0, 4))
+
+            if channel.archived:
+                ctk.CTkButton(
+                    action_frame,
+                    text="📂 Restore",
+                    width=70,
+                    fg_color="#059669",
+                    hover_color="#047857",
+                    command=lambda i=real_idx: self.unarchive_channel(i),
+                ).pack(side="left", padx=(0, 4))
+            else:
+                ctk.CTkButton(
+                    action_frame,
+                    text="📁 Archive",
+                    width=68,
+                    fg_color="#D97706",
+                    hover_color="#B45309",
+                    command=lambda i=real_idx: self.archive_channel(i),
+                ).pack(side="left", padx=(0, 4))
 
             ctk.CTkButton(
                 action_frame,
@@ -285,5 +514,5 @@ class ChannelsView(ctk.CTkFrame):
                 width=65,
                 fg_color="#D32F2F",
                 hover_color="#9A0007",
-                command=lambda i=idx: self.remove_channel(i),
+                command=lambda i=real_idx: self.remove_channel(i),
             ).pack(side="left")

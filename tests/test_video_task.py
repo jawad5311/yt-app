@@ -44,7 +44,8 @@ def test_unknown_duration_falls_back_to_five_minutes():
 
 def test_default_duration_matches_constant():
     assert VideoTask().watchtime_duration == DEFAULT_WATCHTIME_DURATION
-    assert VideoTask().parse_duration_seconds() == 300
+    assert VideoTask().is_full_video() is True
+    assert VideoTask().parse_duration_seconds() is None
 
 
 def test_options_include_full_video_and_default():

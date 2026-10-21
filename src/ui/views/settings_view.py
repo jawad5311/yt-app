@@ -33,7 +33,7 @@ class SettingsView(ctk.CTkFrame):
             text="Enable Direct Link Fallback (if Organic Search finds no match)",
             font=ctk.CTkFont(weight="bold"),
         )
-        if self.config_mgr.get_bool("DirectLinkFallback", True):
+        if self.config_mgr.get_bool("DirectLinkFallback", False):
             self.fallback_switch.select()
         else:
             self.fallback_switch.deselect()
@@ -56,13 +56,13 @@ class SettingsView(ctk.CTkFrame):
         self.duration_menu.set(configured_duration if configured_duration in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION)
         self.duration_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Skip Ads toggle
+        # Block Ads toggle (formerly Skip Ads)
         self.skip_ads_switch = ctk.CTkSwitch(
             container,
-            text="Skip Ads (block with uBlock Lite + skip fallback after 30-35s)",
+            text="Block Ads entirely (block with uBlock Lite + skip fallback after 30-35s)",
             font=ctk.CTkFont(weight="bold"),
         )
-        if self.config_mgr.get_bool("SkipAds", True):
+        if self.config_mgr.get_bool("BlockAds", self.config_mgr.get_bool("SkipAds", False)):
             self.skip_ads_switch.select()
         else:
             self.skip_ads_switch.deselect()
@@ -75,7 +75,7 @@ class SettingsView(ctk.CTkFrame):
             text_color=("gray40", "gray60"),
         ).pack(anchor="w", padx=15, pady=(0, 12))
 
-        # Max ad watch cap (Skip Ads off)
+        # Max ad watch cap (Block Ads off)
         ctk.CTkLabel(container, text="Max Ad Watch (seconds, 0 = unlimited):", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
@@ -88,7 +88,7 @@ class SettingsView(ctk.CTkFrame):
             anchor="w", padx=15, pady=(5, 2)
         )
         self.full_timeout_entry = ctk.CTkEntry(container, width=100)
-        self.full_timeout_entry.insert(0, str(self.config_mgr.get_int("FullVideoTimeoutMinutes", 360)))
+        self.full_timeout_entry.insert(0, str(self.config_mgr.get_int("FullVideoTimeoutMinutes", 5)))
         self.full_timeout_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # Full Video early stop buffer (to avoid autoplay)
@@ -134,7 +134,9 @@ class SettingsView(ctk.CTkFrame):
 
     def save_settings(self):
         self.config_mgr.set_setting("DirectLinkFallback", str(bool(self.fallback_switch.get())))
-        self.config_mgr.set_setting("SkipAds", str(bool(self.skip_ads_switch.get())))
+        block_ads_val = str(bool(self.skip_ads_switch.get()))
+        self.config_mgr.set_setting("BlockAds", block_ads_val)
+        self.config_mgr.set_setting("SkipAds", block_ads_val)
 
         try:
             max_ad = int(self.max_ad_entry.get().strip())

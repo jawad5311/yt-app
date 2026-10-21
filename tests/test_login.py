@@ -1,12 +1,12 @@
 import queue
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.automation.login import (
     _handle_account_chooser,
     _handle_email_input,
     _handle_password_input,
-    _handle_post_login_prompts,
     is_logged_in,
     perform_google_login,
 )

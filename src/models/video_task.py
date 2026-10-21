@@ -20,7 +20,7 @@ WATCHTIME_OPTIONS: List[str] = [
     "24 Hours",
 ]
 
-DEFAULT_WATCHTIME_DURATION = "5 Minutes"
+DEFAULT_WATCHTIME_DURATION = "Full Video"
 
 
 @dataclass

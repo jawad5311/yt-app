@@ -169,3 +169,33 @@ def test_a_stats_error_never_breaks_the_session(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "record", broken_record)
 
     worker._record(TaskOutcome(video_key="dQw4w9WgXcQ", attempts=1, success=True))  # must not raise
+
+
+def test_organic_retry_appends_channel_name_on_third_attempt(tmp_path, monkeypatch):
+    worker, store = make_worker(tmp_path)
+    task = VideoTask(title="My Video", channel="Cooking Channel")
+
+    captured_overrides = []
+
+    def mock_nav(*args, **kwargs):
+        captured_overrides.append(kwargs.get("search_query_override"))
+        if len(captured_overrides) >= 3:
+            return True
+        return False
+
+    monkeypatch.setattr(worker_module, "navigate_to_video_organically", mock_nav)
+    monkeypatch.setattr(
+        worker_module,
+        "watch_video",
+        lambda *a, **k: WatchResult(completed=True, watched_seconds=10.0, ad_seconds=0.0, reason="duration_reached"),
+    )
+
+    outcome = worker._run_task(task, direct_link_fallback=False)
+    assert outcome.success is True
+    assert outcome.attempts == 3
+    # First 2 attempts used the plain title
+    assert captured_overrides[0] == "My Video"
+    assert captured_overrides[1] == "My Video"
+    # Third attempt appended the channel name
+    assert captured_overrides[2] == "My Video Cooking Channel"
+

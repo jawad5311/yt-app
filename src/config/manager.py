@@ -25,12 +25,13 @@ class ConfigManager:
     DEFAULT_DATA: Dict[str, Any] = {
         "settings": {
             "AccountsFile": "accounts.txt",
-            "DirectLinkFallback": True,
+            "DirectLinkFallback": False,
             "WatchtimeDuration": DEFAULT_WATCHTIME_DURATION,
             "ParallelBrowsers": 1,
             "AppearanceMode": "Dark",
-            "FullVideoTimeoutMinutes": 360,
-            "SkipAds": True,
+            "FullVideoTimeoutMinutes": 5,
+            "BlockAds": False,
+            "SkipAds": False,
             "MaxAdWatchSeconds": 32,
             "AutoplayEndBufferSeconds": 10,
             "AutomationLoops": 1,

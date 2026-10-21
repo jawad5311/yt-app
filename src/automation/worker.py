@@ -69,14 +69,14 @@ class AutomationWorker:
 
     def _full_video_timeout_seconds(self) -> int:
         """Full-video guard in seconds. 0 (or a negative value) disables the guard."""
-        minutes = self.config_mgr.get_int("FullVideoTimeoutMinutes", 360)
+        minutes = self.config_mgr.get_int("FullVideoTimeoutMinutes", 5)
         if minutes < 0:
             return DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS
         return minutes * 60
 
     def _ad_settings(self) -> Tuple[bool, int]:
-        """Read the Skip Ads toggle and its cumulative ad-watch cap."""
-        skip_ads = self.config_mgr.get_bool("SkipAds", True)
+        """Read the Block Ads (Skip Ads) toggle and its cumulative ad-watch cap."""
+        skip_ads = self.config_mgr.get_bool("BlockAds", self.config_mgr.get_bool("SkipAds", False))
         max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 32)
         if max_ad_seconds < 0:
             max_ad_seconds = 0
@@ -120,10 +120,19 @@ class AutomationWorker:
                 overall_attempt += 1
                 outcome.attempts = overall_attempt
 
+                # On the 3rd attempt for a title, append channel name to search query if available
+                query_to_search = active_query
+                channel_name = (task.channel or "").strip()
+                if try_num == ATTEMPTS_PER_TITLE and channel_name:
+                    if query_to_search:
+                        query_to_search = f"{query_to_search} {channel_name}"
+                    else:
+                        query_to_search = channel_name
+
                 if overall_attempt > 1:
                     emit(
                         self.log_queue,
-                        f"Retrying task (attempt {overall_attempt}/{total_max_attempts} - Title {title_idx}/{len(title_queries)}, try {try_num}/{ATTEMPTS_PER_TITLE}) using title: '{active_query}'...",
+                        f"Retrying task (attempt {overall_attempt}/{total_max_attempts} - Title {title_idx}/{len(title_queries)}, try {try_num}/{ATTEMPTS_PER_TITLE}) using title: '{query_to_search}'...",
                     )
 
                 # Fallback to direct navigation URL only on the final possible attempt
@@ -136,7 +145,7 @@ class AutomationWorker:
                         task,
                         direct_link_fallback=allow_direct,
                         log_queue=self.log_queue,
-                        search_query_override=active_query,
+                        search_query_override=query_to_search,
                     )
                 except Exception as exc:
                     emit(self.log_queue, f"Navigation error: {exc}", logging.ERROR)
@@ -201,7 +210,7 @@ class AutomationWorker:
     def run(self) -> None:
         """Main execution flow for account thread."""
         emit(self.log_queue, f"Starting automation session for account: {self.account.email}")
-        direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", True)
+        direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", False)
 
         if self.dispatcher is not None:
             total = self.dispatcher.register_worker(self.worker_id)

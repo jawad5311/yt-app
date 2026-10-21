@@ -6,7 +6,6 @@ from src.models.channel import (
     NO_CHANNEL_VALUE,
     UNCATEGORIZED_LABEL,
     Channel,
-    VideoGroup,
     group_videos_by_channel,
     normalize_channel_url,
 )
@@ -98,5 +97,45 @@ def test_ui_sentinels_are_distinct():
 
 def test_group_count_property():
     groups = group_videos_by_channel([VideoTask(channel="A")], [Channel(name="A")])
-    assert isinstance(groups[0], VideoGroup)
     assert groups[0].count == 1
+
+
+def test_archived_channel_serialization():
+    ch = Channel(name="Oldies", archived=True)
+    d = ch.to_dict()
+    assert d.get("archived") is True
+    loaded = Channel.from_dict(d)
+    assert loaded.archived is True
+
+
+def test_archived_channels_excluded_from_active_groups():
+    active_ch = Channel(name="Active")
+    archived_ch = Channel(name="Archived", archived=True)
+    v1 = VideoTask(title="Active Video", channel="Active")
+    v2 = VideoTask(title="Archived Video", channel="Archived")
+    v3 = VideoTask(title="Orphan Video", channel="Deleted")
+
+    # When include_archived is False (default):
+    groups = group_videos_by_channel([v1, v2, v3], [active_ch, archived_ch], include_archived=False)
+    # Archived channel and its video must NOT be in active groups, and NOT in uncategorized
+    group_names = [g.name for g in groups]
+    assert "Active" in group_names
+    assert "Archived" not in group_names
+    assert UNCATEGORIZED_LABEL in group_names
+
+    # Verify uncategorized contains ONLY the orphan video, not the archived video
+    uncat = next(g for g in groups if g.is_uncategorized)
+    assert [task.title for _, task in uncat.videos] == ["Orphan Video"]
+
+
+def test_is_video_task_runnable_for_archived_channel():
+    from src.models.channel import is_video_task_runnable
+
+    active_ch = Channel(name="Active", enabled=True, archived=False)
+    archived_ch = Channel(name="Archived", enabled=True, archived=True)
+
+    task_active = VideoTask(title="v1", channel="Active", enabled=True)
+    task_archived = VideoTask(title="v2", channel="Archived", enabled=True)
+
+    assert is_video_task_runnable(task_active, [active_ch, archived_ch]) is True
+    assert is_video_task_runnable(task_archived, [active_ch, archived_ch]) is False

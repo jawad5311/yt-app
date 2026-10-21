@@ -16,8 +16,10 @@ def test_creates_default_file_when_missing(tmp_path):
     mgr = make_manager(tmp_path)
     assert mgr.config_file.exists()
     assert mgr.get_int("ParallelBrowsers", 1) == 1
-    assert mgr.get_setting("WatchtimeDuration") == "5 Minutes"
-    assert mgr.get_bool("DirectLinkFallback", True) is True
+    assert mgr.get_setting("WatchtimeDuration") == "Full Video"
+    assert mgr.get_bool("DirectLinkFallback", False) is False
+    assert mgr.get_bool("BlockAds", False) is False
+    assert mgr.get_int("FullVideoTimeoutMinutes", 5) == 5
     assert mgr.get_int("AutomationLoops", 1) == 1
 
 

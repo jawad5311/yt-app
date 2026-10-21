@@ -307,7 +307,7 @@ def format_watch_line(record: Optional[StatRecord], max_runs: int = 0) -> str:
         else:
             runs_str = f"{current_runs} full runs"
 
-    if current_runs == 0:
+    if record is None or current_runs == 0:
         if max_runs > 0:
             return f"▶ {runs_str}"
         return "▶ Not run yet"

@@ -1,7 +1,5 @@
 """Tests for video task run limit (max_runs), stats checking, and GUI progress bar logic."""
 
-from unittest.mock import MagicMock
-import pytest
 
 from src.automation.dispatcher import TaskDispatcher
 from src.config.stats_store import StatsStore

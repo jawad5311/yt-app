@@ -1,6 +1,6 @@
 import webbrowser
 from tkinter import TclError, messagebox
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import customtkinter as ctk
 
@@ -15,6 +15,7 @@ class QueueView(ctk.CTkFrame):
         super().__init__(parent, corner_radius=10)
         self.app_controller = app_controller
         self.video_tasks: List[VideoTask] = []
+        self.collapsed_groups: set = set()
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -175,13 +176,21 @@ class QueueView(ctk.CTkFrame):
         else:
             messagebox.showinfo("Notice", "No direct video URL is specified for this task.")
 
-    def open_video_modal(self, edit_index: Optional[int] = None):
+    def open_video_modal(
+        self,
+        edit_index: Optional[int] = None,
+        preselected_channel: Optional[str] = None,
+        on_saved: Optional[Any] = None,
+    ):
         index = edit_index if edit_index is not None else -1
         is_editing = 0 <= index < len(self.video_tasks)
         if is_editing:
             target_task = self.video_tasks[index]
         else:
-            target_task = VideoTask(watchtime_duration=self._default_watch_duration())
+            target_task = VideoTask(
+                watchtime_duration=self._default_watch_duration(),
+                channel=preselected_channel or "",
+            )
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
@@ -229,7 +238,8 @@ class QueueView(ctk.CTkFrame):
 
         ctk.CTkLabel(modal, text="Channel:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         channel_option = ctk.CTkOptionMenu(modal, values=self._channel_values(), width=460)
-        channel_option.set(target_task.channel if target_task.channel in self._channel_values() else NO_CHANNEL_VALUE)
+        chosen_channel = target_task.channel or preselected_channel or ""
+        channel_option.set(chosen_channel if chosen_channel in self._channel_values() else NO_CHANNEL_VALUE)
         channel_option.pack(padx=20, pady=(0, 6))
 
         def refresh_channel_options(selected: str = "") -> None:
@@ -311,6 +321,8 @@ class QueueView(ctk.CTkFrame):
             self.save_queue()
             self.refresh_list()
             modal.destroy()
+            if on_saved is not None:
+                on_saved(updated_task)
 
         btn_text = "Save Changes" if is_editing else "Add Task"
         btn_color = "#1F6AA5" if is_editing else "#2FA572"
@@ -362,7 +374,7 @@ class QueueView(ctk.CTkFrame):
             ).pack(pady=30)
             return
 
-        for group in group_videos_by_channel(self.video_tasks, self._channels()):
+        for group in group_videos_by_channel(self.video_tasks, self._channels(), include_archived=False):
             self._render_group(group)
 
     def _render_group(self, group: VideoGroup):
@@ -371,9 +383,19 @@ class QueueView(ctk.CTkFrame):
         container.pack(fill="x", padx=5, pady=(6, 4))
         container.grid_columnconfigure(0, weight=1)
 
-        header = ctk.CTkFrame(container, corner_radius=6, fg_color=("gray88", "gray22"))
+        is_collapsed = group.name in self.collapsed_groups
+
+        def _toggle_collapse(event=None):
+            if group.name in self.collapsed_groups:
+                self.collapsed_groups.remove(group.name)
+            else:
+                self.collapsed_groups.add(group.name)
+            self.refresh_list()
+
+        header = ctk.CTkFrame(container, corner_radius=6, fg_color=("gray88", "gray22"), cursor="hand2")
         header.grid(row=0, column=0, sticky="ew")
         header.grid_columnconfigure(1, weight=1)
+        header.bind("<Button-1>", _toggle_collapse)
 
         col_offset = 0
         if not group.is_uncategorized:
@@ -400,7 +422,8 @@ class QueueView(ctk.CTkFrame):
             ch_chk.grid(row=0, column=0, rowspan=2, padx=(10, 2), pady=6, sticky="w")
             col_offset = 1
 
-        title = f"📺 {group.name}"
+        arrow = "▶ " if is_collapsed else "▼ "
+        title = f"{arrow}📺 {group.name}"
         if not group.is_uncategorized and not group.channel.enabled:
             title += " [DISABLED]"
         title += f"  •  {group.count} video(s)"
@@ -408,27 +431,54 @@ class QueueView(ctk.CTkFrame):
         totals_line = self._group_totals_line(group)
         if totals_line:
             title += f"  •  {totals_line}"
-        ctk.CTkLabel(
+        title_lbl = ctk.CTkLabel(
             header,
             text=title,
             font=ctk.CTkFont(size=14, weight="bold"),
             justify="left",
             anchor="w",
+            cursor="hand2",
             text_color=("gray50", "gray50") if (not group.is_uncategorized and not group.channel.enabled) else None,
-        ).grid(row=0, column=col_offset, padx=12, pady=(6, 0), sticky="ew")
+        )
+        title_lbl.grid(row=0, column=col_offset, padx=12, pady=(6, 0), sticky="ew")
+        title_lbl.bind("<Button-1>", _toggle_collapse)
 
         if group.url:
-            ctk.CTkLabel(
+            url_lbl = ctk.CTkLabel(
                 header,
                 text=group.url,
                 font=ctk.CTkFont(size=12),
                 text_color=("gray30", "gray70"),
                 justify="left",
                 anchor="w",
-            ).grid(row=1, column=col_offset, padx=12, pady=(0, 6), sticky="ew")
+                cursor="hand2",
+            )
+            url_lbl.grid(row=1, column=col_offset, padx=12, pady=(0, 6), sticky="ew")
+            url_lbl.bind("<Button-1>", _toggle_collapse)
 
         header_btns = ctk.CTkFrame(header, fg_color="transparent")
         header_btns.grid(row=0, column=col_offset + 1, rowspan=2, padx=8, pady=6, sticky="e")
+
+        if not group.is_uncategorized:
+            def _archive_channel(ch_name=group.channel.name):
+                channels = self._channels()
+                for ch in channels:
+                    if ch.name.lower() == ch_name.lower():
+                        ch.archived = True
+                self.app_controller.config_mgr.set_channels([c.to_dict() for c in channels])
+                self.refresh_list()
+                channels_view = getattr(self.app_controller, "views", {}).get("channels")
+                if channels_view is not None:
+                    channels_view.load_channels()
+
+            ctk.CTkButton(
+                header_btns,
+                text="📁 Archive",
+                width=80,
+                fg_color="#D97706",
+                hover_color="#B45309",
+                command=_archive_channel,
+            ).pack(side="left", padx=(0, 4))
 
         if group.url:
             ctk.CTkButton(
@@ -448,6 +498,9 @@ class QueueView(ctk.CTkFrame):
             hover_color="#144870",
             command=self.open_channels_view,
         ).pack(side="left")
+
+        if is_collapsed:
+            return
 
         if not group.videos:
             ctk.CTkLabel(
