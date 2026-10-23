@@ -6,6 +6,7 @@ from src.models.channel import (
     NO_CHANNEL_VALUE,
     UNCATEGORIZED_LABEL,
     Channel,
+    canonical_channel_url,
     group_videos_by_channel,
     normalize_channel_url,
 )
@@ -36,6 +37,23 @@ def test_parse_requires_a_name():
 def test_parse_rejects_duplicate_names_case_insensitively():
     with pytest.raises(ValueError, match="already exists"):
         Channel.parse("cooking", "", existing=[Channel(name="Cooking")])
+
+
+def test_parse_rejects_duplicate_urls():
+    existing = [Channel(name="Existing", url="https://www.youtube.com/@NextUniverz")]
+    with pytest.raises(ValueError, match="already exists"):
+        Channel.parse("New Channel", "https://youtube.com/@NextUniverz/videos", existing=existing)
+
+    with pytest.raises(ValueError, match="already exists"):
+        Channel.parse("New Channel 2", "@NextUniverz", existing=existing)
+
+
+def test_canonical_channel_url():
+    assert canonical_channel_url("https://www.youtube.com/@NextUniverz") == "@nextuniverz"
+    assert canonical_channel_url("https://youtube.com/@NextUniverz/videos") == "@nextuniverz"
+    assert canonical_channel_url("youtube.com/channel/UC12345/videos") == "channel/uc12345"
+    assert canonical_channel_url("") == ""
+
 
 
 def test_parse_keeps_unique_names_and_normalizes_url():

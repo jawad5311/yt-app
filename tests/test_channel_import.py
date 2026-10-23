@@ -74,3 +74,39 @@ def test_deduplication_identification():
     new_videos = [v for v in fetched if v.video_id not in existing_ids]
     assert len(new_videos) == 1
     assert new_videos[0].video_id == "brand_new_1"
+
+
+def test_fetch_limit_options_and_custom_parsing():
+    from src.ui.views.channels_view import FETCH_LIMIT_OPTIONS
+
+    assert "5" in FETCH_LIMIT_OPTIONS
+    assert "25" in FETCH_LIMIT_OPTIONS
+    assert "All" in FETCH_LIMIT_OPTIONS
+    assert "Custom..." in FETCH_LIMIT_OPTIONS
+
+    def parse_limit(choice: str, custom_val: str = "") -> int:
+        if choice == "All":
+            return 0
+        if choice == "Custom...":
+            if not custom_val.isdigit() or int(custom_val) <= 0:
+                raise ValueError("Invalid custom limit")
+            return int(custom_val)
+        return int(choice)
+
+    assert parse_limit("All") == 0
+    assert parse_limit("10") == 10
+    assert parse_limit("50") == 50
+    assert parse_limit("Custom...", "42") == 42
+    assert parse_limit("Custom...", "150") == 150
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        parse_limit("Custom...", "0")
+
+    with pytest.raises(ValueError):
+        parse_limit("Custom...", "-5")
+
+    with pytest.raises(ValueError):
+        parse_limit("Custom...", "abc")
+

@@ -5,7 +5,11 @@ from typing import Callable, List, Optional, Set
 
 import customtkinter as ctk
 
-from ...models.channel import UNCATEGORIZED_LABEL, Channel
+from ...models.channel import (
+    UNCATEGORIZED_LABEL,
+    Channel,
+    canonical_channel_url,
+)
 from ...models.video_task import VideoTask
 from ...models.watch_stats import format_totals_line
 from ...utils.channel_fetcher import (
@@ -20,6 +24,20 @@ from .channel_import_modal import ChannelImportModal
 # Called with the saved channel so callers (e.g. the queue modal) can react.
 OnChannelSaved = Callable[[Channel], None]
 OnDialogClosed = Callable[[], None]
+
+FETCH_LIMIT_OPTIONS: List[str] = [
+    "5",
+    "10",
+    "15",
+    "20",
+    "25",
+    "30",
+    "50",
+    "75",
+    "100",
+    "All",
+    "Custom...",
+]
 
 
 class ChannelsView(ctk.CTkFrame):
@@ -126,7 +144,7 @@ class ChannelsView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Channel" if is_editing else "Add Channel")
-        modal.geometry("470x290" if not is_editing else "470x230")
+        modal.geometry("520x300" if not is_editing else "470x230")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Channel Name:", font=ctk.CTkFont(weight="bold")).pack(
@@ -135,7 +153,7 @@ class ChannelsView(ctk.CTkFrame):
         name_entry = ctk.CTkEntry(
             modal,
             placeholder_text="e.g. My Channel (optional if URL provided)",
-            width=410,
+            width=460,
         )
         name_entry.insert(0, target.name)
         name_entry.pack(padx=20, pady=(0, 10))
@@ -143,12 +161,13 @@ class ChannelsView(ctk.CTkFrame):
         ctk.CTkLabel(modal, text="Channel URL:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=20, pady=(5, 2)
         )
-        url_entry = ctk.CTkEntry(modal, placeholder_text="https://www.youtube.com/@handle", width=410)
+        url_entry = ctk.CTkEntry(modal, placeholder_text="https://www.youtube.com/@handle", width=460)
         url_entry.insert(0, target.url)
         url_entry.pack(padx=20, pady=(0, 10))
 
         fetch_var = ctk.BooleanVar(value=True)
         limit_var = ctk.StringVar(value="25")
+        custom_entry = None
         if not is_editing:
             fetch_frame = ctk.CTkFrame(modal, fg_color="transparent")
             fetch_frame.pack(padx=20, pady=(0, 10), fill="x")
@@ -160,11 +179,28 @@ class ChannelsView(ctk.CTkFrame):
                 font=ctk.CTkFont(size=12, weight="bold"),
             ).pack(side="left")
 
+            custom_entry = ctk.CTkEntry(
+                fetch_frame,
+                width=55,
+                height=26,
+                placeholder_text="#",
+            )
+
+            def _on_limit_change(choice: str) -> None:
+                if custom_entry is None:
+                    return
+                if choice == "Custom...":
+                    custom_entry.pack(side="right", padx=(4, 0))
+                    custom_entry.focus_set()
+                else:
+                    custom_entry.pack_forget()
+
             limit_menu = ctk.CTkOptionMenu(
                 fetch_frame,
-                values=["10", "25", "50", "100", "All"],
+                values=FETCH_LIMIT_OPTIONS,
                 variable=limit_var,
-                width=75,
+                command=_on_limit_change,
+                width=90,
                 height=26,
             )
             limit_menu.pack(side="right")
@@ -180,8 +216,40 @@ class ChannelsView(ctk.CTkFrame):
                 messagebox.showerror("Error", "Please provide a Channel Name or Channel URL.", parent=modal)
                 return
 
+            candidates = [ch for i, ch in enumerate(self.channels) if not is_editing or i != index]
+
+            # Check duplicate URL early
+            if raw_url:
+                canon_input = canonical_channel_url(raw_url)
+                if canon_input:
+                    for ch in candidates:
+                        if canonical_channel_url(ch.url) == canon_input:
+                            messagebox.showerror(
+                                "Duplicate Channel",
+                                f"A channel with this URL already exists: '{ch.name}'.",
+                                parent=modal,
+                            )
+                            return
+
             limit_str = limit_var.get()
-            max_fetch = 0 if limit_str == "All" else int(limit_str)
+            if limit_str == "All":
+                max_fetch = 0
+            elif limit_str == "Custom...":
+                custom_val = custom_entry.get().strip() if custom_entry else ""
+                if not custom_val.isdigit() or int(custom_val) <= 0:
+                    messagebox.showerror(
+                        "Invalid Limit",
+                        "Please enter a valid positive number for custom limit.",
+                        parent=modal,
+                    )
+                    return
+                max_fetch = int(custom_val)
+            else:
+                try:
+                    max_fetch = int(limit_str)
+                except ValueError:
+                    max_fetch = 25
+
             should_fetch = not is_editing and fetch_var.get() and bool(raw_url)
 
             # Case: Channel Name left empty, URL provided, and auto-fetch enabled
@@ -198,7 +266,6 @@ class ChannelsView(ctk.CTkFrame):
             if not raw_name and raw_url:
                 raw_name = extract_fallback_channel_name(raw_url)
 
-            candidates = [ch for i, ch in enumerate(self.channels) if not is_editing or i != index]
             try:
                 channel = Channel.parse(
                     raw_name, raw_url, existing=candidates, enabled=target.enabled
@@ -353,6 +420,17 @@ class ChannelsView(ctk.CTkFrame):
         on_saved: Optional[OnChannelSaved] = None,
     ) -> None:
         """Fetch channel name and videos when channel name was omitted, then create channel and prompt for import."""
+        canon_input = canonical_channel_url(raw_url)
+        if canon_input:
+            for ch in self.channels:
+                if canonical_channel_url(ch.url) == canon_input:
+                    messagebox.showerror(
+                        "Duplicate Channel",
+                        f"A channel with this URL already exists: '{ch.name}'.",
+                        parent=self,
+                    )
+                    return
+
         loading = ctk.CTkToplevel(self)
         loading.title("Fetching Channel...")
         loading.geometry("400x140")
@@ -397,6 +475,17 @@ class ChannelsView(ctk.CTkFrame):
                 counter += 1
 
             target_url = res.channel_url or normalize_channel_url(raw_url)
+            canon_target = canonical_channel_url(target_url)
+            if canon_target:
+                for ch in self.channels:
+                    if canonical_channel_url(ch.url) == canon_target:
+                        messagebox.showerror(
+                            "Duplicate Channel",
+                            f"A channel with this URL already exists: '{ch.name}'.",
+                            parent=self,
+                        )
+                        return
+
             channel = Channel(
                 name=unique_name,
                 url=target_url,

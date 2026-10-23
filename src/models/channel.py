@@ -21,6 +21,26 @@ def normalize_channel_url(url: str) -> str:
     return clean
 
 
+def canonical_channel_url(url: str) -> str:
+    """Normalize a channel URL or handle into a canonical key for duplicate checking."""
+    clean = (url or "").strip().lower()
+    if not clean:
+        return ""
+    if "://" in clean:
+        clean = clean.split("://", 1)[1]
+    if clean.startswith("www."):
+        clean = clean[4:]
+    if clean.startswith("youtube.com/"):
+        clean = clean[12:]
+    elif clean.startswith("m.youtube.com/"):
+        clean = clean[14:]
+    clean = clean.rstrip("/")
+    for suffix in ("/videos", "/shorts", "/featured", "/streams", "/community"):
+        if clean.endswith(suffix):
+            clean = clean[:-len(suffix)]
+    return clean.rstrip("/")
+
+
 @dataclass
 class Channel:
     """A YouTube channel (name + URL) that queued videos can be attached to."""
@@ -71,7 +91,17 @@ class Channel:
         for channel in existing:
             if channel.name.lower() == clean_name.lower():
                 raise ValueError(f"A channel named '{channel.name}' already exists.")
-        return cls(name=clean_name, url=normalize_channel_url(url), enabled=enabled, archived=archived)
+
+        clean_url = normalize_channel_url(url)
+        canon_url = canonical_channel_url(clean_url)
+        if canon_url:
+            for channel in existing:
+                if canonical_channel_url(channel.url) == canon_url:
+                    raise ValueError(
+                        f"A channel with this URL already exists ('{channel.name}')."
+                    )
+
+        return cls(name=clean_name, url=clean_url, enabled=enabled, archived=archived)
 
 
 def is_video_task_runnable(
