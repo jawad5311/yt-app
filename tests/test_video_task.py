@@ -86,3 +86,21 @@ def test_channel_roundtrips():
     task = VideoTask(url="https://youtu.be/abcdefghijk", channel="Cooking")
     assert task.to_dict()["channel"] == "Cooking"
     assert VideoTask.from_dict(task.to_dict()) == task
+
+
+def test_video_duration_metadata_storage():
+    task = VideoTask(
+        url="https://www.youtube.com/watch?v=abcdefghijk",
+        title="Sample Video",
+        duration_seconds=500,
+        duration_text="8:20",
+    )
+    serialized = task.to_dict()
+    assert serialized["duration_seconds"] == 500
+    assert serialized["duration_text"] == "8:20"
+
+    restored = VideoTask.from_dict(serialized)
+    assert restored.duration_seconds == 500
+    assert restored.duration_text == "8:20"
+    assert restored == task
+

@@ -40,6 +40,10 @@ class VideoTask:
     enabled: bool = True
     # Maximum lifetime automation runs allowed for this video (0 = unlimited).
     max_runs: int = 0
+    # Length of the video in seconds (as reported by YouTube).
+    duration_seconds: int = 0
+    # Formatted length string (e.g., "14:25").
+    duration_text: str = ""
 
     def __post_init__(self):
         # Synchronize titles and keywords so both properties remain interchangeable
@@ -71,6 +75,8 @@ class VideoTask:
             "channel": self.channel,
             "enabled": self.enabled,
             "max_runs": self.max_runs,
+            "duration_seconds": self.duration_seconds,
+            "duration_text": self.duration_text,
         }
 
     @classmethod
@@ -111,6 +117,14 @@ class VideoTask:
         if isinstance(enabled_val, str):
             enabled_val = enabled_val.lower() in ("true", "1", "yes")
 
+        raw_duration_sec = data.get("duration_seconds", 0)
+        try:
+            duration_seconds_val = max(0, int(raw_duration_sec))
+        except (TypeError, ValueError):
+            duration_seconds_val = 0
+
+        duration_text_val = str(data.get("duration_text", "") or "")
+
         raw_max_runs = data.get("max_runs", 0)
         try:
             max_runs_val = max(0, int(raw_max_runs))
@@ -129,6 +143,8 @@ class VideoTask:
             channel=data.get("channel") or "",
             enabled=bool(enabled_val),
             max_runs=max_runs_val,
+            duration_seconds=duration_seconds_val,
+            duration_text=duration_text_val,
         )
 
     def is_run_limit_reached(self, current_runs: int) -> bool:

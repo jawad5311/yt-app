@@ -101,9 +101,19 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 - **Dashboard**: live cards for *Loaded Accounts*, *Queued Videos*, *Bot Status*, *Total Watch Time*, plus Start/Stop controls.
 - Queue and settings persist in `settings.json` (thread-safe, atomic write via temp-file replace).
 
-### Channels
+### Channels & Automated Video Fetching
 
 - **Channels view** (sidebar → 📺 Channels): create / edit / delete named channels, each with a name and a channel URL.
+- **Automated Video Fetching** (`src/utils/channel_fetcher.py`):
+  - Fetches video metadata directly from any YouTube channel handle (`@handle`) or URL (`/channel/UC...`, `/c/...`) without third-party dependencies.
+  - Automatically parses `ytInitialData` to extract 11-char Video IDs, clean Titles, and video lengths (duration seconds and formatted text).
+  - Auto-extracts channel name and vanity URL when available.
+- **Interactive Selection Preview Modal** (`src/ui/views/channel_import_modal.py`):
+  - Displays fetched videos with individual selection checkboxes, duration badges (`⏱ 8:20`), and `NEW` vs `ALREADY IN QUEUE` status detection.
+  - Bulk actions: **Select All**, **Deselect All**, and **Select New Only**.
+  - Default Watch Duration dropdown pre-set to **Full Video**.
+  - One-click batch import directly to the execution queue under the designated channel.
+- **On-Demand Sync**: **🔄 Fetch** action button available on channel cards and inside the channel inspection modal for syncing new uploads anytime.
 - **Relation**: every queue task can be assigned to one channel (`channel` field on the task); a channel owns any number of videos.
 - **Grouped queue**: the Video Queue screen groups videos under their channel header, with **🔗 Open Channel** and **⚙ Manage** shortcuts.
 - **+ New Channel** inside the *Add/Edit Task* dialog creates a channel without leaving the modal and selects it straight away.

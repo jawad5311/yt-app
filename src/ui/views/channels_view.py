@@ -1,11 +1,21 @@
+import threading
 import webbrowser
 from tkinter import messagebox
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Set
 
 import customtkinter as ctk
 
 from ...models.channel import UNCATEGORIZED_LABEL, Channel
+from ...models.video_task import VideoTask
 from ...models.watch_stats import format_totals_line
+from ...utils.channel_fetcher import (
+    ChannelFetchResult,
+    extract_fallback_channel_name,
+    fetch_channel_videos,
+    normalize_channel_url,
+)
+from ...utils.helpers import extract_video_id
+from .channel_import_modal import ChannelImportModal
 
 # Called with the saved channel so callers (e.g. the queue modal) can react.
 OnChannelSaved = Callable[[Channel], None]
@@ -116,13 +126,17 @@ class ChannelsView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Channel" if is_editing else "Add Channel")
-        modal.geometry("470x230")
+        modal.geometry("470x290" if not is_editing else "470x230")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Channel Name:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=20, pady=(15, 2)
         )
-        name_entry = ctk.CTkEntry(modal, placeholder_text="e.g. My Cooking Channel", width=410)
+        name_entry = ctk.CTkEntry(
+            modal,
+            placeholder_text="e.g. My Channel (optional if URL provided)",
+            width=410,
+        )
         name_entry.insert(0, target.name)
         name_entry.pack(padx=20, pady=(0, 10))
 
@@ -133,11 +147,61 @@ class ChannelsView(ctk.CTkFrame):
         url_entry.insert(0, target.url)
         url_entry.pack(padx=20, pady=(0, 10))
 
+        fetch_var = ctk.BooleanVar(value=True)
+        limit_var = ctk.StringVar(value="25")
+        if not is_editing:
+            fetch_frame = ctk.CTkFrame(modal, fg_color="transparent")
+            fetch_frame.pack(padx=20, pady=(0, 10), fill="x")
+
+            ctk.CTkCheckBox(
+                fetch_frame,
+                text="Fetch videos automatically",
+                variable=fetch_var,
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(side="left")
+
+            limit_menu = ctk.CTkOptionMenu(
+                fetch_frame,
+                values=["10", "25", "50", "100", "All"],
+                variable=limit_var,
+                width=75,
+                height=26,
+            )
+            limit_menu.pack(side="right")
+            ctk.CTkLabel(fetch_frame, text="Limit:", font=ctk.CTkFont(size=12)).pack(
+                side="right", padx=(0, 5)
+            )
+
         def on_submit() -> None:
+            raw_name = name_entry.get().strip()
+            raw_url = url_entry.get().strip()
+
+            if not raw_name and not raw_url:
+                messagebox.showerror("Error", "Please provide a Channel Name or Channel URL.", parent=modal)
+                return
+
+            limit_str = limit_var.get()
+            max_fetch = 0 if limit_str == "All" else int(limit_str)
+            should_fetch = not is_editing and fetch_var.get() and bool(raw_url)
+
+            # Case: Channel Name left empty, URL provided, and auto-fetch enabled
+            if not raw_name and should_fetch:
+                modal.destroy()
+                self._fetch_and_create_channel(
+                    raw_url=raw_url,
+                    max_fetch=max_fetch,
+                    on_saved=on_saved,
+                )
+                return
+
+            # Case: Channel Name left empty, but URL provided without auto-fetch
+            if not raw_name and raw_url:
+                raw_name = extract_fallback_channel_name(raw_url)
+
             candidates = [ch for i, ch in enumerate(self.channels) if not is_editing or i != index]
             try:
                 channel = Channel.parse(
-                    name_entry.get(), url_entry.get(), existing=candidates, enabled=target.enabled
+                    raw_name, raw_url, existing=candidates, enabled=target.enabled
                 )
             except ValueError as exc:
                 messagebox.showerror("Error", str(exc), parent=modal)
@@ -162,6 +226,9 @@ class ChannelsView(ctk.CTkFrame):
             if on_saved:
                 on_saved(channel)
 
+            if should_fetch:
+                self.fetch_videos_for_channel(channel, max_results=max_fetch)
+
         btn_text = "Save Changes" if is_editing else "Add Channel"
         btn_color = "#1F6AA5" if is_editing else "#2FA572"
         btn_hover = "#144870" if is_editing else "#1E7B52"
@@ -179,6 +246,218 @@ class ChannelsView(ctk.CTkFrame):
 
         modal.bind("<Destroy>", _on_destroy)
         name_entry.focus_set()
+
+    def fetch_videos_for_channel(
+        self,
+        channel: Channel,
+        max_results: int = 50,
+        on_imported: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Fetch videos for a channel in a background thread and show selection modal."""
+        if not channel.url:
+            messagebox.showwarning(
+                "Missing URL",
+                f"Channel '{channel.name}' does not have a URL configured.",
+                parent=self,
+            )
+            return
+
+        loading = ctk.CTkToplevel(self)
+        loading.title("Fetching Videos...")
+        loading.geometry("380x140")
+        loading.grab_set()
+
+        ctk.CTkLabel(
+            loading,
+            text=f"Fetching videos from YouTube for\n'{channel.name}'...",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            justify="center",
+        ).pack(pady=(20, 10))
+
+        prog = ctk.CTkProgressBar(loading, mode="indeterminate", width=280)
+        prog.pack(pady=(0, 15))
+        prog.start()
+
+        def _bg_fetch():
+            res = fetch_channel_videos(channel.url, max_results=max_results)
+            self.after(0, lambda: _on_fetch_done(res))
+
+        def _on_fetch_done(res: ChannelFetchResult):
+            try:
+                prog.stop()
+                loading.destroy()
+            except Exception:
+                pass
+
+            if res.error:
+                messagebox.showerror(
+                    "Fetch Error",
+                    f"Failed to fetch videos from channel:\n{res.error}",
+                    parent=self,
+                )
+                return
+
+            if not res.videos:
+                messagebox.showinfo(
+                    "No Videos Found",
+                    f"No public videos were found for '{channel.name}'.",
+                    parent=self,
+                )
+                return
+
+            tasks: List[VideoTask] = getattr(self.app_controller, "queued_video_tasks", []) or []
+            existing_ids: Set[str] = set()
+            for t in tasks:
+                vid = extract_video_id(t.url)
+                if vid:
+                    existing_ids.add(vid)
+
+            def _handle_import(selected_tasks: List[VideoTask]):
+                if not selected_tasks:
+                    return
+                tasks.extend(selected_tasks)
+                self.app_controller.queued_video_tasks = tasks
+                self.app_controller.config_mgr.set_video_queue([t.to_dict() for t in tasks])
+
+                self.refresh_list()
+                queue = self._queue_view()
+                if queue is not None:
+                    queue.refresh_list()
+                update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+                if callable(update_dash):
+                    update_dash()
+                if on_imported:
+                    on_imported()
+
+                messagebox.showinfo(
+                    "Import Complete",
+                    f"Successfully imported {len(selected_tasks)} video(s) for channel '{channel.name}'.",
+                    parent=self,
+                )
+
+            ChannelImportModal(
+                parent=self,
+                channel_name=channel.name,
+                channel_url=channel.url,
+                fetched_videos=res.videos,
+                existing_video_ids=existing_ids,
+                on_import=_handle_import,
+            )
+
+        threading.Thread(target=_bg_fetch, daemon=True).start()
+
+    def _fetch_and_create_channel(
+        self,
+        raw_url: str,
+        max_fetch: int = 50,
+        on_saved: Optional[OnChannelSaved] = None,
+    ) -> None:
+        """Fetch channel name and videos when channel name was omitted, then create channel and prompt for import."""
+        loading = ctk.CTkToplevel(self)
+        loading.title("Fetching Channel...")
+        loading.geometry("400x140")
+        loading.grab_set()
+
+        ctk.CTkLabel(
+            loading,
+            text=f"Resolving channel & fetching videos for\n'{raw_url}'...",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            justify="center",
+        ).pack(pady=(20, 10))
+
+        prog = ctk.CTkProgressBar(loading, mode="indeterminate", width=300)
+        prog.pack(pady=(0, 15))
+        prog.start()
+
+        def _bg_fetch():
+            res = fetch_channel_videos(raw_url, max_results=max_fetch)
+            self.after(0, lambda: _on_fetch_done(res))
+
+        def _on_fetch_done(res: ChannelFetchResult):
+            try:
+                prog.stop()
+                loading.destroy()
+            except Exception:
+                pass
+
+            if res.error:
+                messagebox.showerror(
+                    "Fetch Error",
+                    f"Failed to fetch channel details:\n{res.error}",
+                    parent=self,
+                )
+                return
+
+            resolved_name = (res.channel_title or "").strip() or extract_fallback_channel_name(raw_url)
+            # Ensure unique name among existing channels
+            unique_name = resolved_name
+            counter = 2
+            while any(ch.name.lower() == unique_name.lower() for ch in self.channels):
+                unique_name = f"{resolved_name} ({counter})"
+                counter += 1
+
+            target_url = res.channel_url or normalize_channel_url(raw_url)
+            channel = Channel(
+                name=unique_name,
+                url=target_url,
+                enabled=True,
+            )
+            self.channels.append(channel)
+            self.save_channels()
+
+            queue = self._queue_view()
+            if queue is not None:
+                queue.refresh_list()
+
+            if on_saved:
+                on_saved(channel)
+
+            if not res.videos:
+                messagebox.showinfo(
+                    "Channel Added",
+                    f"Created channel '{channel.name}', but no public videos were found.",
+                    parent=self,
+                )
+                return
+
+            tasks: List[VideoTask] = getattr(self.app_controller, "queued_video_tasks", []) or []
+            existing_ids: Set[str] = set()
+            for t in tasks:
+                vid = extract_video_id(t.url)
+                if vid:
+                    existing_ids.add(vid)
+
+            def _handle_import(selected_tasks: List[VideoTask]):
+                if not selected_tasks:
+                    return
+                tasks.extend(selected_tasks)
+                self.app_controller.queued_video_tasks = tasks
+                self.app_controller.config_mgr.set_video_queue([t.to_dict() for t in tasks])
+
+                self.refresh_list()
+                q = self._queue_view()
+                if q is not None:
+                    q.refresh_list()
+                update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+                if callable(update_dash):
+                    update_dash()
+
+                messagebox.showinfo(
+                    "Import Complete",
+                    f"Successfully imported {len(selected_tasks)} video(s) for channel '{channel.name}'.",
+                    parent=self,
+                )
+
+            ChannelImportModal(
+                parent=self,
+                channel_name=channel.name,
+                channel_url=channel.url,
+                fetched_videos=res.videos,
+                existing_video_ids=existing_ids,
+                on_import=_handle_import,
+            )
+
+        threading.Thread(target=_bg_fetch, daemon=True).start()
 
     # --------------------------------------------------------------- actions
 
@@ -256,6 +535,19 @@ class ChannelsView(ctk.CTkFrame):
             hover_color="#1E7B52",
             command=_add_video_for_channel,
         ).pack(side="left")
+
+        if channel.url:
+            ctk.CTkButton(
+                modal_actions,
+                text="🔄 Fetch Videos",
+                font=ctk.CTkFont(weight="bold"),
+                fg_color="#0D9488",
+                hover_color="#0F766E",
+                command=lambda: self.fetch_videos_for_channel(
+                    channel,
+                    on_imported=lambda: _refresh_modal_videos(),
+                ),
+            ).pack(side="left", padx=(8, 0))
 
         scroll = ctk.CTkScrollableFrame(modal, label_text=f"Videos under '{channel.name}'")
         scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
@@ -583,6 +875,16 @@ class ChannelsView(ctk.CTkFrame):
                 hover_color="#1D4ED8",
                 command=lambda ch=channel: self.open_channel_videos_modal(ch),
             ).pack(side="left", padx=(0, 4))
+
+            if channel.url:
+                ctk.CTkButton(
+                    action_frame,
+                    text="🔄 Fetch",
+                    width=60,
+                    fg_color="#0D9488",
+                    hover_color="#0F766E",
+                    command=lambda ch=channel: self.fetch_videos_for_channel(ch),
+                ).pack(side="left", padx=(0, 4))
 
             ctk.CTkButton(
                 action_frame,

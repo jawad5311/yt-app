@@ -51,10 +51,14 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] **Skip Ads** toggle and **Max Ad Watch (seconds)** entry on the Settings screen, persisted to `settings.json`.
 - [x] All settings exposed and saved from the Settings screen with validation.
 
-### Channels (video grouping)
+### Channels (video grouping & auto-fetch)
 
 - [x] **`Channel` model** (`src/models/channel.py`) — name + URL with URL normalization (`youtube.com/@x` → `https://…`), duplicate/blank-name validation, and `group_videos_by_channel()` bucketing (channel order preserved, original queue indexes preserved, trailing *Uncategorized* group).
 - [x] **📺 Channels screen** — create / edit / delete / clear channels with per-channel video counts and a **🔗 Open** shortcut; sidebar entry added.
+- [x] **Automated Video Fetcher** (`src/utils/channel_fetcher.py`) — zero-dependency extraction of video IDs, titles, and durations directly from YouTube channels.
+- [x] **Interactive Selection Preview Modal** (`src/ui/views/channel_import_modal.py`) — review discovered videos with duration badges, duplicate detection, and one-click import.
+- [x] **Metadata storage & Full Video duration** — `duration_seconds` and `duration_text` saved to `settings.json`, with imported watch time defaulted to "Full Video".
+- [x] **On-Demand Channel Sync** — **🔄 Fetch** button on channel rows and inside the channel details modal for ongoing imports.
 - [x] **Video → channel relation** — `VideoTask.channel` stored in `settings.json`; the task dialog gained a **Channel** dropdown and a **+ New Channel** button that saves without leaving the modal.
 - [x] **Grouped Video Queue** — one section header per channel (name, URL, video count) with **🔗 Open Channel** / **⚙ Manage**, plus an *Uncategorized* section; empty channels still render.
 - [x] **Rename cascades, delete detaches** — renaming a channel keeps its videos attached; deleting one moves them to *Uncategorized* (videos are never deleted).
