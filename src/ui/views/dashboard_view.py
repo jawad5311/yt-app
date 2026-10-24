@@ -56,7 +56,7 @@ class DashboardView(ctk.CTkFrame):
         )
         self.loop_hint.pack(side="left", padx=(12, 0))
 
-        # Action buttons row: Start Automation and Start Watching side by side
+        # Action buttons row: Start Automation and Start Browsing side by side
         self.btn_row = ctk.CTkFrame(self.action_frame, fg_color="transparent")
         self.btn_row.pack(padx=30, pady=(10, 5), fill="x")
         self.btn_row.grid_columnconfigure((0, 1), weight=1)
@@ -74,7 +74,7 @@ class DashboardView(ctk.CTkFrame):
 
         self.start_watching_btn = ctk.CTkButton(
             self.btn_row,
-            text="▶ Start Watching",
+            text="▶ Start Browsing",
             font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#1F6AA5",
             hover_color="#144870",

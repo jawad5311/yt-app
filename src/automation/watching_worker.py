@@ -11,6 +11,7 @@ Manages autonomous video discovery and continuous chained playback:
 import difflib
 import logging
 import queue
+import random
 import re
 import threading
 import time
@@ -356,6 +357,17 @@ class WatchingWorker:
         }
         return enabled, config
 
+    def get_target_channels(self) -> List[Channel]:
+        """Get fresh enabled target channels list from settings.json. Only returns channels that are checked/enabled and not archived."""
+        try:
+            stored_dicts = self.config_mgr.get_channels()
+            if stored_dicts:
+                stored_objs = [Channel.from_dict(c) for c in stored_dicts]
+                return [c for c in stored_objs if c.name and c.enabled and not c.archived]
+        except Exception:
+            pass
+        return [c for c in self.channels if c.name and c.enabled and not c.archived]
+
     def _watchtime_duration_seconds(self) -> Optional[int]:
         """Read watch duration budget from settings. Returns None for Full Video."""
         setting = self.config_mgr.get_setting("WatchtimeDuration", "Full Video")
@@ -363,18 +375,19 @@ class WatchingWorker:
         return task.parse_duration_seconds()
 
     def fetch_home_videos(self, target_count: int = 20) -> List[Dict[str, Any]]:
-        """Fetch ~20 videos from YouTube home page, scrolling if needed."""
+        """Wait for YouTube Home videos to load, then smoothly scroll down and extract video cards."""
         try:
             current_url = getattr(self.driver, "current_url", "")
             if not current_url or "youtube.com" not in current_url or "/watch" in current_url:
                 safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                human_like_delay(2.5, 4.0)
+                human_like_delay(2.0, 3.5)
 
             dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-            # Wait briefly for video cards / links to render
+            # Wait for YouTube Home video items to be present in DOM
+            emit(self.log_queue, "Waiting for YouTube Home videos to load...")
             try:
-                WebDriverWait(self.driver, 10).until(
+                WebDriverWait(self.driver, 15).until(
                     lambda d: len(
                         d.find_elements(
                             By.CSS_SELECTOR,
@@ -386,19 +399,33 @@ class WatchingWorker:
             except Exception:
                 pass
 
+            # Initial pause to let thumbnail and metadata render
+            time.sleep(1.5)
+
+            # Smoothly scroll down in human-like increments and collect videos
+            emit(self.log_queue, "Smooth scrolling down the Home page feed to inspect videos...")
             for scroll_attempt in range(5):
                 if self.stop_event.is_set():
                     return []
+
                 raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
                 if isinstance(raw_items, list) and len(raw_items) >= target_count:
                     return raw_items[:target_count]
 
-                if isinstance(raw_items, list) and len(raw_items) > 0 and scroll_attempt >= 2:
-                    return raw_items
+                # Perform a smooth scroll down
+                scroll_step = random.randint(450, 750)
+                try:
+                    self.driver.execute_script(f"window.scrollBy({{top: {scroll_step}, behavior: 'smooth'}});")
+                except Exception:
+                    self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
 
-                # Scroll down to trigger infinite loading
-                self.driver.execute_script("window.scrollBy({top: 900, behavior: 'smooth'});")
-                time.sleep(2.0)
+                # Natural delay between smooth scrolls
+                sleep_time = random.uniform(1.2, 2.0)
+                end_t = time.time() + sleep_time
+                while time.time() < end_t:
+                    if self.stop_event.is_set():
+                        return []
+                    time.sleep(0.1)
 
             raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
             return raw_items[:target_count] if isinstance(raw_items, list) else []
@@ -611,6 +638,9 @@ class WatchingWorker:
             watched_count = 0
 
             while not self.stop_event.is_set():
+                # Refresh target channels list from settings.json/config manager
+                target_channels = self.get_target_channels()
+
                 # -------------------------------------------------------------
                 # 1. Video Discovery Phase
                 # -------------------------------------------------------------
@@ -625,7 +655,7 @@ class WatchingWorker:
                     emit(self.log_queue, f"Scanned {len(rec_items)} recommended videos.")
 
                     for rec in rec_items:
-                        match = match_channel(rec.get("channel_name", ""), rec.get("channel_url", ""), self.channels)
+                        match = match_channel(rec.get("channel_name", ""), rec.get("channel_url", ""), target_channels)
                         if match:
                             matched_video = rec
                             matched_channel_obj = match
@@ -652,7 +682,7 @@ class WatchingWorker:
 
                     for item in home_items:
                         match = match_channel(
-                            item.get("channel_name", ""), item.get("channel_url", ""), self.channels
+                            item.get("channel_name", ""), item.get("channel_url", ""), target_channels
                         )
                         if match:
                             matched_video = item

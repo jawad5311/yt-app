@@ -316,16 +316,12 @@ class YTBotApp(ctk.CTk):
         stored_channel_dicts = self.config_mgr.get_channels()
         stored_channels = [Channel.from_dict(c) for c in stored_channel_dicts]
         active_channels = [c for c in stored_channels if c.name and c.enabled and not c.archived]
-        if not active_channels:
-            active_channels = [c for c in stored_channels if c.name and not c.archived]
-        if not active_channels:
-            active_channels = [c for c in stored_channels if c.name]
 
         if not active_channels:
             self.show_view("channels")
             emit(
                 self.log_queue,
-                "Please add at least one channel in the Channels tab before starting Start Watching!",
+                "No enabled channels found! Please check and enable at least one channel in the Channels tab before starting.",
                 logging.WARNING,
             )
             return

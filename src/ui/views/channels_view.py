@@ -853,6 +853,9 @@ class ChannelsView(ctk.CTkFrame):
                 queue = self._queue_view()
                 if queue is not None:
                     queue.refresh_list()
+                update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+                if callable(update_dash):
+                    update_dash()
 
             chk = ctk.CTkCheckBox(
                 row,
