@@ -34,6 +34,7 @@ from .navigation import dismiss_youtube_dialogs, safe_get
 from .youtube_actions import (
     DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     click_element,
+    ensure_video_playing,
     watch_video,
 )
 
@@ -702,6 +703,7 @@ class WatchingWorker:
 
                 human_like_delay(2.5, 4.0)
                 dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                ensure_video_playing(self.driver, log_queue=self.log_queue)
 
                 # -------------------------------------------------------------
                 # 3. Watch Video Normally

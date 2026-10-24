@@ -12,7 +12,7 @@ from .login import perform_google_login
 from .navigation import navigate_to_video_organically
 from .watching_worker import WatchingWorker, match_channel
 from .worker import AutomationWorker
-from .youtube_actions import watch_video
+from .youtube_actions import ensure_video_playing, watch_video
 
 __all__ = [
     "setup_driver",
@@ -20,6 +20,7 @@ __all__ = [
     "perform_google_login",
     "navigate_to_video_organically",
     "watch_video",
+    "ensure_video_playing",
     "AutomationWorker",
     "WatchingWorker",
     "match_channel",

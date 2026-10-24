@@ -41,6 +41,98 @@ SKIP_BUTTON_XPATH = (
     " or normalize-space()='Anzeigen überspringen']]"
 )
 
+ENSURE_PLAYING_JS = """
+try {
+    var v = document.querySelector('video');
+    if (!v) return { found: false, playing: false };
+    if (!v.paused && v.currentTime > 0) {
+        return { found: true, playing: true };
+    }
+
+    // 1. Try clicking large center play button if visible
+    var largeBtn = document.querySelector('.ytp-large-play-button, button.ytp-large-play-button-modern');
+    if (largeBtn && largeBtn.offsetParent !== null) {
+        largeBtn.click();
+        return { found: true, playing: !v.paused, clicked: 'large_button' };
+    }
+
+    // 2. Try bottom control bar play button if in play state
+    var playBtn = document.querySelector('button.ytp-play-button');
+    if (playBtn) {
+        var label = (playBtn.getAttribute('aria-label') || '').toLowerCase();
+        var title = (playBtn.getAttribute('title') || '').toLowerCase();
+        var dataTitle = (playBtn.getAttribute('data-title-no-tooltip') || '').toLowerCase();
+        if (label.indexOf('play') !== -1 || title.indexOf('play') !== -1 || dataTitle === 'play') {
+            playBtn.click();
+            return { found: true, playing: !v.paused, clicked: 'play_button' };
+        }
+    }
+
+    // 3. YouTube player API and tap player directly
+    var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    if (player) {
+        if (typeof player.playVideo === 'function') {
+            player.playVideo();
+        }
+        player.click();
+    }
+    v.play();
+    return { found: true, playing: !v.paused, clicked: 'player' };
+} catch (e) {
+    return { found: false, error: String(e) };
+}
+"""
+
+
+def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
+    """Ensure video playback starts by tapping center play button, control bar, or player element."""
+    try:
+        # Run JavaScript play trigger first
+        res = driver.execute_script(ENSURE_PLAYING_JS)
+        if isinstance(res, dict) and res.get("playing"):
+            return True
+
+        # Check for large play button via Selenium
+        large_buttons = driver.find_elements(
+            By.CSS_SELECTOR, "button.ytp-large-play-button, button.ytp-large-play-button-modern, .ytp-cbox"
+        )
+        for btn in large_buttons:
+            if btn.is_displayed():
+                if click_element(driver, btn):
+                    emit(log_queue, "Tapped center play button to start video.")
+                    time.sleep(0.5)
+                    return True
+
+        # Check for bottom play button
+        play_buttons = driver.find_elements(By.CSS_SELECTOR, "button.ytp-play-button")
+        for btn in play_buttons:
+            if btn.is_displayed():
+                aria = (btn.get_attribute("aria-label") or "").lower()
+                data_title = (btn.get_attribute("data-title-no-tooltip") or "").lower()
+                if "play" in aria or data_title == "play":
+                    if click_element(driver, btn):
+                        emit(log_queue, "Clicked play button on player controls.")
+                        time.sleep(0.5)
+                        return True
+
+        # Tap the player container directly and send play key shortcut
+        player_els = driver.find_elements(By.CSS_SELECTOR, "#movie_player, .html5-video-player, video.html5-main-video")
+        for p in player_els:
+            if p.is_displayed():
+                click_element(driver, p)
+                try:
+                    p.send_keys("k")
+                except Exception:
+                    pass
+                emit(log_queue, "Tapped video player to resume playback.")
+                time.sleep(0.5)
+                return True
+
+    except Exception as exc:
+        logging.debug(f"ensure_video_playing error: {exc}")
+
+    return False
+
 
 def find_skip_button(driver: Any) -> Any:
     """Return the first *visible* Skip button inside the player, or ``None``."""
@@ -142,27 +234,7 @@ def watch_video(
     enable_interactivity: bool = True,
     interactivity_config: Optional[Dict[str, Any]] = None,
 ) -> WatchResult:
-    """Watch the target video for a fixed duration or its full length.
-
-    Args:
-        duration_seconds: fixed watch budget in seconds, or ``None`` for Full Video.
-        full_timeout_seconds: hard cap for Full Video mode (``0`` disables it).
-        skip_ads: ``True`` -> ad blocker + fallback skip after the 30-35s
-            monetisation window; ``False`` -> watch ads, escaping only once
-            cumulative ad time reaches ``max_ad_seconds`` (``0`` = never).
-        max_ad_seconds: cumulative ad-watch cap used when ``skip_ads`` is off.
-        end_buffer_seconds: early stop buffer before video ends (5-15s) to prevent
-            YouTube autoplay. ``0`` selects a randomized 7-12s buffer.
-        enable_interactivity: whether to simulate human interactivity.
-        interactivity_config: optional dict configuring interactivity features.
-
-    Returns:
-        A :class:`WatchResult`; ``bool(result)`` is True when the watch finished
-        normally (duration reached, video finished, or the Full Video safety
-        timeout tripped) and False when it was interrupted or failed (e.g. no
-        video element could be found). ``watched_seconds`` counts main-video
-        playback only: ad seconds and paused gaps are excluded.
-    """
+    """Watch the target video for a fixed duration or its full length."""
     is_full_mode = duration_seconds is None or duration_seconds <= 0
     ad_state = AdWatchState()
     target_buffer = (
@@ -212,10 +284,17 @@ def watch_video(
     video_missing_since: Optional[float] = None
     escape_warned = False
     play_attempts = 0
+    last_play_attempt = 0.0
     # Lifetime counter for this call: main-video playback seconds only.
     watched_seconds = 0.0
     last_known_duration = 0.0
     last_known_current_time = 0.0
+
+    # Ensure playback starts initially if paused or displaying center play button
+    try:
+        ensure_video_playing(driver, log_queue=log_queue)
+    except Exception:
+        pass
 
     def _result(
         completed: bool,
@@ -223,9 +302,6 @@ def watch_video(
         interrupted: bool = False,
         playback_finished: bool = False,
     ) -> WatchResult:
-        # Determine final effective watch seconds for this single run:
-        # If currentTime is greater than watched_seconds, use currentTime
-        # (reflects exact point reached on timeline).
         final_watched = max(watched_seconds, last_known_current_time)
         return WatchResult(
             completed=completed,
@@ -296,8 +372,6 @@ def watch_video(
         is_ad = bool(video_state.get("isAd"))
         ad_state.tick(is_ad, delta)
 
-        # Watch time is main-video playback only: ad seconds and paused gaps
-        # are excluded so "watch all ads" mode cannot inflate the total.
         paused = bool(video_state.get("paused", False))
         if not is_ad and not paused:
             watched_seconds += delta
@@ -379,21 +453,15 @@ def watch_video(
                 pass
             return _result(True, "ended", playback_finished=True)
 
-        # Paused mid-video -> resume (JS first, real play button as fallback)
+        # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
         if paused and not ended and (video_duration == 0 or curr_time < (video_duration - effective_buffer - 1.0)):
-            try:
-                driver.execute_script("var v = document.querySelector('video'); if (v) v.play();")
+            if now - last_play_attempt >= 3.0:
+                last_play_attempt = now
                 play_attempts += 1
-                if play_attempts <= 3:
-                    still_paused = driver.execute_script(
-                        "var v = document.querySelector('video'); return v ? v.paused : true;"
-                    )
-                    if still_paused:
-                        play_buttons = driver.find_elements(By.CSS_SELECTOR, "button.ytp-play-button")
-                        if play_buttons:
-                            click_element(driver, play_buttons[0])
-            except Exception as exc:
-                logging.debug(f"Could not resume playback: {exc}")
+                try:
+                    ensure_video_playing(driver, log_queue=log_queue if play_attempts <= 2 else None)
+                except Exception as exc:
+                    logging.debug(f"Could not resume playback: {exc}")
 
         # Periodic progress
         if now - last_progress_log >= 30:
@@ -416,15 +484,14 @@ def watch_video(
             )
             return _result(True, "full_timeout")
 
-        # Fixed-duration budget counts *watching* time only: seconds spent in
-        # ads are excluded so "watch all ads" mode cannot eat the whole budget.
+        # Fixed-duration budget
         if not is_full_mode and duration_seconds is not None:
             watched_elapsed = elapsed - ad_state.total_ad_seconds
             if watched_elapsed >= duration_seconds:
                 emit(log_queue, f"Reached watch duration limit ({duration_seconds}s).")
                 return _result(True, "duration_reached", playback_finished=True)
 
-        # Natural human interactivity simulation (scrolling down to comments, variable speed/quality, micro-pauses)
+        # Natural human interactivity simulation
         interactive_event = simulator.on_playback_tick(
             driver,
             curr_time=curr_time,
@@ -436,8 +503,6 @@ def watch_video(
             duration_budget=duration_seconds,
         )
         if interactive_event.get("micro_paused"):
-            # Micro-pause took 2-5s with video paused. Reset last_tick so paused
-            # seconds are not accumulated as active watch playback time.
             last_tick = time.time()
 
         if stop_event is not None and stop_event.is_set():

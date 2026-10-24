@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 from src.automation.youtube_actions import (
     calculate_end_buffer,
     disable_player_autoplay,
+    ensure_video_playing,
     watch_video,
 )
 
@@ -49,7 +50,6 @@ def test_watch_video_stops_early_before_autoplay():
     driver = MagicMock()
     driver.current_url = "https://www.youtube.com/watch?v=testvid1234"
 
-    # Sequence of states: video duration 100s, starts at 85s, then 92s (which is >= 100 - 10s buffer)
     states = [
         {"found": True, "paused": False, "ended": False, "currentTime": 85.0, "duration": 100.0, "isAd": False},
         {"found": True, "paused": False, "ended": False, "currentTime": 92.0, "duration": 100.0, "isAd": False},
@@ -64,19 +64,20 @@ def test_watch_video_stops_early_before_autoplay():
 
     result = watch_video(
         driver,
-        duration_seconds=None,  # Full Video
+        duration_seconds=None,
         end_buffer_seconds=10.0,
     )
 
     assert result.completed is True
-    assert result.reason == "ended"
     assert result.playback_finished is True
+    assert result.reason == "ended"
 
 
-def test_watch_video_detects_autoplay_transition_to_new_url():
-    """Verify that if YouTube navigates away to a new video, watch_video stops immediately."""
+def test_watch_video_detects_autoplay_transition():
+    """Verify that if YouTube navigates away to an autoplayed video, watch_video halts cleanly."""
     driver = MagicMock()
     urls = [
+        "https://www.youtube.com/watch?v=initial1234",
         "https://www.youtube.com/watch?v=initial1234",
         "https://www.youtube.com/watch?v=autoplayNext",
     ]
@@ -106,3 +107,20 @@ def test_watch_video_detects_autoplay_transition_to_new_url():
 
     assert result.completed is True
     assert result.reason == "autoplay_transition"
+
+
+def test_ensure_video_playing_via_js():
+    driver = MagicMock()
+    driver.execute_script.return_value = {"found": True, "playing": True}
+    assert ensure_video_playing(driver) is True
+
+
+def test_ensure_video_playing_via_large_play_button():
+    driver = MagicMock()
+    driver.execute_script.return_value = {"found": True, "playing": False}
+
+    large_btn = MagicMock()
+    large_btn.is_displayed.return_value = True
+    driver.find_elements.side_effect = lambda by, sel: [large_btn] if "ytp-large-play-button" in sel else []
+
+    assert ensure_video_playing(driver) is True
