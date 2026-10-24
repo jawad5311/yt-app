@@ -23,22 +23,24 @@ DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS = 6 * 3600
 # Skip-button discovery: modern + legacy class names, scoped to the player so a
 # generic "Skip" button elsewhere on the page is never clicked.
 SKIP_BUTTON_SELECTORS = (
-    ".html5-video-player button.ytp-ad-skip-button-modern",
-    ".html5-video-player button.ytp-skip-ad-button",
-    ".html5-video-player button.ytp-ad-skip-button",
-    ".html5-video-player .ytp-ad-skip-button-container button",
-    ".html5-video-player .ytp-ad-skip-button-text",
+    "button.ytp-skip-ad-button",
     "button.ytp-ad-skip-button-modern",
-    ".ytp-ad-skip-button",
+    "button.ytp-ad-skip-button",
+    "button[id^='skip-button']",
+    "button[id*='skip-button']",
+    "button.ytp-ad-component--clickable",
     ".ytp-skip-ad-button",
+    ".ytp-ad-skip-button",
+    ".ytp-ad-skip-button-modern",
+    ".ytp-ad-skip-button-container button",
+    ".ytp-ad-skip-button-text",
+    ".html5-video-player button.ytp-skip-ad-button",
+    ".html5-video-player button.ytp-ad-skip-button-modern",
+    ".html5-video-player button.ytp-ad-skip-button",
 )
 
 SKIP_BUTTON_XPATH = (
-    "//div[contains(@class,'html5-video-player')]//button["
-    "@id='skip-button' or contains(@class,'ytp-ad-skip') or contains(@class,'ytp-skip-ad')"
-    " or .//span[normalize-space()='Skip' or normalize-space()='Skip Ads'"
-    " or normalize-space()='Skip ad' or normalize-space()='Überspringen'"
-    " or normalize-space()='Anzeigen überspringen']]"
+    "//button[contains(@id,'skip-button') or contains(@class,'ytp-skip-ad') or contains(@class,'ytp-ad-skip') or contains(@class,'ytp-ad-component--clickable') or .//div[normalize-space()='Skip'] or .//span[normalize-space()='Skip' or normalize-space()='Skip Ads' or normalize-space()='Skip ad']] | //div[contains(@class,'html5-video-player')]//button[contains(@id,'skip-button') or contains(@class,'ytp-skip-ad') or contains(@class,'ytp-ad-skip')]"
 )
 
 ENSURE_PLAYING_JS = """
@@ -158,7 +160,59 @@ def find_skip_button(driver: Any) -> Any:
     except Exception:
         pass
 
+    # Fallback to elements present in DOM even if opacity < 1 or is_displayed() is strict
+    for selector in SKIP_BUTTON_SELECTORS:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            if elements:
+                return elements[0]
+        except Exception:
+            continue
+
     return None
+
+
+def trigger_skip_ad(driver: Any) -> bool:
+    """Attempt to click the Skip Ad button using multiple robust click techniques."""
+    # 1. Native DOM query & click via JavaScript for maximum reliability
+    js_skip = """
+    var selectors = [
+        "button.ytp-skip-ad-button",
+        "button.ytp-ad-skip-button-modern",
+        "button.ytp-ad-skip-button",
+        "button[id^='skip-button']",
+        "button[id*='skip-button']",
+        "button.ytp-ad-component--clickable",
+        ".ytp-skip-ad-button",
+        ".ytp-ad-skip-button",
+        ".ytp-ad-skip-button-container button"
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+        var btn = document.querySelector(selectors[i]);
+        if (btn) {
+            btn.style.opacity = '1';
+            btn.click();
+            return true;
+        }
+    }
+    var xp = document.evaluate("//button[contains(@id,'skip-button') or contains(@class,'ytp-skip-ad') or .//div[normalize-space()='Skip'] or .//span[normalize-space()='Skip']]", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+    if (xp && xp.singleNodeValue) {
+        xp.singleNodeValue.click();
+        return true;
+    }
+    return false;
+    """
+    try:
+        if bool(driver.execute_script(js_skip)):
+            return True
+    except Exception:
+        pass
+
+    # 2. Standard Selenium find & click
+    btn = find_skip_button(driver)
+    if btn is not None:
+        return click_element(driver, btn)
+    return False
 
 
 def click_element(driver: Any, element: Any) -> bool:
@@ -395,8 +449,7 @@ def watch_video(
 
             reason = ad_state.skip_reason(skip_ads, max_ad_seconds)
             if reason is not None:
-                button = find_skip_button(driver)
-                if button is not None and click_element(driver, button):
+                if trigger_skip_ad(driver):
                     emit(log_queue, f"Clicked Skip Ad - {reason}.")
                     escape_warned = False
                 elif not skip_ads and not escape_warned:
