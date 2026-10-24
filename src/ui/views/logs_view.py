@@ -47,7 +47,7 @@ class LogsView(ctk.CTkFrame):
 
     def append_log(self, text: str):
         self.log_textbox.configure(state="normal")
-        self.log_textbox.insert("end", text + "\n")
+        self.log_textbox.insert("end", text + "\n\n")
         self.log_textbox.see("end")
         self.log_textbox.configure(state="disabled")
 
