@@ -287,6 +287,7 @@ def watch_video(
     end_buffer_seconds: float = 0.0,
     enable_interactivity: bool = True,
     interactivity_config: Optional[Dict[str, Any]] = None,
+    pause_event: Optional[threading.Event] = None,
 ) -> WatchResult:
     """Watch the target video for a fixed duration or its full length."""
     is_full_mode = duration_seconds is None or duration_seconds <= 0
@@ -372,6 +373,25 @@ def watch_video(
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Watchtime interrupted by user.")
             return _result(False, "interrupted", interrupted=True)
+
+        # User-requested pause
+        if pause_event is not None and pause_event.is_set():
+            emit(log_queue, "Playback paused by user.")
+            try:
+                driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
+            except Exception:
+                pass
+            while pause_event.is_set():
+                if stop_event is not None and stop_event.is_set():
+                    emit(log_queue, "Watchtime interrupted by user while paused.")
+                    return _result(False, "interrupted", interrupted=True)
+                time.sleep(0.5)
+            emit(log_queue, "Playback resumed by user.")
+            try:
+                ensure_video_playing(driver, log_queue=log_queue)
+            except Exception:
+                pass
+            last_tick = time.time()
 
         now = time.time()
         delta = max(0.0, now - last_tick)
