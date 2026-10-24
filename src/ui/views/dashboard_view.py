@@ -56,13 +56,18 @@ class DashboardView(ctk.CTkFrame):
         )
         self.loop_hint.pack(side="left", padx=(12, 0))
 
-        # Action buttons row: Start Automation and Start Browsing side by side
-        self.btn_row = ctk.CTkFrame(self.action_frame, fg_color="transparent")
-        self.btn_row.pack(padx=30, pady=(10, 5), fill="x")
-        self.btn_row.grid_columnconfigure((0, 1), weight=1)
+        # Action buttons 2x2 grid:
+        # Row 0: Start Automation | Start Browsing
+        # Row 1: Stop             | Pause
+        self.btn_grid = ctk.CTkFrame(self.action_frame, fg_color="transparent")
+        self.btn_grid.pack(padx=30, pady=(10, 10), fill="x")
+        self.btn_grid.grid_columnconfigure((0, 1), weight=1, uniform="btn_col")
+
+        self.btn_row = self.btn_grid
+        self.stop_row = self.btn_grid
 
         self.start_btn = ctk.CTkButton(
-            self.btn_row,
+            self.btn_grid,
             text="▶ Start Automation",
             font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#2FA572",
@@ -70,10 +75,10 @@ class DashboardView(ctk.CTkFrame):
             height=45,
             command=self.app_controller.start_automation,
         )
-        self.start_btn.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+        self.start_btn.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="ew")
 
         self.start_watching_btn = ctk.CTkButton(
-            self.btn_row,
+            self.btn_grid,
             text="▶ Start Browsing",
             font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#1F6AA5",
@@ -81,19 +86,31 @@ class DashboardView(ctk.CTkFrame):
             height=45,
             command=self.app_controller.start_watching,
         )
-        self.start_watching_btn.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+        self.start_watching_btn.grid(row=0, column=1, padx=(6, 0), pady=(0, 6), sticky="ew")
 
         self.stop_btn = ctk.CTkButton(
-            self.action_frame,
-            text="⏹ Stop Automation",
-            font=ctk.CTkFont(size=16, weight="bold"),
+            self.btn_grid,
+            text="⏹ Stop",
+            font=ctk.CTkFont(size=15, weight="bold"),
             fg_color="#D32F2F",
             hover_color="#9A0007",
             height=45,
             state="disabled",
             command=self.app_controller.stop_automation,
         )
-        self.stop_btn.pack(padx=30, pady=(5, 10), fill="x")
+        self.stop_btn.grid(row=1, column=0, padx=(0, 6), pady=(6, 0), sticky="ew")
+
+        self.pause_btn = ctk.CTkButton(
+            self.btn_grid,
+            text="⏸ Pause",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            fg_color="#D97706",
+            hover_color="#B45309",
+            height=45,
+            state="disabled",
+            command=self.app_controller.toggle_pause_watching,
+        )
+        self.pause_btn.grid(row=1, column=1, padx=(6, 0), pady=(6, 0), sticky="ew")
 
         # Progress Bar
         self.progress_label = ctk.CTkLabel(self.action_frame, text="Ready to launch tasks.", font=ctk.CTkFont(size=13))
@@ -156,14 +173,27 @@ class DashboardView(ctk.CTkFrame):
             self.stop_btn.configure(state="normal")
             self.loop_entry.configure(state="disabled")
             if mode == "watching":
-                self.stop_btn.configure(text="⏹ Stop Watching")
-                self.card_status.configure(text="Watching", text_color="#1F6AA5")
+                self.stop_btn.configure(text="⏹ Stop Browsing")
+                self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
+                self.card_status.configure(text="Browsing", text_color="#1F6AA5")
             else:
                 self.stop_btn.configure(text="⏹ Stop Automation")
+                self.pause_btn.configure(state="disabled", text="⏸ Pause", fg_color="#D97706")
                 self.card_status.configure(text="Running", text_color="#2FA572")
         else:
             self.start_btn.configure(state="normal")
             self.start_watching_btn.configure(state="normal")
-            self.stop_btn.configure(state="disabled", text="⏹ Stop Automation")
+            self.stop_btn.configure(state="disabled", text="⏹ Stop")
+            self.pause_btn.configure(state="disabled", text="⏸ Pause", fg_color="#D97706")
             self.loop_entry.configure(state="normal")
             self.card_status.configure(text="Idle", text_color="white")
+
+    def set_paused_state(self, is_paused: bool):
+        """Update pause button text/color and status indicator."""
+        if hasattr(self, "pause_btn"):
+            if is_paused:
+                self.pause_btn.configure(state="normal", text="▶ Resume", fg_color="#2563EB", hover_color="#1D4ED8")
+                self.card_status.configure(text="Paused", text_color="#D97706")
+            else:
+                self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
+                self.card_status.configure(text="Browsing", text_color="#1F6AA5")

@@ -240,15 +240,25 @@ class TestDashboardButtonsAndState:
             view.loop_entry = MagicMock()
             view.card_status = MagicMock()
 
+            view.pause_btn = MagicMock()
+
             # Test running state: watching mode
             view.set_running_state(True, mode="watching")
             view.start_btn.configure.assert_called_with(state="disabled")
             view.start_watching_btn.configure.assert_called_with(state="disabled")
             view.stop_btn.configure.assert_any_call(state="normal")
-            view.stop_btn.configure.assert_any_call(text="⏹ Stop Watching")
+            view.stop_btn.configure.assert_any_call(text="⏹ Stop Browsing")
+            view.pause_btn.configure.assert_any_call(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
+
+            # Test pause toggling
+            view.set_paused_state(True)
+            view.pause_btn.configure.assert_called_with(state="normal", text="▶ Resume", fg_color="#2563EB", hover_color="#1D4ED8")
+            view.set_paused_state(False)
+            view.pause_btn.configure.assert_called_with(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
 
             # Test idle state
             view.set_running_state(False)
             view.start_btn.configure.assert_called_with(state="normal")
             view.start_watching_btn.configure.assert_called_with(state="normal")
-            view.stop_btn.configure.assert_called_with(state="disabled", text="⏹ Stop Automation")
+            view.stop_btn.configure.assert_called_with(state="disabled", text="⏹ Stop")
+            view.pause_btn.configure.assert_called_with(state="disabled", text="⏸ Pause", fg_color="#D97706")

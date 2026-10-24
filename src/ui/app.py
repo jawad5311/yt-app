@@ -47,6 +47,7 @@ class YTBotApp(ctk.CTk):
         self.queued_video_tasks: List[VideoTask] = []
         self.active_threads: List[threading.Thread] = []
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
         self.is_running = False
         self.current_mode = "idle"
 
@@ -330,6 +331,7 @@ class YTBotApp(ctk.CTk):
         self.current_mode = "watching"
         self.update_dashboard_stats()
         self.stop_event.clear()
+        self.pause_event.clear()
         self.worker_progress.clear()
         while not self.event_queue.empty():
             try:
@@ -357,6 +359,7 @@ class YTBotApp(ctk.CTk):
             stop_event=self.stop_event,
             event_queue=self.event_queue,
             stats_store=self.stats_store,
+            pause_event=self.pause_event,
         )
         worker.run()
 
@@ -368,11 +371,25 @@ class YTBotApp(ctk.CTk):
             pass
         emit(self.log_queue, "=== Watching Session Completed ===")
 
+    def toggle_pause_watching(self):
+        """Toggle pause/resume state during browsing session."""
+        if not self.is_running or self.current_mode != "watching":
+            return
+        if self.pause_event.is_set():
+            self.pause_event.clear()
+            if "dashboard" in self.views and hasattr(self.views["dashboard"], "set_paused_state"):
+                self.views["dashboard"].set_paused_state(False)
+        else:
+            self.pause_event.set()
+            if "dashboard" in self.views and hasattr(self.views["dashboard"], "set_paused_state"):
+                self.views["dashboard"].set_paused_state(True)
+
     def stop_automation(self):
         if not self.is_running:
             return
-        mode_label = "watching" if getattr(self, "current_mode", "automation") == "watching" else "automation"
+        mode_label = "browsing" if getattr(self, "current_mode", "automation") == "watching" else "automation"
         emit(self.log_queue, f"Stopping {mode_label} session... Please wait for workers to cleanup.")
+        self.pause_event.clear()
         self.stop_event.set()
 
     def _handle_worker_event(self, event) -> None:
