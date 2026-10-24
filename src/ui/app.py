@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import customtkinter as ctk
 
 from ..automation.dispatcher import TaskDispatcher
+from ..automation.watching_worker import WatchingWorker
 from ..automation.worker import AutomationWorker
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
@@ -47,6 +48,7 @@ class YTBotApp(ctk.CTk):
         self.active_threads: List[threading.Thread] = []
         self.stop_event = threading.Event()
         self.is_running = False
+        self.current_mode = "idle"
 
         self._build_ui()
         self.after(100, self._poll_log_queue)
@@ -132,10 +134,13 @@ class YTBotApp(ctk.CTk):
     def update_dashboard_stats(self) -> None:
         """Refresh dashboard overview cards with live accounts, runnable queue, and status."""
         if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
+            status = "Idle"
+            if self.is_running:
+                status = "Watching" if getattr(self, "current_mode", "automation") == "watching" else "Running"
             self.views["dashboard"].update_stats(
                 len(self.loaded_accounts),
                 self.get_runnable_video_count(),
-                "Running" if self.is_running else "Idle",
+                status,
             )
 
     def refresh_watch_stats(self) -> None:
@@ -207,6 +212,7 @@ class YTBotApp(ctk.CTk):
         self.config_mgr.set_setting("AutomationLoops", str(total_loops))
 
         self.is_running = True
+        self.current_mode = "automation"
         self.update_dashboard_stats()
         self.stop_event.clear()
         self.worker_progress.clear()
@@ -215,7 +221,7 @@ class YTBotApp(ctk.CTk):
                 self.event_queue.get_nowait()
             except queue.Empty:
                 break
-        self.views["dashboard"].set_running_state(True)
+        self.views["dashboard"].set_running_state(True, mode="automation")
         self.views["dashboard"].reset_progress()
 
         # Run the full automation session across the requested number of loops in a background manager thread
@@ -290,16 +296,87 @@ class YTBotApp(ctk.CTk):
                 )
 
         self.is_running = False
+        self.current_mode = "idle"
         try:
             self.event_queue.put_nowait(("finished",))
         except queue.Full:
             pass
         emit(self.log_queue, "=== Automation Session Completed ===")
 
+    def start_watching(self):
+        """Start the continuous watching recommendation loop."""
+        if self.is_running:
+            return
+
+        if not self.loaded_accounts:
+            self.show_view("accounts")
+            emit(self.log_queue, "Please load at least one Google account before starting!")
+            return
+
+        stored_channel_dicts = self.config_mgr.get_channels()
+        stored_channels = [Channel.from_dict(c) for c in stored_channel_dicts]
+        active_channels = [c for c in stored_channels if c.name and c.enabled and not c.archived]
+        if not active_channels:
+            active_channels = [c for c in stored_channels if c.name and not c.archived]
+        if not active_channels:
+            active_channels = [c for c in stored_channels if c.name]
+
+        if not active_channels:
+            self.show_view("channels")
+            emit(
+                self.log_queue,
+                "Please add at least one channel in the Channels tab before starting Start Watching!",
+                logging.WARNING,
+            )
+            return
+
+        self.is_running = True
+        self.current_mode = "watching"
+        self.update_dashboard_stats()
+        self.stop_event.clear()
+        self.worker_progress.clear()
+        while not self.event_queue.empty():
+            try:
+                self.event_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        self.views["dashboard"].set_running_state(True, mode="watching")
+        self.views["dashboard"].reset_progress()
+        self.views["dashboard"].set_status("Starting watch session...", "info")
+
+        threading.Thread(
+            target=self._run_watching_session,
+            args=(self.loaded_accounts[0], active_channels),
+            daemon=True,
+        ).start()
+
+    def _run_watching_session(self, account: Account, channels: List[Channel]):
+        """Execute the continuous watching recommendation session."""
+        worker = WatchingWorker(
+            account=account,
+            channels=channels,
+            config_mgr=self.config_mgr,
+            log_queue=self.log_queue,
+            stop_event=self.stop_event,
+            event_queue=self.event_queue,
+            stats_store=self.stats_store,
+        )
+        worker.run()
+
+        self.is_running = False
+        self.current_mode = "idle"
+        try:
+            self.event_queue.put_nowait(("finished",))
+        except queue.Full:
+            pass
+        emit(self.log_queue, "=== Watching Session Completed ===")
+
     def stop_automation(self):
         if not self.is_running:
             return
-        emit(self.log_queue, "Stopping automation session... Please wait for workers to cleanup.")
+        mode_label = "watching" if getattr(self, "current_mode", "automation") == "watching" else "automation"
+        emit(self.log_queue, f"Stopping {mode_label} session... Please wait for workers to cleanup.")
         self.stop_event.set()
 
     def _handle_worker_event(self, event) -> None:

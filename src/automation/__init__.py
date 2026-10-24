@@ -10,6 +10,7 @@ from .interactivity import (
 )
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
+from .watching_worker import WatchingWorker, match_channel
 from .worker import AutomationWorker
 from .youtube_actions import watch_video
 
@@ -20,6 +21,8 @@ __all__ = [
     "navigate_to_video_organically",
     "watch_video",
     "AutomationWorker",
+    "WatchingWorker",
+    "match_channel",
     "TaskDispatcher",
     "HumanInteractivitySimulator",
     "set_playback_speed",
