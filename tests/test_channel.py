@@ -7,6 +7,7 @@ from src.models.channel import (
     UNCATEGORIZED_LABEL,
     Channel,
     canonical_channel_url,
+    clean_channel_url,
     group_videos_by_channel,
     normalize_channel_url,
 )
@@ -157,3 +158,16 @@ def test_is_video_task_runnable_for_archived_channel():
 
     assert is_video_task_runnable(task_active, [active_ch, archived_ch]) is True
     assert is_video_task_runnable(task_archived, [active_ch, archived_ch]) is False
+
+
+def test_clean_channel_url():
+    assert clean_channel_url("https://www.youtube.com/@iamcarhacker/videos") == "https://www.youtube.com/@iamcarhacker"
+    assert clean_channel_url("https://youtube.com/@iamcarhacker/featured") == "https://www.youtube.com/@iamcarhacker"
+    assert clean_channel_url("@iamcarhacker") == "https://www.youtube.com/@iamcarhacker"
+    assert clean_channel_url("https://www.youtube.com/channel/UC12345/videos") == "https://www.youtube.com/channel/UC12345"
+    assert clean_channel_url("") == ""
+
+
+def test_channel_parse_cleans_handle_url():
+    channel = Channel.parse("Car Hacker", "https://www.youtube.com/@iamcarhacker/videos")
+    assert channel.url == "https://www.youtube.com/@iamcarhacker"

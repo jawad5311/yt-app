@@ -1,3 +1,4 @@
+import re
 """Channel model: named YouTube channels used to group queued video tasks."""
 
 from dataclasses import dataclass
@@ -10,6 +11,30 @@ NO_CHANNEL_VALUE = "(None)"
 # Group label for videos whose channel is missing or was deleted.
 UNCATEGORIZED_LABEL = "Uncategorized"
 
+
+def clean_channel_url(url: str) -> str:
+    """Clean a user-entered channel URL/handle to the base handle or channel format (e.g. https://www.youtube.com/@channelhandle)."""
+    clean = (url or "").strip()
+    if not clean:
+        return ""
+
+    # Check for handle format (@handle)
+    match = re.search(r"(@[a-zA-Z0-9_\-\.]+)", clean)
+    if match:
+        return f"https://www.youtube.com/{match.group(1)}"
+
+    # Strip subpaths like /videos, /shorts, /featured, /streams, /community
+    for suffix in ("/videos", "/shorts", "/featured", "/streams", "/community"):
+        if clean.lower().endswith(suffix):
+            clean = clean[:-len(suffix)]
+            break
+
+    clean = clean.rstrip("/")
+    if clean.startswith("@"):
+        return f"https://www.youtube.com/{clean}"
+    if clean and "://" not in clean:
+        clean = f"https://{clean}"
+    return clean
 
 def normalize_channel_url(url: str) -> str:
     """Trim a channel URL and add a scheme when the user typed a bare address."""
@@ -92,7 +117,7 @@ class Channel:
             if channel.name.lower() == clean_name.lower():
                 raise ValueError(f"A channel named '{channel.name}' already exists.")
 
-        clean_url = normalize_channel_url(url)
+        clean_url = clean_channel_url(url)
         canon_url = canonical_channel_url(clean_url)
         if canon_url:
             for channel in existing:

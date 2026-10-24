@@ -9,6 +9,7 @@ from ...models.channel import (
     UNCATEGORIZED_LABEL,
     Channel,
     canonical_channel_url,
+    clean_channel_url,
 )
 from ...models.video_task import VideoTask
 from ...models.watch_stats import format_totals_line
@@ -474,7 +475,7 @@ class ChannelsView(ctk.CTkFrame):
                 unique_name = f"{resolved_name} ({counter})"
                 counter += 1
 
-            target_url = res.channel_url or normalize_channel_url(raw_url)
+            target_url = clean_channel_url(res.channel_url or raw_url)
             canon_target = canonical_channel_url(target_url)
             if canon_target:
                 for ch in self.channels:
