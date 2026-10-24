@@ -39,70 +39,188 @@ from .youtube_actions import (
 
 HOME_VIDEOS_JS = """
 return (function() {
-    var items = document.querySelectorAll('ytd-rich-item-renderer');
-    var list = [];
-    for (var i = 0; i < items.length; i++) {
-        var item = items[i];
-        if (item.closest('ytd-rich-shelf-renderer') || item.closest('ytd-reel-shelf-renderer')) {
-            continue;
+    var results = [];
+    var seenUrls = {};
+
+    var cards = document.querySelectorAll(
+        'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-grid-media'
+    );
+
+    function parseCard(card, idx) {
+        if (!card) return null;
+        if (card.closest('ytd-rich-shelf-renderer, ytd-reel-shelf-renderer')) {
+            return null;
         }
-        var titleEl = item.querySelector('#video-title-link, #video-title');
-        if (!titleEl) continue;
-        var title = (titleEl.textContent || titleEl.getAttribute('title') || '').trim();
-        var href = titleEl.getAttribute('href') || '';
+
+        var linkEl = card.querySelector('a#video-title-link, a#thumbnail, a[href*="/watch?v="], a[href*="watch?"]');
+        if (!linkEl && card.tagName === 'A' && card.getAttribute('href')) {
+            linkEl = card;
+        }
+        var href = linkEl ? (linkEl.getAttribute('href') || '') : '';
         if (!href || (!href.includes('/watch') && !href.includes('v='))) {
-            continue;
+            return null;
         }
-        var channelEl = item.querySelector(
-            'ytd-channel-name #text a, ytd-channel-name a, #channel-name a, ytd-channel-name yt-formatted-string, ytd-channel-name'
+
+        var cleanUrl = href.split('&')[0];
+        if (seenUrls[cleanUrl]) return null;
+
+        var titleEl = card.querySelector('#video-title, a#video-title-link, h3, #title');
+        var title = '';
+        if (titleEl) {
+            title = (titleEl.getAttribute('title') || titleEl.textContent || '').trim();
+        }
+        if (!title && linkEl) {
+            title = (linkEl.getAttribute('title') || linkEl.getAttribute('aria-label') || '').trim();
+        }
+
+        var channelEl = card.querySelector(
+            'ytd-channel-name #text a, ytd-channel-name a, #channel-name a, ytd-channel-name yt-formatted-string, ytd-channel-name, #channel-name, ytd-video-meta-block ytd-channel-name'
         );
         var channelName = channelEl ? (channelEl.textContent || '').trim() : '';
-        var channelUrl = (channelEl && channelEl.getAttribute('href')) ? channelEl.getAttribute('href') : '';
-        if (!channelUrl) {
-            var chLink = item.querySelector('a[href*="/@"], a[href*="/channel/"], a[href*="/c/"]');
-            if (chLink) channelUrl = chLink.getAttribute('href') || '';
+        var channelUrl = '';
+        var chLink = card.querySelector(
+            'ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]'
+        );
+        if (chLink) {
+            channelUrl = chLink.getAttribute('href') || '';
+            if (!channelName) {
+                channelName = (chLink.textContent || '').trim();
+            }
         }
-        list.push({
-            index: i,
+
+        if (!channelName && linkEl) {
+            var aria = linkEl.getAttribute('aria-label') || '';
+            var match = aria.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|\\s+Streamed|$)/i);
+            if (match && match[1]) {
+                channelName = match[1].trim();
+            }
+        }
+
+        seenUrls[cleanUrl] = true;
+        return {
+            index: idx,
             title: title,
             href: href,
             channel_name: channelName,
             channel_url: channelUrl
-        });
+        };
     }
-    return list;
+
+    for (var i = 0; i < cards.length; i++) {
+        var parsed = parseCard(cards[i], i);
+        if (parsed) {
+            results.push(parsed);
+        }
+    }
+
+    if (results.length === 0) {
+        var links = document.querySelectorAll('a[href*="/watch?v="]');
+        for (var j = 0; j < links.length; j++) {
+            var a = links[j];
+            var hrefVal = a.getAttribute('href') || '';
+            var cUrl = hrefVal.split('&')[0];
+            if (seenUrls[cUrl]) continue;
+
+            var parentCard = a.closest('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-grid-media, div#dismissible');
+            var parsedFallback = parseCard(parentCard, j);
+            if (parsedFallback) {
+                results.push(parsedFallback);
+            } else {
+                var t = (a.getAttribute('title') || a.textContent || '').trim();
+                var chName = '';
+                var ariaText = a.getAttribute('aria-label') || '';
+                var m = ariaText.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|$)/i);
+                if (m && m[1]) chName = m[1].trim();
+                seenUrls[cUrl] = true;
+                results.push({
+                    index: j,
+                    title: t,
+                    href: hrefVal,
+                    channel_name: chName,
+                    channel_url: ''
+                });
+            }
+        }
+    }
+
+    return results;
 })();
 """
 
 RECOMMENDED_VIDEOS_JS = """
 return (function() {
-    var items = document.querySelectorAll('ytd-compact-video-renderer');
-    var list = [];
-    for (var i = 0; i < items.length; i++) {
-        var item = items[i];
-        var titleEl = item.querySelector('#video-title, span#video-title');
-        if (!titleEl) continue;
-        var title = (titleEl.textContent || titleEl.getAttribute('title') || '').trim();
-        var linkEl = item.querySelector('a#thumbnail, a.yt-simple-endpoint, a[href*="/watch"]');
+    var results = [];
+    var seenUrls = {};
+
+    var cards = document.querySelectorAll(
+        'ytd-compact-video-renderer, #related ytd-video-renderer, ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer, ytd-compact-radio-renderer'
+    );
+
+    function parseRecCard(card, idx) {
+        if (!card) return null;
+        var linkEl = card.querySelector('a#thumbnail, a.yt-simple-endpoint, a#video-title-link, a[href*="/watch?v="]');
+        if (!linkEl && card.tagName === 'A') linkEl = card;
         var href = linkEl ? (linkEl.getAttribute('href') || '') : '';
         if (!href || (!href.includes('/watch') && !href.includes('v='))) {
-            continue;
+            return null;
         }
-        var channelEl = item.querySelector(
+
+        var cleanUrl = href.split('&')[0];
+        if (seenUrls[cleanUrl]) return null;
+
+        var titleEl = card.querySelector('#video-title, span#video-title, #title');
+        var title = titleEl ? (titleEl.getAttribute('title') || titleEl.textContent || '').trim() : '';
+        if (!title && linkEl) {
+            title = (linkEl.getAttribute('title') || linkEl.getAttribute('aria-label') || '').trim();
+        }
+
+        var channelEl = card.querySelector(
             'ytd-channel-name #text, ytd-channel-name yt-formatted-string, ytd-channel-name a, #channel-name, ytd-video-meta-block ytd-channel-name'
         );
         var channelName = channelEl ? (channelEl.textContent || '').trim() : '';
-        var channelLink = item.querySelector('ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"]');
-        var channelUrl = channelLink ? (channelLink.getAttribute('href') || '') : '';
-        list.push({
-            index: i,
+        var chLink = card.querySelector('ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"]');
+        var channelUrl = chLink ? (chLink.getAttribute('href') || '') : '';
+
+        if (!channelName && linkEl) {
+            var aria = linkEl.getAttribute('aria-label') || '';
+            var match = aria.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|$)/i);
+            if (match && match[1]) {
+                channelName = match[1].trim();
+            }
+        }
+
+        seenUrls[cleanUrl] = true;
+        return {
+            index: idx,
             title: title,
             href: href,
             channel_name: channelName,
             channel_url: channelUrl
-        });
+        };
     }
-    return list;
+
+    for (var i = 0; i < cards.length; i++) {
+        var parsed = parseRecCard(cards[i], i);
+        if (parsed) results.push(parsed);
+    }
+
+    if (results.length === 0) {
+        var relContainer = document.querySelector('#related, ytd-watch-next-secondary-results-renderer');
+        var links = (relContainer || document).querySelectorAll('a[href*="/watch?v="]');
+        for (var j = 0; j < links.length; j++) {
+            var a = links[j];
+            var h = a.getAttribute('href') || '';
+            var cUrl = h.split('&')[0];
+            if (seenUrls[cUrl]) continue;
+            var parent = a.closest('ytd-compact-video-renderer, ytd-video-renderer, div#dismissible');
+            var p = parseRecCard(parent, j);
+            if (p) {
+                results.push(p);
+            }
+        }
+    }
+
+    return results;
 })();
 """
 
@@ -247,18 +365,35 @@ class WatchingWorker:
         """Fetch ~20 videos from YouTube home page, scrolling if needed."""
         try:
             current_url = getattr(self.driver, "current_url", "")
-            if not current_url or "youtube.com" not in current_url:
+            if not current_url or "youtube.com" not in current_url or "/watch" in current_url:
                 safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                human_like_delay(2.0, 3.0)
+                human_like_delay(2.5, 4.0)
 
             dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-            for scroll_attempt in range(4):
+            # Wait briefly for video cards / links to render
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    lambda d: len(
+                        d.find_elements(
+                            By.CSS_SELECTOR,
+                            "ytd-rich-item-renderer, ytd-rich-grid-media, ytd-video-renderer, a[href*='/watch?v=']",
+                        )
+                    )
+                    > 0
+                )
+            except Exception:
+                pass
+
+            for scroll_attempt in range(5):
                 if self.stop_event.is_set():
                     return []
                 raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
                 if isinstance(raw_items, list) and len(raw_items) >= target_count:
                     return raw_items[:target_count]
+
+                if isinstance(raw_items, list) and len(raw_items) > 0 and scroll_attempt >= 2:
+                    return raw_items
 
                 # Scroll down to trigger infinite loading
                 self.driver.execute_script("window.scrollBy({top: 900, behavior: 'smooth'});")
@@ -294,9 +429,13 @@ class WatchingWorker:
 
     def click_home_video(self, card_info: Dict[str, Any]) -> bool:
         """Click on the target video card on the home page."""
+        href = card_info.get("href", "")
         try:
             idx = int(card_info.get("index", 0))
-            items = self.driver.find_elements(By.CSS_SELECTOR, "ytd-rich-item-renderer")
+            items = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "ytd-rich-item-renderer, ytd-rich-grid-media, ytd-video-renderer, ytd-grid-video-renderer",
+            )
             if 0 <= idx < len(items):
                 item = items[idx]
                 self.driver.execute_script(
@@ -310,6 +449,7 @@ class WatchingWorker:
                     "a#thumbnail",
                     "#video-title",
                     "a.yt-simple-endpoint",
+                    "a[href*='/watch']",
                 ):
                     els = item.find_elements(By.CSS_SELECTOR, selector)
                     if els and els[0].is_displayed():
@@ -319,11 +459,25 @@ class WatchingWorker:
                 target = clickable or item
                 if click_element(self.driver, target):
                     return True
+
+            # If index click did not trigger, match by URL
+            if href:
+                vid_id = href.split("v=")[-1].split("&")[0] if "v=" in href else ""
+                match_links = self.driver.find_elements(
+                    By.XPATH, f"//a[contains(@href, '{vid_id or href}')]"
+                )
+                for lk in match_links:
+                    if lk.is_displayed():
+                        self.driver.execute_script(
+                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", lk
+                        )
+                        human_like_delay(1.0, 1.5)
+                        if click_element(self.driver, lk):
+                            return True
         except Exception as exc:
             emit(self.log_queue, f"Home video click error: {exc}", logging.WARNING)
 
         # Fallback to direct navigation if click fails
-        href = card_info.get("href", "")
         if href:
             full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
@@ -332,6 +486,7 @@ class WatchingWorker:
 
     def click_recommended_video(self, card_info: Dict[str, Any]) -> bool:
         """Click on a recommended video item from the sidebar/recommendations."""
+        href = card_info.get("href", "")
         try:
             idx = int(card_info.get("index", 0))
             items = self.driver.find_elements(By.CSS_SELECTOR, "ytd-compact-video-renderer")
@@ -343,7 +498,13 @@ class WatchingWorker:
                 human_like_delay(1.0, 2.0)
 
                 clickable = None
-                for selector in ("a#thumbnail", "#video-title", "span#video-title", "a.yt-simple-endpoint"):
+                for selector in (
+                    "a#thumbnail",
+                    "#video-title",
+                    "span#video-title",
+                    "a.yt-simple-endpoint",
+                    "a[href*='/watch']",
+                ):
                     els = item.find_elements(By.CSS_SELECTOR, selector)
                     if els and els[0].is_displayed():
                         clickable = els[0]
@@ -352,10 +513,23 @@ class WatchingWorker:
                 target = clickable or item
                 if click_element(self.driver, target):
                     return True
+
+            if href:
+                vid_id = href.split("v=")[-1].split("&")[0] if "v=" in href else ""
+                match_links = self.driver.find_elements(
+                    By.XPATH, f"//a[contains(@href, '{vid_id or href}')]"
+                )
+                for lk in match_links:
+                    if lk.is_displayed():
+                        self.driver.execute_script(
+                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", lk
+                        )
+                        human_like_delay(1.0, 1.5)
+                        if click_element(self.driver, lk):
+                            return True
         except Exception as exc:
             emit(self.log_queue, f"Recommended video click error: {exc}", logging.WARNING)
 
-        href = card_info.get("href", "")
         if href:
             full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
@@ -429,7 +603,7 @@ class WatchingWorker:
 
             emit(self.log_queue, "Navigating to YouTube Home to inspect videos...")
             safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-            human_like_delay(2.0, 3.5)
+            human_like_delay(2.5, 4.0)
 
             current_video_title = ""
             current_channel_name = ""
@@ -469,7 +643,7 @@ class WatchingWorker:
                             "No stored channels found in recommendations. Navigating to YouTube Home feed...",
                         )
                     safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                    human_like_delay(2.0, 3.5)
+                    human_like_delay(2.5, 4.0)
 
                     emit(self.log_queue, "Fetching ~20 videos from YouTube Home feed...")
                     home_items = self.fetch_home_videos(target_count=20)
@@ -559,7 +733,6 @@ class WatchingWorker:
                     completed=watch_res.completed,
                 )
 
-                # Send progress update
                 self._emit_event(("progress", 0, watched_count, watched_count))
 
                 if self.stop_event.is_set():
