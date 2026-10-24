@@ -49,35 +49,22 @@ try {
         return { found: true, playing: true };
     }
 
-    // 1. Try clicking large center play button if visible
+    // 1. Large center play button if present
     var largeBtn = document.querySelector('.ytp-large-play-button, button.ytp-large-play-button-modern');
     if (largeBtn && largeBtn.offsetParent !== null) {
         largeBtn.click();
-        return { found: true, playing: !v.paused, clicked: 'large_button' };
     }
 
-    // 2. Try bottom control bar play button if in play state
-    var playBtn = document.querySelector('button.ytp-play-button');
-    if (playBtn) {
-        var label = (playBtn.getAttribute('aria-label') || '').toLowerCase();
-        var title = (playBtn.getAttribute('title') || '').toLowerCase();
-        var dataTitle = (playBtn.getAttribute('data-title-no-tooltip') || '').toLowerCase();
-        if (label.indexOf('play') !== -1 || title.indexOf('play') !== -1 || dataTitle === 'play') {
-            playBtn.click();
-            return { found: true, playing: !v.paused, clicked: 'play_button' };
-        }
-    }
-
-    // 3. YouTube player API and tap player directly
+    // 2. Movie Player API
     var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
-    if (player) {
-        if (typeof player.playVideo === 'function') {
-            player.playVideo();
-        }
-        player.click();
+    if (player && typeof player.playVideo === 'function') {
+        player.playVideo();
     }
-    v.play();
-    return { found: true, playing: !v.paused, clicked: 'player' };
+    if (v.paused) {
+        v.play().catch(function(e){});
+    }
+
+    return { found: true, playing: !v.paused };
 } catch (e) {
     return { found: false, error: String(e) };
 }
@@ -85,48 +72,112 @@ try {
 
 
 def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
-    """Ensure video playback starts by tapping center play button, control bar, or player element."""
+    """Ensure video playback starts by clicking player container, play button, or sending play shortcut.
+
+    Performs actions sequentially and stops as soon as the video starts playing.
+    """
     try:
-        # Run JavaScript play trigger first
-        res = driver.execute_script(ENSURE_PLAYING_JS)
-        if isinstance(res, dict) and res.get("playing"):
+        # Quick check: Is video already playing?
+        check = driver.execute_script("""
+        try {
+            var v = document.querySelector('video');
+            if (v && !v.paused && !v.ended && v.currentTime > 0) return true;
+        } catch(e) {}
+        return false;
+        """)
+        if check is True or (isinstance(check, dict) and check.get("playing")):
             return True
 
-        # Check for large play button via Selenium
+        # Helper to check if playing
+        def _is_playing() -> bool:
+            try:
+                res = driver.execute_script(
+                    "var v = document.querySelector('video'); return v ? (!v.paused && !v.ended) : false;"
+                )
+                return bool(res)
+            except Exception:
+                return False
+
+        # 1. Click visible center play button (ytp-large-play-button, modern, bezel)
         large_buttons = driver.find_elements(
-            By.CSS_SELECTOR, "button.ytp-large-play-button, button.ytp-large-play-button-modern, .ytp-cbox"
+            By.CSS_SELECTOR,
+            "button.ytp-large-play-button, button.ytp-large-play-button-modern, .ytp-cbox, .ytp-bezel-icon",
         )
         for btn in large_buttons:
-            if btn.is_displayed():
-                if click_element(driver, btn):
-                    emit(log_queue, "Tapped center play button to start video.")
-                    time.sleep(0.5)
-                    return True
-
-        # Check for bottom play button
-        play_buttons = driver.find_elements(By.CSS_SELECTOR, "button.ytp-play-button")
-        for btn in play_buttons:
-            if btn.is_displayed():
-                aria = (btn.get_attribute("aria-label") or "").lower()
-                data_title = (btn.get_attribute("data-title-no-tooltip") or "").lower()
-                if "play" in aria or data_title == "play":
+            try:
+                if btn.is_displayed():
                     if click_element(driver, btn):
-                        emit(log_queue, "Clicked play button on player controls.")
+                        emit(log_queue, "Clicked center play button.")
                         time.sleep(0.5)
                         return True
+            except Exception:
+                continue
 
-        # Tap the player container directly and send play key shortcut
-        player_els = driver.find_elements(By.CSS_SELECTOR, "#movie_player, .html5-video-player, video.html5-main-video")
+        # 2. Click the video player surface directly using real mouse click
+        player_els = driver.find_elements(
+            By.CSS_SELECTOR, "#movie_player, .html5-video-player, video.html5-main-video"
+        )
         for p in player_els:
-            if p.is_displayed():
-                click_element(driver, p)
-                try:
-                    p.send_keys("k")
-                except Exception:
-                    pass
-                emit(log_queue, "Tapped video player to resume playback.")
-                time.sleep(0.5)
+            try:
+                if p.is_displayed():
+                    from selenium.webdriver.common.action_chains import ActionChains
+
+                    ActionChains(driver).move_to_element(p).click().perform()
+                    emit(log_queue, "Clicked video player surface to start playback.")
+                    time.sleep(0.5)
+                    if _is_playing():
+                        return True
+                    break
+            except Exception:
+                pass
+
+        # 3. Click bottom control bar play button
+        play_buttons = driver.find_elements(By.CSS_SELECTOR, "button.ytp-play-button")
+        for btn in play_buttons:
+            try:
+                if btn.is_displayed():
+                    if click_element(driver, btn):
+                        emit(log_queue, "Clicked bottom play button.")
+                        time.sleep(0.5)
+                        if _is_playing():
+                            return True
+                    break
+            except Exception:
+                pass
+
+        # 4. Send keyboard shortcut 'k' (YouTube play/pause key)
+        try:
+            from selenium.webdriver.common.action_chains import ActionChains
+
+            ActionChains(driver).send_keys("k").perform()
+            emit(log_queue, "Sent 'k' keyboard shortcut to resume video.")
+            time.sleep(0.5)
+            if _is_playing():
                 return True
+        except Exception:
+            pass
+
+        # 5. YouTube Movie Player API playVideo() & HTML5 video.play()
+        api_res = driver.execute_script("""
+        try {
+            var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+            if (player && typeof player.playVideo === 'function') {
+                player.playVideo();
+            }
+            var v = document.querySelector('video');
+            if (v && v.paused) {
+                v.play().catch(function(e){});
+            }
+            return { found: true, playing: v ? !v.paused : false };
+        } catch (e) {
+            return { found: false, error: String(e) };
+        }
+        """)
+        if isinstance(api_res, dict) and api_res.get("playing"):
+            emit(log_queue, "Started playback via Movie Player API.")
+            return True
+
+        return _is_playing()
 
     except Exception as exc:
         logging.debug(f"ensure_video_playing error: {exc}")
@@ -453,13 +504,15 @@ def watch_video(
                 pass
             return _result(True, "ended", playback_finished=True)
 
-        # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
+        # Paused mid-video or at start -> resume (tap center play button, controls, or player surface)
         if paused and not ended and (video_duration == 0 or curr_time < (video_duration - effective_buffer - 1.0)):
-            if now - last_play_attempt >= 3.0:
+            if now - last_play_attempt >= 2.0:
                 last_play_attempt = now
                 play_attempts += 1
+                emit(log_queue, f"Playback paused at {_format_clock(curr_time)} - clicking player to resume (attempt {play_attempts})...")
                 try:
-                    ensure_video_playing(driver, log_queue=log_queue if play_attempts <= 2 else None)
+                    if ensure_video_playing(driver, log_queue=log_queue):
+                        play_attempts = 0
                 except Exception as exc:
                     logging.debug(f"Could not resume playback: {exc}")
 

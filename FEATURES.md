@@ -202,6 +202,48 @@ Watches a queued video until playback actually finishes instead of for a fixed d
 - [ ] Video that cannot start (network/login wall) aborts after 60s and is retried once.
 - [ ] Full Video safety timeout fires at the configured `FullVideoTimeoutMinutes`.
 
+### Continuous Recommendation & Home Feed Watching Loop ("Start Browsing")
+
+Autonomous watching workflow triggered by the **▶ Start Browsing** button on the Dashboard. Rather than executing a predefined queue of video tasks or fixed search keywords, it dynamically browses YouTube like an organic viewer and continuously discovers and watches videos belonging to your configured channels.
+
+- **Trigger & Prerequisites**: Started from the Dashboard via **▶ Start Browsing** (adjacent to **Start Automation**). Requires at least one checked/enabled channel under the **📺 Channels** tab (dynamically refreshed each cycle).
+- **Workflow & Lifecycle**:
+  1. **Google Account Authentication**: Signs in using the account credentials and dedicated profile (`runtime/chrome_profiles/`), reusing active cookies and waiting up to 3 minutes for manual 2FA/CAPTCHA resolution.
+  2. **Homepage Hydration**: Navigates to `https://www.youtube.com/`, dismisses any cookie consent dialogs, and waits **5 seconds** for the homepage layout and initial feeds to fully load.
+  3. **Feed Inspection (~100 Videos)**: Progressively scrolls the homepage downward while executing `HOME_VIDEOS_JS` to inspect feed video cards (`ytd-rich-item-renderer`, `ytd-video-renderer`, etc.) one-by-one, extracting video URLs, titles, and channel identifiers/URLs until ~100 videos are gathered.
+  4. **Channel URL & Identity Matching**: Compares the scanned channel URLs (`/@handle`, `/channel/UC...`, `/c/...`), vanity handles, and channel names against channels stored in the app's settings (`match_channel()`):
+     - Exact case-insensitive name match
+     - Canonical channel URL / handle equivalence
+     - Normalized alphanumeric containment
+     - Fuzzy sequence matching for minor badge or character variations
+  5. **Organic Click & Opening**: When a video matching a stored channel is found, smoothly scrolls the card into viewport and clicks either the title or thumbnail link element to navigate to the watch page.
+  6. **Natural Playback Simulation**: Watches the video with the full engagement suite:
+     - Ad blocking (uBlock Origin Lite) + monetization-compliant 30–35s click fallback
+     - Human interactivity: micro-pauses (2–5s), reading scrolls down to comments/description with realistic dwell times, variable playback speeds (1.25x), and bandwidth-saving quality adjustments (360p/720p)
+     - Configurable watch duration: follows the app's default duration or watches full video
+     - Per-video watch statistics and lifetime watch-time updates (`stats.json`)
+  7. **In-Place Up-Next / Recommended Chaining (Window Stays Open)**: Unlike the standard queue runner where the browser closes when tasks complete, this mode **keeps the browser window open** on the watch page. Playback pauses/completes, and the worker immediately inspects the sidebar's **Recommended / Up Next** feed (`RECOMMENDED_VIDEOS_JS`) for another stored channel match.
+  8. **Continuous Fallback Loop**:
+     - If a matching recommended video is found, clicks and seamlessly watches it next.
+     - If no stored channels appear in recommendations, navigates back to `https://www.youtube.com/`, waits 5 seconds, re-scans the homepage feed for ~100 videos, and repeats.
+  9. **Graceful Cancellation**: Controlled at any moment via the **⏹ Stop Watching** button on the Dashboard.
+
+**Why it is in Testing**
+- YouTube dynamic DOM variations across different browser regions and responsive layouts.
+- Verifying continuous chaining across multiple hours without memory leaks or stale elements.
+
+**Test checklist**
+- [ ] Account signs in and navigates to YouTube homepage.
+- [ ] 5-second wait observed before scanning the feed.
+- [ ] Feed scrolls down progressively and accumulates ~100 video cards.
+- [ ] Matches video channel URL against stored channel URLs in `settings.json`.
+- [ ] Clicks thumbnail/title and begins playback on watch page.
+- [ ] Ad handling and human interactivity function during playback.
+- [ ] Window remains open when video finishes; checks recommended sidebar.
+- [ ] If recommended video matches, clicks and transitions directly.
+- [ ] If no recommendation matches, returns to homepage, waits 5s, and re-scans.
+- [ ] Stop Watching button cleanly terminates worker and closes driver.
+
 ---
 
 ## 🗓 To Be Implemented

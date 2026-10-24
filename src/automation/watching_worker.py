@@ -1,17 +1,21 @@
 """Watching Worker.
 
 Manages autonomous video discovery and continuous chained playback:
-1. Google sign-in.
-2. Home page feed inspection: scans ~20 videos and matches against stored channels.
-3. Clicks the first matching video and watches it naturally with ad skipping and human interactivity.
-4. When the video ends / approaches end, inspects recommended videos for stored channels.
-5. Clicks the matching recommended video and continues watching until stopped.
+1. Google sign-in (like normal script).
+2. Visit YouTube Homepage and wait 5 seconds for the page to completely load.
+3. Scroll down and fetch data for ~100 videos (inspecting each video one by one).
+4. Match channel URLs against channels stored in the app.
+5. If a matching video is found, open it by clicking it.
+6. Watch it like the normal script (ads, human interactivity simulation, stats).
+7. Where the normal script closes the browser window, stop the video there (keep browser open).
+8. Inspect recommended videos on the watch page for stored channels.
+9. If one is found, start watching that recommended video.
+10. If not found, return to the YouTube Homepage and repeat.
 """
 
 import difflib
 import logging
 import queue
-import random
 import re
 import threading
 import time
@@ -23,7 +27,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
-from ..models.channel import Channel, canonical_channel_url
+from ..models.channel import Channel
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.helpers import human_like_delay
@@ -33,7 +37,6 @@ from .driver import close_driver, setup_driver
 from .login import perform_google_login
 from .navigation import dismiss_youtube_dialogs, safe_get
 from .youtube_actions import (
-    DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     click_element,
     ensure_video_playing,
     watch_video,
@@ -41,32 +44,34 @@ from .youtube_actions import (
 
 HOME_VIDEOS_JS = """
 return (function() {
-    var results = [];
-    var seenUrls = {};
+    var items = [];
+    var seenVideoIds = {};
 
     var cards = document.querySelectorAll(
         'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-grid-media'
     );
 
-    function parseCard(card, idx) {
-        if (!card) return null;
-        if (card.closest('ytd-rich-shelf-renderer, ytd-reel-shelf-renderer')) {
-            return null;
+    for (var i = 0; i < cards.length; i++) {
+        var card = cards[i];
+        if (!card) continue;
+
+        if (card.closest('ytd-rich-shelf-renderer, ytd-reel-shelf-renderer, ytd-ad-slot-renderer, ytd-banner-promo-renderer')) {
+            continue;
         }
 
-        var linkEl = card.querySelector('a#video-title-link, a#thumbnail, a[href*="/watch?v="], a[href*="watch?"]');
-        if (!linkEl && card.tagName === 'A' && card.getAttribute('href')) {
-            linkEl = card;
-        }
-        var href = linkEl ? (linkEl.getAttribute('href') || '') : '';
-        if (!href || (!href.includes('/watch') && !href.includes('v='))) {
-            return null;
-        }
+        var linkEl = card.querySelector(
+            'a#video-title-link, a#thumbnail[href*="/watch"], a.yt-simple-endpoint[href*="/watch?v="], a[href*="/watch?v="]'
+        );
+        if (!linkEl) continue;
 
-        var cleanUrl = href.split('&')[0];
-        if (seenUrls[cleanUrl]) return null;
+        var href = linkEl.getAttribute('href') || '';
+        if (!href || href.indexOf('/watch') === -1) continue;
 
-        var titleEl = card.querySelector('#video-title, a#video-title-link, h3, #title');
+        var matchVid = href.match(/[?&]v=([^&]+)/);
+        var videoId = matchVid ? matchVid[1] : '';
+        if (!videoId || seenVideoIds[videoId]) continue;
+
+        var titleEl = card.querySelector('#video-title, #video-title-link, h3, #title');
         var title = '';
         if (titleEl) {
             title = (titleEl.getAttribute('title') || titleEl.textContent || '').trim();
@@ -75,100 +80,66 @@ return (function() {
             title = (linkEl.getAttribute('title') || linkEl.getAttribute('aria-label') || '').trim();
         }
 
-        var channelEl = card.querySelector(
-            'ytd-channel-name #text a, ytd-channel-name a, #channel-name a, ytd-channel-name yt-formatted-string, ytd-channel-name, #channel-name, ytd-video-meta-block ytd-channel-name'
-        );
-        var channelName = channelEl ? (channelEl.textContent || '').trim() : '';
-        var channelUrl = '';
         var chLink = card.querySelector(
-            'ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]'
+            '#avatar-link, ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]'
         );
-        if (chLink) {
-            channelUrl = chLink.getAttribute('href') || '';
-            if (!channelName) {
-                channelName = (chLink.textContent || '').trim();
-            }
+        var channelUrl = chLink ? (chLink.getAttribute('href') || '') : '';
+
+        var channelNameEl = card.querySelector('ytd-channel-name, #channel-name, ytd-video-meta-block ytd-channel-name');
+        var channelName = channelNameEl ? (channelNameEl.textContent || '').trim() : '';
+        if (!channelName && chLink) {
+            channelName = (chLink.textContent || '').trim();
         }
 
         if (!channelName && linkEl) {
             var aria = linkEl.getAttribute('aria-label') || '';
-            var match = aria.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|\\s+Streamed|$)/i);
-            if (match && match[1]) {
-                channelName = match[1].trim();
-            }
+            var m = aria.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|\\s+Streamed|$)/i);
+            if (m && m[1]) channelName = m[1].trim();
         }
 
-        seenUrls[cleanUrl] = true;
-        return {
-            index: idx,
+        seenVideoIds[videoId] = true;
+        items.push({
+            index: i,
+            video_id: videoId,
             title: title,
             href: href,
             channel_name: channelName,
             channel_url: channelUrl
-        };
+        });
     }
 
-    for (var i = 0; i < cards.length; i++) {
-        var parsed = parseCard(cards[i], i);
-        if (parsed) {
-            results.push(parsed);
-        }
-    }
-
-    if (results.length === 0) {
-        var links = document.querySelectorAll('a[href*="/watch?v="]');
-        for (var j = 0; j < links.length; j++) {
-            var a = links[j];
-            var hrefVal = a.getAttribute('href') || '';
-            var cUrl = hrefVal.split('&')[0];
-            if (seenUrls[cUrl]) continue;
-
-            var parentCard = a.closest('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-grid-media, div#dismissible');
-            var parsedFallback = parseCard(parentCard, j);
-            if (parsedFallback) {
-                results.push(parsedFallback);
-            } else {
-                var t = (a.getAttribute('title') || a.textContent || '').trim();
-                var chName = '';
-                var ariaText = a.getAttribute('aria-label') || '';
-                var m = ariaText.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|$)/i);
-                if (m && m[1]) chName = m[1].trim();
-                seenUrls[cUrl] = true;
-                results.push({
-                    index: j,
-                    title: t,
-                    href: hrefVal,
-                    channel_name: chName,
-                    channel_url: ''
-                });
-            }
-        }
-    }
-
-    return results;
+    return items;
 })();
 """
 
 RECOMMENDED_VIDEOS_JS = """
 return (function() {
-    var results = [];
-    var seenUrls = {};
+    var items = [];
+    var seenVideoIds = {};
 
     var cards = document.querySelectorAll(
         'ytd-compact-video-renderer, #related ytd-video-renderer, ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer, ytd-compact-radio-renderer'
     );
 
-    function parseRecCard(card, idx) {
-        if (!card) return null;
-        var linkEl = card.querySelector('a#thumbnail, a.yt-simple-endpoint, a#video-title-link, a[href*="/watch?v="]');
-        if (!linkEl && card.tagName === 'A') linkEl = card;
-        var href = linkEl ? (linkEl.getAttribute('href') || '') : '';
-        if (!href || (!href.includes('/watch') && !href.includes('v='))) {
-            return null;
+    for (var i = 0; i < cards.length; i++) {
+        var card = cards[i];
+        if (!card) continue;
+
+        if (card.closest('ytd-reel-shelf-renderer, ytd-ad-slot-renderer')) {
+            continue;
         }
 
-        var cleanUrl = href.split('&')[0];
-        if (seenUrls[cleanUrl]) return null;
+        var linkEl = card.querySelector(
+            'a#thumbnail[href*="/watch"], a#video-title-link, a.yt-simple-endpoint[href*="/watch"], a[href*="/watch?v="]'
+        );
+        if (!linkEl) continue;
+
+        var href = linkEl.getAttribute('href') || '';
+        if (!href || href.indexOf('/watch') === -1) continue;
+
+        var matchVid = href.match(/[?&]v=([^&]+)/);
+        var videoId = matchVid ? matchVid[1] : '';
+        if (!videoId || seenVideoIds[videoId]) continue;
 
         var titleEl = card.querySelector('#video-title, span#video-title, #title');
         var title = titleEl ? (titleEl.getAttribute('title') || titleEl.textContent || '').trim() : '';
@@ -176,55 +147,54 @@ return (function() {
             title = (linkEl.getAttribute('title') || linkEl.getAttribute('aria-label') || '').trim();
         }
 
-        var channelEl = card.querySelector(
-            'ytd-channel-name #text, ytd-channel-name yt-formatted-string, ytd-channel-name a, #channel-name, ytd-video-meta-block ytd-channel-name'
+        var chLink = card.querySelector(
+            '#avatar-link, ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]'
         );
-        var channelName = channelEl ? (channelEl.textContent || '').trim() : '';
-        var chLink = card.querySelector('ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"]');
         var channelUrl = chLink ? (chLink.getAttribute('href') || '') : '';
+
+        var channelNameEl = card.querySelector('ytd-channel-name, #channel-name');
+        var channelName = channelNameEl ? (channelNameEl.textContent || '').trim() : '';
+        if (!channelName && chLink) {
+            channelName = (chLink.textContent || '').trim();
+        }
 
         if (!channelName && linkEl) {
             var aria = linkEl.getAttribute('aria-label') || '';
-            var match = aria.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|$)/i);
-            if (match && match[1]) {
-                channelName = match[1].trim();
-            }
+            var m = aria.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|$)/i);
+            if (m && m[1]) channelName = m[1].trim();
         }
 
-        seenUrls[cleanUrl] = true;
-        return {
-            index: idx,
+        seenVideoIds[videoId] = true;
+        items.push({
+            index: i,
+            video_id: videoId,
             title: title,
             href: href,
             channel_name: channelName,
             channel_url: channelUrl
-        };
+        });
     }
 
-    for (var i = 0; i < cards.length; i++) {
-        var parsed = parseRecCard(cards[i], i);
-        if (parsed) results.push(parsed);
-    }
-
-    if (results.length === 0) {
-        var relContainer = document.querySelector('#related, ytd-watch-next-secondary-results-renderer');
-        var links = (relContainer || document).querySelectorAll('a[href*="/watch?v="]');
-        for (var j = 0; j < links.length; j++) {
-            var a = links[j];
-            var h = a.getAttribute('href') || '';
-            var cUrl = h.split('&')[0];
-            if (seenUrls[cUrl]) continue;
-            var parent = a.closest('ytd-compact-video-renderer, ytd-video-renderer, div#dismissible');
-            var p = parseRecCard(parent, j);
-            if (p) {
-                results.push(p);
-            }
-        }
-    }
-
-    return results;
+    return items;
 })();
 """
+
+
+def extract_channel_identifier(url: str) -> str:
+    """Extract a canonical channel identifier (e.g. '@nextuniverz' or 'channel/uc123')."""
+    clean = (url or "").strip().lower()
+    if not clean:
+        return ""
+    if "://" in clean:
+        clean = clean.split("://", 1)[1]
+    for prefix in ("www.youtube.com/", "youtube.com/", "m.youtube.com/"):
+        if clean.startswith(prefix):
+            clean = clean[len(prefix):]
+    clean = clean.lstrip("/")
+    for suffix in ("/videos", "/shorts", "/featured", "/streams", "/community"):
+        if clean.endswith(suffix):
+            clean = clean[:-len(suffix)]
+    return clean.rstrip("/")
 
 
 def normalize_channel_text(text: str) -> str:
@@ -240,53 +210,42 @@ def match_channel(
 ) -> Optional[Channel]:
     """Check if scanned video's channel matches any channel stored in the app.
 
-    Supports:
-    - Exact case-insensitive matching.
-    - Normalized alphanumeric matching.
-    - Substring / handle containment.
-    - Canonical URL & handle matching.
-    - Fuzzy similarity matching for minor misspellings/badges.
+    Prioritizes canonical channel URL / handle matching, followed by exact and
+    normalized channel name matching.
     """
+    scanned_id = extract_channel_identifier(scanned_url)
     clean_scanned_name = (scanned_name or "").strip()
     norm_scanned_name = normalize_channel_text(clean_scanned_name)
-    canon_scanned_url = canonical_channel_url(scanned_url)
 
     for ch in channels:
         if ch.archived or not ch.enabled:
             continue
 
-        clean_ch_name = (ch.name or "").strip()
-        if not clean_ch_name and not ch.url:
-            continue
+        # 1. Match by channel URL / handle
+        if scanned_id and ch.url:
+            stored_id = extract_channel_identifier(ch.url)
+            if stored_id:
+                if (
+                    scanned_id == stored_id
+                    or (len(stored_id) >= 4 and stored_id in scanned_id)
+                    or (len(scanned_id) >= 4 and scanned_id in stored_id)
+                ):
+                    return ch
 
-        # 1. Exact case-insensitive match
+        # 2. Match by exact channel name
+        clean_ch_name = (ch.name or "").strip()
         if clean_scanned_name and clean_ch_name:
             if clean_scanned_name.lower() == clean_ch_name.lower():
                 return ch
 
-        # 2. Canonical URL / handle match
-        if canon_scanned_url and ch.url:
-            canon_ch_url = canonical_channel_url(ch.url)
-            if canon_ch_url and (
-                canon_ch_url == canon_scanned_url
-                or canon_ch_url in canon_scanned_url
-                or canon_scanned_url in canon_ch_url
-            ):
-                return ch
-
-        # 3. Normalized alphanumeric match
+        # 3. Match by normalized channel name
         norm_ch_name = normalize_channel_text(clean_ch_name)
         if norm_scanned_name and norm_ch_name:
             if norm_scanned_name == norm_ch_name:
                 return ch
-            # If one is entirely contained in the other and has meaningful length (>= 4 chars)
-            if len(norm_ch_name) >= 4 and norm_ch_name in norm_scanned_name:
-                return ch
-            if len(norm_scanned_name) >= 4 and norm_scanned_name in norm_ch_name:
-                return ch
-
-            # 4. Fuzzy similarity matching
-            if len(norm_scanned_name) >= 4 and len(norm_ch_name) >= 4:
+            if len(norm_ch_name) >= 4 and len(norm_scanned_name) >= 4:
+                if norm_ch_name in norm_scanned_name or norm_scanned_name in norm_ch_name:
+                    return ch
                 ratio = difflib.SequenceMatcher(None, norm_scanned_name, norm_ch_name).ratio()
                 if ratio >= fuzzy_threshold:
                     return ch
@@ -300,62 +259,63 @@ class WatchingWorker:
     def __init__(
         self,
         account: Account,
-        channels: List[Channel],
+        channels: Sequence[Channel],
         config_mgr: ConfigManager,
-        log_queue: Optional[queue.Queue] = None,
-        stop_event: Optional[threading.Event] = None,
-        event_queue: Optional[queue.Queue] = None,
-        stats_store: Optional[StatsStore] = None,
-    ):
+        log_queue: queue.Queue,
+        stop_event: threading.Event,
+        event_queue: queue.Queue,
+        stats_store: StatsStore,
+    ) -> None:
         self.account = account
-        self.channels = channels
+        self.channels = [c for c in channels if c.enabled and not c.archived]
         self.config_mgr = config_mgr
         self.log_queue = log_queue
-        self.stop_event = stop_event or threading.Event()
+        self.stop_event = stop_event
         self.event_queue = event_queue
         self.stats_store = stats_store
         self.driver: Any = None
-        self.skip_ads = True
-        self.max_ad_seconds = 32
+        self.skip_ads: bool = True
+        self.max_ad_seconds: int = 32
 
     def _emit_event(self, event: Tuple[Any, ...]) -> None:
-        if self.event_queue is None:
-            return
         try:
             self.event_queue.put_nowait(event)
-        except queue.Full:
+        except Exception:
             pass
 
     def _report_status(self, message: str, level: str = "info") -> None:
         self._emit_event(("status", message, level))
 
-    def _full_video_timeout_seconds(self) -> int:
-        minutes = self.config_mgr.get_int("FullVideoTimeoutMinutes", 5)
-        if minutes < 0:
-            return DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS
-        return minutes * 60
-
     def _ad_settings(self) -> Tuple[bool, int]:
-        skip_ads = self.config_mgr.get_bool("BlockAds", self.config_mgr.get_bool("SkipAds", False))
-        max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 32)
-        if max_ad_seconds < 0:
-            max_ad_seconds = 0
-        return skip_ads, max_ad_seconds
-
-    def _end_buffer_seconds(self) -> float:
-        buffer_val = self.config_mgr.get_int("AutoplayEndBufferSeconds", 10)
-        return float(max(0, buffer_val))
+        """Read ad policy settings from config."""
+        skip = self.config_mgr.get_bool("SkipAds", True)
+        if self.config_mgr.get_setting("BlockAds") is not None:
+            skip = self.config_mgr.get_bool("BlockAds", skip)
+        max_ad = self.config_mgr.get_int("MaxAdWatchSeconds", 32)
+        return skip, max_ad
 
     def _interactivity_settings(self) -> Tuple[bool, Dict[str, Any]]:
+        """Read human interactivity simulation settings from config."""
         enabled = self.config_mgr.get_bool("EnableHumanInteractivity", True)
-        config: Dict[str, Any] = {
+        cfg = {
             "scroll_comments": self.config_mgr.get_bool("RandomScrolling", True),
             "variable_speed": self.config_mgr.get_bool("VariableSpeed", True),
             "adjust_quality": self.config_mgr.get_bool("AdjustQuality", True),
             "quality_level": self.config_mgr.get_setting("QualityLevel", "360p"),
             "micro_pauses": self.config_mgr.get_bool("RandomMicroPauses", True),
+            "speed_chance": 0.35,
+            "quality_chance": 0.60,
         }
-        return enabled, config
+        return enabled, cfg
+
+    def _full_video_timeout_seconds(self) -> int:
+        """Full Video safety timeout in seconds (0 = disabled)."""
+        minutes = self.config_mgr.get_int("FullVideoTimeoutMinutes", 360)
+        return max(0, minutes) * 60
+
+    def _end_buffer_seconds(self) -> float:
+        """Safety end buffer in seconds to prevent autoplay countdown."""
+        return float(self.config_mgr.get_int("AutoplayEndBufferSeconds", 10))
 
     def get_target_channels(self) -> List[Channel]:
         """Get fresh enabled target channels list from settings.json. Only returns channels that are checked/enabled and not archived."""
@@ -374,58 +334,34 @@ class WatchingWorker:
         task = VideoTask(watchtime_duration=setting)
         return task.parse_duration_seconds()
 
-    def fetch_home_videos(self, target_count: int = 20) -> List[Dict[str, Any]]:
-        """Wait for YouTube Home videos to load, then smoothly scroll down and extract video cards."""
+    def fetch_home_videos(self, target_count: int = 100) -> List[Dict[str, Any]]:
+        """Fetch ~100 videos from YouTube Homepage by scrolling and inspecting cards."""
         try:
-            current_url = getattr(self.driver, "current_url", "")
-            if not current_url or "youtube.com" not in current_url or "/watch" in current_url:
-                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                human_like_delay(2.0, 3.5)
-
             dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-            # Wait for YouTube Home video items to be present in DOM
-            emit(self.log_queue, "Waiting for YouTube Home videos to load...")
-            try:
-                WebDriverWait(self.driver, 15).until(
-                    lambda d: len(
-                        d.find_elements(
-                            By.CSS_SELECTOR,
-                            "ytd-rich-item-renderer, ytd-rich-grid-media, ytd-video-renderer, a[href*='/watch?v=']",
-                        )
-                    )
-                    > 0
-                )
-            except Exception:
-                pass
+            last_count = 0
+            stagnant_count = 0
 
-            # Initial pause to let thumbnail and metadata render
-            time.sleep(1.5)
-
-            # Smoothly scroll down in human-like increments and collect videos
-            emit(self.log_queue, "Smooth scrolling down the Home page feed to inspect videos...")
-            for scroll_attempt in range(5):
+            # Progressively scroll down to trigger loading of about 100 videos
+            for _ in range(18):
                 if self.stop_event.is_set():
                     return []
 
                 raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
-                if isinstance(raw_items, list) and len(raw_items) >= target_count:
+                count = len(raw_items) if isinstance(raw_items, list) else 0
+                if count >= target_count:
                     return raw_items[:target_count]
 
-                # Perform a smooth scroll down
-                scroll_step = random.randint(450, 750)
-                try:
-                    self.driver.execute_script(f"window.scrollBy({{top: {scroll_step}, behavior: 'smooth'}});")
-                except Exception:
-                    self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
+                if count == last_count and count > 0:
+                    stagnant_count += 1
+                    if stagnant_count >= 3:
+                        break
+                else:
+                    stagnant_count = 0
+                last_count = count
 
-                # Natural delay between smooth scrolls
-                sleep_time = random.uniform(1.2, 2.0)
-                end_t = time.time() + sleep_time
-                while time.time() < end_t:
-                    if self.stop_event.is_set():
-                        return []
-                    time.sleep(0.1)
+                self.driver.execute_script("window.scrollBy({top: 1300, behavior: 'smooth'});")
+                time.sleep(1.6)
 
             raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
             return raw_items[:target_count] if isinstance(raw_items, list) else []
@@ -438,16 +374,15 @@ class WatchingWorker:
         try:
             dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-            for scroll_attempt in range(3):
+            for _ in range(4):
                 if self.stop_event.is_set():
                     return []
                 raw_items = self.driver.execute_script(RECOMMENDED_VIDEOS_JS)
-                if isinstance(raw_items, list) and len(raw_items) >= 10:
+                if isinstance(raw_items, list) and len(raw_items) >= 15:
                     return raw_items
 
-                # Smoothly scroll down the page slightly to populate recommended items
                 self.driver.execute_script("window.scrollBy({top: 600, behavior: 'smooth'});")
-                time.sleep(1.8)
+                time.sleep(1.6)
 
             raw_items = self.driver.execute_script(RECOMMENDED_VIDEOS_JS)
             return raw_items if isinstance(raw_items, list) else []
@@ -455,114 +390,81 @@ class WatchingWorker:
             emit(self.log_queue, f"Error fetching recommended videos: {exc}", logging.WARNING)
             return []
 
-    def click_home_video(self, card_info: Dict[str, Any]) -> bool:
-        """Click on the target video card on the home page."""
+    def click_video(self, card_info: Dict[str, Any]) -> bool:
+        """Click on the target video card using its video_id or href."""
+        video_id = card_info.get("video_id", "")
         href = card_info.get("href", "")
-        try:
-            idx = int(card_info.get("index", 0))
-            items = self.driver.find_elements(
-                By.CSS_SELECTOR,
-                "ytd-rich-item-renderer, ytd-rich-grid-media, ytd-video-renderer, ytd-grid-video-renderer",
-            )
-            if 0 <= idx < len(items):
-                item = items[idx]
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", item
-                )
-                human_like_delay(1.0, 2.0)
+        clean_id = video_id or (href.split("v=")[-1].split("&")[0] if "v=" in href else "")
+        if not clean_id:
+            return False
 
-                clickable = None
-                for selector in (
-                    "a#video-title-link",
-                    "a#thumbnail",
-                    "#video-title",
-                    "a.yt-simple-endpoint",
-                    "a[href*='/watch']",
-                ):
-                    els = item.find_elements(By.CSS_SELECTOR, selector)
-                    if els and els[0].is_displayed():
-                        clickable = els[0]
-                        break
+        selectors = [
+            f"a#video-title-link[href*='{clean_id}']",
+            f"a#thumbnail[href*='{clean_id}']",
+            f"ytd-rich-item-renderer a[href*='{clean_id}']",
+            f"ytd-compact-video-renderer a[href*='{clean_id}']",
+            f"a[href*='{clean_id}']",
+        ]
 
-                target = clickable or item
-                if click_element(self.driver, target):
-                    return True
-
-            # If index click did not trigger, match by URL
-            if href:
-                vid_id = href.split("v=")[-1].split("&")[0] if "v=" in href else ""
-                match_links = self.driver.find_elements(
-                    By.XPATH, f"//a[contains(@href, '{vid_id or href}')]"
-                )
-                for lk in match_links:
-                    if lk.is_displayed():
+        target_el = None
+        for selector in selectors:
+            try:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                for el in elements:
+                    try:
                         self.driver.execute_script(
-                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", lk
+                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", el
                         )
-                        human_like_delay(1.0, 1.5)
-                        if click_element(self.driver, lk):
-                            return True
-        except Exception as exc:
-            emit(self.log_queue, f"Home video click error: {exc}", logging.WARNING)
+                        time.sleep(0.6)
+                        target_el = el
+                        break
+                    except Exception:
+                        continue
+                if target_el:
+                    break
+            except Exception:
+                continue
 
-        # Fallback to direct navigation if click fails
-        if href:
-            full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
-            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
+        if not target_el:
+            try:
+                xpath_els = self.driver.find_elements(By.XPATH, f"//a[contains(@href, '{clean_id}')]")
+                if xpath_els:
+                    target_el = xpath_els[0]
+                    self.driver.execute_script(
+                        "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", target_el
+                    )
+                    time.sleep(0.6)
+            except Exception:
+                pass
+
+        if not target_el:
+            return False
+
+        human_like_delay(1.0, 1.8)
+
+        # 1. Selenium click
+        try:
+            if click_element(self.driver, target_el):
+                return True
+        except Exception:
+            pass
+
+        # 2. JavaScript click fallback
+        try:
+            self.driver.execute_script("arguments[0].click();", target_el)
             return True
+        except Exception:
+            pass
+
         return False
+
+    def click_home_video(self, card_info: Dict[str, Any]) -> bool:
+        """Alias for clicking a homepage video card."""
+        return self.click_video(card_info)
 
     def click_recommended_video(self, card_info: Dict[str, Any]) -> bool:
-        """Click on a recommended video item from the sidebar/recommendations."""
-        href = card_info.get("href", "")
-        try:
-            idx = int(card_info.get("index", 0))
-            items = self.driver.find_elements(By.CSS_SELECTOR, "ytd-compact-video-renderer")
-            if 0 <= idx < len(items):
-                item = items[idx]
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", item
-                )
-                human_like_delay(1.0, 2.0)
-
-                clickable = None
-                for selector in (
-                    "a#thumbnail",
-                    "#video-title",
-                    "span#video-title",
-                    "a.yt-simple-endpoint",
-                    "a[href*='/watch']",
-                ):
-                    els = item.find_elements(By.CSS_SELECTOR, selector)
-                    if els and els[0].is_displayed():
-                        clickable = els[0]
-                        break
-
-                target = clickable or item
-                if click_element(self.driver, target):
-                    return True
-
-            if href:
-                vid_id = href.split("v=")[-1].split("&")[0] if "v=" in href else ""
-                match_links = self.driver.find_elements(
-                    By.XPATH, f"//a[contains(@href, '{vid_id or href}')]"
-                )
-                for lk in match_links:
-                    if lk.is_displayed():
-                        self.driver.execute_script(
-                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", lk
-                        )
-                        human_like_delay(1.0, 1.5)
-                        if click_element(self.driver, lk):
-                            return True
-        except Exception as exc:
-            emit(self.log_queue, f"Recommended video click error: {exc}", logging.WARNING)
-
-        if href:
-            full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
-            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
-            return True
-        return False
+        """Alias for clicking a recommended video card."""
+        return self.click_video(card_info)
 
     def _record_watch(
         self,
@@ -573,36 +475,41 @@ class WatchingWorker:
         duration: float,
         completed: bool,
     ) -> None:
-        if not self.stats_store:
-            return
+        """Record watch time and run statistics in stats.json."""
         try:
-            current_url = str(getattr(self.driver, "current_url", "") or "")
-            task = VideoTask(
-                url=current_url,
-                title=title,
-                channel=channel_name,
-            )
-            key = resolve_video_key(task, current_url)
+            curr_url = getattr(self.driver, "current_url", "")
+            task = VideoTask(title=title, url=curr_url, channel=channel_name)
+            resolved_key = resolve_video_key(task=task, resolved_url=curr_url)
             outcome = TaskOutcome(
-                video_key=key,
-                task_key=key,
-                label=title or key,
+                video_key=resolved_key,
                 channel=channel_name,
-                attempts=1,
                 success=completed,
+                interrupted=False,
                 watched_seconds=watch_seconds,
                 ad_seconds=ad_seconds,
                 video_duration=duration,
                 playback_finished=completed,
+                attempts=1,
             )
             self.stats_store.record(outcome)
         except Exception as exc:
             emit(self.log_queue, f"Could not record watching stats: {exc}", logging.WARNING)
 
     def run(self) -> None:
-        """Main watching loop: home discovery -> watch -> recommended chaining -> repeat."""
+        """Main watching loop:
+        1. Google sign-in.
+        2. Visit YouTube Homepage, wait 5 seconds for page to completely load.
+        3. Scroll down and fetch data for ~100 videos (inspecting each video one-by-one).
+        4. Match video channel URLs against stored channels in app.
+        5. If found, open video by clicking it.
+        6. Watch video like normal script (ads, human interactivity, watch stats).
+        7. Where normal script closes window, stop video there (keep browser open).
+        8. Inspect recommended videos on watch page for stored channels.
+        9. If found, start watching that recommended video.
+        10. If not found, go back to Homepage and repeat.
+        """
         emit(self.log_queue, f"=== Starting Watch Session for {self.account.email} ===")
-        active_channels_msg = ", ".join(f"'{c.name}'" for c in self.channels if c.name)
+        active_channels_msg = ", ".join(f"'{c.name}' ({c.url})" for c in self.channels if c.name or c.url)
         emit(self.log_queue, f"Target stored channel(s): {active_channels_msg}")
 
         try:
@@ -613,7 +520,7 @@ class WatchingWorker:
             if self.stop_event.is_set():
                 return
 
-            # Sign-in step
+            # Step 1: Sign-in like normal script
             login_ok = perform_google_login(
                 self.driver,
                 self.account,
@@ -629,101 +536,90 @@ class WatchingWorker:
                 self._report_status(f"Sign-in failed for {self.account.email}.", "error")
                 return
 
-            emit(self.log_queue, "Navigating to YouTube Home to inspect videos...")
-            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-            human_like_delay(2.5, 4.0)
-
-            current_video_title = ""
-            current_channel_name = ""
             watched_count = 0
+            # Target video to watch next (populated either from Homepage or Recommendations)
+            next_video_to_watch: Optional[Dict[str, Any]] = None
+            next_video_channel: Optional[Channel] = None
+            is_recommended: bool = False
 
             while not self.stop_event.is_set():
-                # Refresh target channels list from settings.json/config manager
-                target_channels = self.get_target_channels()
-
                 # -------------------------------------------------------------
-                # 1. Video Discovery Phase
+                # Steps 2-4: If no video is queued from recommendations, visit Homepage
                 # -------------------------------------------------------------
-                matched_video: Optional[Dict[str, Any]] = None
-                matched_channel_obj: Optional[Channel] = None
-
-                # If on watch page with a finished video, first inspect recommended videos
-                curr_url = getattr(self.driver, "current_url", "")
-                if "/watch" in curr_url:
-                    emit(self.log_queue, "Checking recommended videos for stored channels...")
-                    rec_items = self.fetch_recommended_videos()
-                    emit(self.log_queue, f"Scanned {len(rec_items)} recommended videos.")
-
-                    for rec in rec_items:
-                        match = match_channel(rec.get("channel_name", ""), rec.get("channel_url", ""), target_channels)
-                        if match:
-                            matched_video = rec
-                            matched_channel_obj = match
-                            emit(
-                                self.log_queue,
-                                f"Found matching recommended video: '{rec.get('title')}' "
-                                f"from channel '{rec.get('channel_name')}' (matches stored channel '{match.name}')",
-                            )
-                            break
-
-                # If no matching recommended video found, fall back to home feed
-                if not matched_video:
-                    if "/watch" in curr_url:
-                        emit(
-                            self.log_queue,
-                            "No stored channels found in recommendations. Navigating to YouTube Home feed...",
-                        )
+                if not next_video_to_watch:
+                    emit(self.log_queue, "Navigating to YouTube Homepage (https://www.youtube.com/)...")
                     safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                    human_like_delay(2.5, 4.0)
 
-                    emit(self.log_queue, "Fetching ~20 videos from YouTube Home feed...")
-                    home_items = self.fetch_home_videos(target_count=20)
-                    emit(self.log_queue, f"Fetched {len(home_items)} videos from Home feed. Checking channels...")
-
-                    for item in home_items:
-                        match = match_channel(
-                            item.get("channel_name", ""), item.get("channel_url", ""), target_channels
-                        )
-                        if match:
-                            matched_video = item
-                            matched_channel_obj = match
-                            emit(
-                                self.log_queue,
-                                f"Found matching Home video: '{item.get('title')}' "
-                                f"from channel '{item.get('channel_name')}' (matches stored channel '{match.name}')",
-                            )
-                            break
-
-                if not matched_video:
-                    emit(
-                        self.log_queue,
-                        "No videos matching stored channels found on Home page or recommendations. "
-                        "Waiting 15 seconds before re-scanning...",
-                        logging.WARNING,
-                    )
-                    for _ in range(15):
+                    # Wait 5 seconds for page to completely load
+                    emit(self.log_queue, "Waiting 5 seconds for YouTube Homepage to completely load...")
+                    for _ in range(5):
                         if self.stop_event.is_set():
                             break
-                        time.sleep(1)
-                    continue
+                        time.sleep(1.0)
+
+                    if self.stop_event.is_set():
+                        break
+
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
+                    # Scroll down and fetch data for ~100 videos
+                    emit(self.log_queue, "Scrolling down YouTube feed to load ~100 videos...")
+                    home_items = self.fetch_home_videos(target_count=100)
+                    emit(self.log_queue, f"Fetched data of {len(home_items)} videos from Homepage feed.")
+
+                    # Refresh target channels dynamically from settings.json
+                    target_channels = self.get_target_channels()
+
+                    # Inspect videos one by one and match channel URLs against stored channels
+                    emit(self.log_queue, "Inspecting videos one-by-one to match stored channel URLs...")
+                    for idx, item in enumerate(home_items, 1):
+                        ch = match_channel(item.get("channel_name", ""), item.get("channel_url", ""), target_channels)
+                        if ch:
+                            next_video_to_watch = item
+                            next_video_channel = ch
+                            emit(
+                                self.log_queue,
+                                f"Match found [#{idx}/{len(home_items)}]! "
+                                f"Video: '{item.get('title')}' (ID: {item.get('video_id')}) "
+                                f"from channel '{item.get('channel_name')}' ({item.get('channel_url')}) "
+                                f"matches stored channel '{ch.name}' ({ch.url})",
+                            )
+                            break
+
+                    if not next_video_to_watch:
+                        emit(
+                            self.log_queue,
+                            "No videos from stored channels found on Homepage feed. Waiting 15 seconds before re-scanning...",
+                            logging.WARNING,
+                        )
+                        for _ in range(15):
+                            if self.stop_event.is_set():
+                                break
+                            time.sleep(1.0)
+                        continue
 
                 # -------------------------------------------------------------
-                # 2. Open Video by Clicking
+                # Step 5: Open the video by clicking it
                 # -------------------------------------------------------------
-                current_video_title = matched_video.get("title", "")
-                current_channel_name = matched_channel_obj.name if matched_channel_obj else ""
+                video_title = next_video_to_watch.get("title", "")
+                channel_name = next_video_channel.name if next_video_channel else next_video_to_watch.get("channel_name", "")
+                video_id = next_video_to_watch.get("video_id", "")
+                video_href = next_video_to_watch.get("href", "")
 
-                emit(self.log_queue, f"Opening video by clicking: '{current_video_title}'...")
-                clicked = False
-                if "/watch" in curr_url and "index" in matched_video:
-                    clicked = self.click_recommended_video(matched_video)
+                emit(self.log_queue, f"Opening video by clicking: '{video_title}' (ID: {video_id})...")
+                if is_recommended:
+                    clicked = self.click_recommended_video(next_video_to_watch)
                 else:
-                    clicked = self.click_home_video(matched_video)
-
+                    clicked = self.click_home_video(next_video_to_watch)
                 if not clicked:
-                    emit(self.log_queue, f"Could not click video '{current_video_title}'. Re-trying...", logging.WARNING)
-                    time.sleep(2)
-                    continue
+                    emit(self.log_queue, f"Click failed on '{video_title}'. Navigating via direct link fallback...", logging.WARNING)
+                    full_link = f"https://www.youtube.com{video_href}" if video_href.startswith("/") else video_href
+                    safe_get(self.driver, full_link, timeout=30, log_queue=self.log_queue)
+
+                # Reset next_video_to_watch so the loop doesn't re-use it
+                next_video_to_watch = None
+                next_video_channel = None
+                is_recommended = False
 
                 # Wait for watch page to load
                 try:
@@ -731,17 +627,17 @@ class WatchingWorker:
                 except Exception:
                     pass
 
-                human_like_delay(2.5, 4.0)
+                time.sleep(2.5)
                 dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
                 ensure_video_playing(self.driver, log_queue=self.log_queue)
 
                 # -------------------------------------------------------------
-                # 3. Watch Video Normally
+                # Step 6: Watch it like normal script
                 # -------------------------------------------------------------
                 enable_interactivity, interactivity_cfg = self._interactivity_settings()
                 duration_budget = self._watchtime_duration_seconds()
 
-                emit(self.log_queue, f"\n--- Watching: '{current_video_title}' ({current_channel_name}) ---")
+                emit(self.log_queue, f"\n--- Watching: '{video_title}' ({channel_name}) ---")
                 watch_res = watch_video(
                     self.driver,
                     duration_seconds=duration_budget,
@@ -757,24 +653,61 @@ class WatchingWorker:
 
                 watched_count += 1
                 self._record_watch(
-                    title=current_video_title,
-                    channel_name=current_channel_name,
+                    title=video_title,
+                    channel_name=channel_name,
                     watch_seconds=watch_res.watched_seconds,
                     ad_seconds=watch_res.ad_seconds,
                     duration=watch_res.video_duration,
                     completed=watch_res.completed,
                 )
-
                 self._emit_event(("progress", 0, watched_count, watched_count))
 
                 if self.stop_event.is_set():
                     emit(self.log_queue, "Watching session stopped by user.")
                     break
 
-                emit(
-                    self.log_queue,
-                    f"Completed watch for '{current_video_title}'. Approached end of video.",
-                )
+                # -------------------------------------------------------------
+                # Step 7: Where normal script closes window, stop video there (keep browser open)
+                # -------------------------------------------------------------
+                emit(self.log_queue, f"Finished watch for '{video_title}'. Stopping video playback (browser stays open)...")
+                try:
+                    self.driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
+                except Exception:
+                    pass
+
+                time.sleep(1.5)
+
+                # -------------------------------------------------------------
+                # Steps 8-10: Inspect recommended videos on watch page
+                # -------------------------------------------------------------
+                emit(self.log_queue, "Looking for videos from stored channels in Recommended videos...")
+                rec_items = self.fetch_recommended_videos()
+                emit(self.log_queue, f"Scanned {len(rec_items)} recommended videos on watch page.")
+
+                # Refresh target channels dynamically from settings.json
+                target_channels = self.get_target_channels()
+
+                for r_idx, rec in enumerate(rec_items, 1):
+                    rec_ch = match_channel(rec.get("channel_name", ""), rec.get("channel_url", ""), target_channels)
+                    if rec_ch:
+                        next_video_to_watch = rec
+                        next_video_channel = rec_ch
+                        is_recommended = True
+                        emit(
+                            self.log_queue,
+                            f"Found matching Recommended video [#{r_idx}]! "
+                            f"'{rec.get('title')}' (ID: {rec.get('video_id')}) "
+                            f"from channel '{rec.get('channel_name')}' ({rec.get('channel_url')}) "
+                            f"matches stored channel '{rec_ch.name}' ({rec_ch.url})",
+                        )
+                        break
+
+                if next_video_to_watch:
+                    # Step 9: If one is found, start watching that recommended video
+                    emit(self.log_queue, f"Chaining directly to recommended video: '{next_video_to_watch.get('title')}'...")
+                else:
+                    # Step 10: If not found, go back to Homepage
+                    emit(self.log_queue, "No stored channels found in recommendations. Returning to YouTube Homepage...")
 
             summary = f"Watching session finished: watched {watched_count} video(s)."
             emit(self.log_queue, summary)

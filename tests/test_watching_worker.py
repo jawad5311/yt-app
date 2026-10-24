@@ -2,6 +2,7 @@
 
 import queue
 import threading
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -77,9 +78,9 @@ class TestWatchingWorker:
 
         account = Account(email="test@gmail.com", password="pwd")
         channels = [Channel(name="Test Channel", url="https://youtube.com/@testchannel")]
-        log_q = queue.Queue()
+        log_q: queue.Queue[Any] = queue.Queue()
         stop_ev = threading.Event()
-        event_q = queue.Queue()
+        event_q: queue.Queue[Any] = queue.Queue()
 
         return WatchingWorker(
             account=account,
@@ -222,7 +223,7 @@ class TestDashboardButtonsAndState:
         # Test widget structure without rendering display
         from src.ui.views.dashboard_view import DashboardView
 
-        parent = MagicMock()
+        _parent = MagicMock()
         controller = MagicMock()
         controller.config_mgr.get_int.return_value = 1
 
