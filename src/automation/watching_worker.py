@@ -804,7 +804,6 @@ class WatchingWorker:
             raw_queue.append(task.to_dict())
             self.config_mgr.set_video_queue(raw_queue)
             self._emit_event(("add_video_task", task.to_dict()))
-            emit(self.log_queue, f"Added video to queue under channel '{task.channel}': '{task.title}'")
             return task
         except Exception as exc:
             emit(self.log_queue, f"Could not add video to queue: {exc}", logging.WARNING)
@@ -1009,11 +1008,6 @@ class WatchingWorker:
         if self.stop_event.is_set():
             return False
 
-        emit(
-            self.log_queue,
-            "\n=== [Option 5] Watching random non-target buffer video (30–90s) before next target channel video ===",
-        )
-
         rec_candidates = self.fetch_recommended_videos()
         random_card = self._find_random_suggested_video(
             rec_candidates,
@@ -1044,14 +1038,14 @@ class WatchingWorker:
         random_title = random_card.get("title") or "Non-Target Video"
         emit(
             self.log_queue,
-            f"Playing non-target buffer video '{random_title}' for {random_dur:.0f}s (No likes, No comments)...",
+            f"\n=== Watching Non-Target Buffer Video ({random_dur:.0f}s): '{random_title}' (No interactions) ===",
         )
 
         watched_ok = self._watch_random_video(random_card, random_dur, session_watched_keys)
         if watched_ok:
             emit(
                 self.log_queue,
-                f"Finished 30–90s non-target buffer video. Now searching for next target channel video...",
+                "Finished non-target buffer video. Searching for next target channel video...\n",
             )
         return watched_ok
 
@@ -1085,7 +1079,6 @@ class WatchingWorker:
         full_url = clean_href if clean_href.startswith("http") else f"https://www.youtube.com{clean_href}"
         target_rec_id = extract_video_id(clean_href) or ""
 
-        emit(self.log_queue, f"Opening random suggested video by clicking: '{title}'...")
         clicked = self.click_recommended_video(card_info)
         cur_url = getattr(self.driver, "current_url", "") or ""
         if target_rec_id and target_rec_id not in cur_url:
@@ -1104,10 +1097,6 @@ class WatchingWorker:
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
         ensure_video_playing(self.driver, log_queue=self.log_queue)
 
-        emit(
-            self.log_queue,
-            f"\n--- Watching Random Suggested Video ({duration_seconds:.0f}s): '{title}' (No interactions) ---",
-        )
         self._report_status(f"Watching random video ({duration_seconds:.0f}s): {title}", "info")
 
         # Disable all interactivity: no comments, no likes, no subscribe
@@ -1129,10 +1118,6 @@ class WatchingWorker:
         if target_rec_id:
             session_watched_keys.add(target_rec_id)
 
-        emit(
-            self.log_queue,
-            f"Finished watching random suggested video: '{title}' ({watch_res.watched_seconds:.1f}s watched).",
-        )
         return not self.stop_event.is_set()
 
     def _play_target_video(
@@ -1173,8 +1158,6 @@ class WatchingWorker:
         registered_task = self._ensure_video_in_queue(video_task)
 
         target_vid_id = extract_video_id(full_url) or ""
-        open_msg = f"Opening {'home' if is_home else 'suggested'} video by clicking: '{title}'..."
-        emit(self.log_queue, open_msg)
 
         if is_home:
             clicked = self.click_home_video(card_info)
@@ -1208,12 +1191,10 @@ class WatchingWorker:
             """)
             if init_dur and float(init_dur) > 0:
                 self._update_task_duration(registered_task, float(init_dur))
-                emit(self.log_queue, f"Noted video duration: {int(float(init_dur)//60)}m {int(float(init_dur)%60):02d}s")
         except Exception:
             pass
 
         enable_interactivity, interactivity_cfg = self._interactivity_settings()
-        emit(self.log_queue, f"\n--- Watching Video: '{title}' ({channel_display}) ---")
         self._report_status(f"Watching: {title}", "info")
 
         def _should_stop(ch_name=channel_display) -> bool:
@@ -1437,10 +1418,6 @@ class WatchingWorker:
 
                         # Option 5: Interleave a 30-90s non-target video before next target video
                         self._after_target_video_watched(session_watched_keys, watched_count)
-                        break
-
-                        # Option 5: Interleave a 30-90s non-target video before next target video
-                        self._after_target_video_watched(session_watched_keys, watched_count)
                         continue
 
                     # If no target video found in suggestions:
@@ -1499,7 +1476,7 @@ class WatchingWorker:
                             item, match_obj, full_url, title, ch_display = sub_target
                             emit(
                                 self.log_queue,
-                                f"Found target channel video '{title}' ({ch_display}) after random video attempt {random_attempt}/3!",
+                                f"Found target channel video after random video attempt {random_attempt}/3:",
                             )
                             watch_res = self._play_target_video(
                                 item, full_url, title, ch_display, session_watched_keys, is_home=False
@@ -1627,7 +1604,7 @@ class WatchingWorker:
 
                     if matched_home_item:
                         item, match_obj, full_url, title, ch_display = matched_home_item
-                        emit(self.log_queue, f"Found target channel video on Home page: '{title}' ({ch_display})!")
+                        emit(self.log_queue, "Found target channel video on Home page:")
                         watch_res = self._play_target_video(
                             item, full_url, title, ch_display, session_watched_keys, is_home=True
                         )
@@ -1639,6 +1616,10 @@ class WatchingWorker:
                         if self.stop_event.is_set() or watch_res.interrupted:
                             if watch_res.interrupted and not self.stop_event.is_set():
                                 emit(self.log_queue, f"Channel '{ch_display}' was disabled. Stopped video playback.")
+                            break
+
+                        # Option 5: Interleave a 30-90s non-target video before next target video
+                        self._after_target_video_watched(session_watched_keys, watched_count)
                         break
                     else:
                         emit(
@@ -1657,6 +1638,8 @@ class WatchingWorker:
                     self._report_status("Stopped: No target videos found on Home page", "warning")
                     self.stop_event.set()
                     break
+
+                continue
 
             summary = f"Watching session finished: watched {watched_count} video(s)."
             emit(self.log_queue, summary)

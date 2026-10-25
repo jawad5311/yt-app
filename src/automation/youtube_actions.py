@@ -563,20 +563,6 @@ def watch_video(
         pass
     autoplay_disabled = False
 
-    if is_full_mode:
-        emit(log_queue, "Watching full video until playback finishes...")
-        if full_timeout_seconds > 0:
-            emit(log_queue, f"Full-video safety timeout: {full_timeout_seconds // 60} minutes.")
-    else:
-        emit(log_queue, f"Watching video for up to {duration_seconds} seconds...")
-
-    if skip_ads:
-        emit(log_queue, "Ad policy: automatically skips ads after 5-10s.")
-    elif max_ad_seconds > 0:
-        emit(log_queue, f"Ad policy: watching all ads, escape cap at {max_ad_seconds}s.")
-    else:
-        emit(log_queue, "Ad policy: watching all ads, no escape cap.")
-
     started_at = time.time()
     last_tick = started_at
     last_progress_log = 0.0
@@ -677,8 +663,7 @@ def watch_video(
 
         # Proactively turn off YouTube's native autoplay switch once playback starts
         if not autoplay_disabled:
-            if disable_player_autoplay(driver):
-                emit(log_queue, "Disabled YouTube native autoplay toggle.")
+            disable_player_autoplay(driver)
             autoplay_disabled = True
 
         # Safety net: detect if YouTube navigated away to an autoplayed next video
@@ -777,15 +762,9 @@ def watch_video(
         if curr_time > 0:
             last_known_current_time = curr_time
 
-        # Every minute: log live playback timeline heartbeat
+        # Every minute: heartbeat timer tick
         if now - last_heartbeat_log >= 60.0:
             last_heartbeat_log = now
-            cur_fmt = _format_clock(curr_time)
-            dur_fmt = _format_clock(video_duration) if video_duration > 0 else "unknown"
-            emit(
-                log_queue,
-                f"Playback timeline update: video currently playing at {cur_fmt} / {dur_fmt} (watchtime counter: {int(watched_seconds // 60)}m {int(watched_seconds % 60):02d}s)",
-            )
 
         # Milestone: Log when video reaches 95% completion
         if video_duration > 0 and curr_time >= (video_duration * 0.95) and not logged_95_pct:
@@ -806,13 +785,6 @@ def watch_video(
             threshold_time = min(video_duration - 1.0, max(video_duration * 0.95, raw_cutoff))
 
         if video_duration > 0 and (ended or curr_time >= threshold_time):
-            pct = round((curr_time / video_duration) * 100, 1) if video_duration > 0 else 100
-            target_pct_fmt = round(effective_completion_ratio * 100, 1)
-            emit(
-                log_queue,
-                f"Video playback reached {pct}% completion (cutoff: {target_pct_fmt}%) "
-                f"({_format_clock(curr_time)} / {_format_clock(video_duration)})! Closing video and moving to next.",
-            )
             return _result(True, "ended", playback_finished=True)
 
         # Check watch progress: if video progress is still zero, loop and tap play button
@@ -837,10 +809,9 @@ def watch_video(
             last_progress_log = now
             if video_duration > 0:
                 percent = int((curr_time / video_duration) * 100)
-                mode = "full video progress" if is_full_mode else "watch progress"
                 emit(
                     log_queue,
-                    f"Watching {mode}: {_format_clock(curr_time)} / "
+                    f"Watching progress: {_format_clock(curr_time)} / "
                     f"{_format_clock(video_duration)} ({percent}%)",
                 )
 

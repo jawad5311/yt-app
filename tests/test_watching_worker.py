@@ -804,6 +804,99 @@ class TestWatchingWorker:
         assert worker.channel_tracker.active_channel_name is None
 
 
+    @patch("src.automation.watching_worker.human_like_delay")
+    @patch("src.automation.watching_worker.setup_driver")
+    @patch("src.automation.watching_worker.perform_google_login")
+    @patch("src.automation.watching_worker.watch_video")
+    @patch("src.automation.watching_worker.safe_get")
+    @patch("src.automation.watching_worker.close_driver")
+    def test_continuous_watching_loop_with_interleaving_buffer_and_clean_logs(
+        self, mock_close, mock_safe_get, mock_watch, mock_login, mock_setup, mock_delay, worker
+    ):
+        """Test continuous loop: Target Video 1 -> Buffer Video -> Target Video 2 without premature exit, and clean logs."""
+        ch_a = Channel(name="Channel A", url="https://youtube.com/@channelA")
+        ch_b = Channel(name="Channel B", url="https://youtube.com/@channelB")
+        worker.channels = [ch_a, ch_b]
+        worker.config_mgr.set_channels([ch_a.to_dict(), ch_b.to_dict()])
+
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://www.youtube.com/"
+        mock_driver.find_elements.return_value = [MagicMock()]
+        mock_setup.return_value = mock_driver
+        mock_login.return_value = True
+
+        home_videos = [
+            {"index": 0, "title": "Target Video 1", "href": "/watch?v=target11111", "channel_name": "Channel A", "channel_url": ""},
+        ]
+        # On watch page suggestions: non-target buffer video, and target video 2
+        rec_videos = [
+            {"index": 0, "title": "Random Cooking Video", "href": "/watch?v=buffer22222", "channel_name": "Chef Channel", "channel_url": ""},
+            {"index": 1, "title": "Target Video 2", "href": "/watch?v=target33333", "channel_name": "Channel B", "channel_url": ""},
+        ]
+
+        def exec_script(script, *args):
+            if "HOME_VIDEOS_JS" in script or "ytd-rich-item-renderer" in script:
+                return home_videos
+            if "RECOMMENDED_VIDEOS_JS" in script or "yt-lockup-view-model" in script:
+                return rec_videos
+            if "v.duration" in script:
+                return 180.0
+            return []
+
+        mock_driver.execute_script.side_effect = exec_script
+
+        def click_home(card):
+            mock_driver.current_url = f"https://www.youtube.com{card.get('href')}"
+            return True
+
+        def click_rec(card):
+            mock_driver.current_url = f"https://www.youtube.com{card.get('href')}"
+            return True
+
+        worker.click_home_video = MagicMock(side_effect=click_home)
+        worker.click_recommended_video = MagicMock(side_effect=click_rec)
+
+        target_watched = []
+        def watch_side_effect(*args, **kwargs):
+            cur = mock_driver.current_url
+            if "target" in cur:
+                target_watched.append(cur)
+                if len(target_watched) >= 2:
+                    worker.stop_event.set()
+            return WatchResult(completed=True, watched_seconds=60.0, video_duration=180.0, playback_finished=True)
+
+        mock_watch.side_effect = watch_side_effect
+
+        worker.open_videos = True
+        worker.run()
+
+        # Both target videos were watched, and buffer video interleaved!
+        assert len(target_watched) == 2
+        assert "target11111" in target_watched[0]
+        assert "target33333" in target_watched[1]
+
+        # Verify logs: clean, no duplicate titles or redundant boilerplate
+        logged = []
+        while not worker.log_queue.empty():
+            logged.append(worker.log_queue.get_nowait())
+        log_str = "\n".join(logged)
+
+        # Must have clean channel block
+        assert "Channel: Channel A\nURL: https://www.youtube.com/watch?v=target11111\nTitle: Target Video 1" in log_str
+        assert "Channel: Channel B\nURL: https://www.youtube.com/watch?v=target33333\nTitle: Target Video 2" in log_str
+        assert "Watching Non-Target Buffer Video" in log_str
+        assert "Random Cooking Video" in log_str
+
+        # Must NOT have redundant duplicate titles or boilerplate
+        assert "Added video to queue under channel" not in log_str
+        assert "Opening home video by clicking" not in log_str
+        assert "Opening suggested video by clicking" not in log_str
+        assert "Opening random suggested video" not in log_str
+        assert "Noted video duration:" not in log_str
+        assert "--- Watching Video:" not in log_str
+        assert "Disabled YouTube native autoplay toggle." not in log_str
+
+
 class TestDashboardButtonsAndState:
     def test_dashboard_view_buttons(self, tmp_path):
         # Test widget structure without rendering display
