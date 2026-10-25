@@ -843,7 +843,7 @@ class WatchingWorker:
             if not existing_task.enabled:
                 return False, existing_task, "disabled in video queue"
             if existing_task.channel:
-                matching_ch = [c for c in self.channels if c.name.lower() == existing_task.channel.lower()]
+                matching_ch = [c for c in self.get_target_channels() if c.name.lower() == existing_task.channel.lower()]
                 if not matching_ch or not matching_ch[0].enabled or matching_ch[0].archived:
                     return False, existing_task, f"channel '{existing_task.channel}' is disabled or not active"
 
@@ -1092,6 +1092,12 @@ class WatchingWorker:
                         emit(self.log_queue, f"\n--- Watching Suggested Video (1-Minute Test): '{matched_rec_title}' ({matched_rec_channel_name}) ---")
                         self._report_status(f"Watching: {matched_rec_title}", "info")
 
+                        def _should_stop_rec(ch_name=matched_rec_channel_name) -> bool:
+                            if not ch_name:
+                                return False
+                            active_names = {c.name.lower() for c in self.get_target_channels()}
+                            return ch_name.lower() not in active_names
+
                         watch_res = watch_video(
                             self.driver,
                             duration_seconds=60,
@@ -1104,6 +1110,7 @@ class WatchingWorker:
                             enable_interactivity=enable_interactivity,
                             interactivity_config=interactivity_cfg,
                             pause_event=self.pause_event,
+                            should_stop_callback=_should_stop_rec,
                         )
 
                         watched_count += 1
@@ -1126,7 +1133,9 @@ class WatchingWorker:
                             f"Updated video time for '{matched_rec_title}': watched {watch_res.watched_seconds:.1f}s (duration: {watch_res.video_duration:.1f}s, completed={watch_res.completed}).",
                         )
 
-                        if self.stop_event.is_set():
+                        if self.stop_event.is_set() or watch_res.interrupted:
+                            if watch_res.interrupted and not self.stop_event.is_set():
+                                emit(self.log_queue, f"Channel '{matched_rec_channel_name}' was disabled. Stopped video playback.")
                             break
                         # Seamlessly chain to inspect recommended videos on this watch page
                         continue
@@ -1306,6 +1315,12 @@ class WatchingWorker:
                 emit(self.log_queue, f"\n--- Watching Video (1-Minute Test): '{title}' ({channel_display}) ---")
                 self._report_status(f"Watching (1m test): {title}", "info")
 
+                def _should_stop_home(ch_name=channel_display) -> bool:
+                    if not ch_name:
+                        return False
+                    active_names = {c.name.lower() for c in self.get_target_channels()}
+                    return ch_name.lower() not in active_names
+
                 watch_res = watch_video(
                     self.driver,
                     duration_seconds=60,
@@ -1318,6 +1333,7 @@ class WatchingWorker:
                     enable_interactivity=enable_interactivity,
                     interactivity_config=interactivity_cfg,
                     pause_event=self.pause_event,
+                    should_stop_callback=_should_stop_home,
                 )
 
                 watched_count += 1
@@ -1341,7 +1357,10 @@ class WatchingWorker:
                     f"Updated video time for '{title}': watched {watch_res.watched_seconds:.1f}s (duration: {watch_res.video_duration:.1f}s, completed={watch_res.completed}).",
                 )
 
-                if self.stop_event.is_set():
+                if self.stop_event.is_set() or watch_res.interrupted:
+                    if watch_res.interrupted and not self.stop_event.is_set():
+                        emit(self.log_queue, f"Channel '{channel_display}' was disabled. Stopped video playback.")
+                        continue
                     emit(self.log_queue, "Watching session stopped by user.")
                     break
 

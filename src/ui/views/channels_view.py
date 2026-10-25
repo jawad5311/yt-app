@@ -848,8 +848,18 @@ class ChannelsView(ctk.CTkFrame):
             row.grid_columnconfigure(1, weight=1)
             row.grid_columnconfigure(2, weight=0)
 
-            def _toggle_channel(ch=channel):
-                new_enabled = bool(chk.get())
+            chk = ctk.CTkCheckBox(
+                row,
+                text="",
+                width=24,
+            )
+            if channel.enabled:
+                chk.select()
+            else:
+                chk.deselect()
+
+            def _toggle_channel(ch=channel, checkbox=chk):
+                new_enabled = bool(checkbox.get())
                 ch.enabled = new_enabled
                 if not new_enabled:
                     # Move unchecked channel to the bottom of the list
@@ -878,16 +888,7 @@ class ChannelsView(ctk.CTkFrame):
                 if callable(update_dash):
                     update_dash()
 
-            chk = ctk.CTkCheckBox(
-                row,
-                text="",
-                width=24,
-                command=_toggle_channel,
-            )
-            if channel.enabled:
-                chk.select()
-            else:
-                chk.deselect()
+            chk.configure(command=_toggle_channel)
             chk.grid(row=0, column=0, padx=(12, 4), pady=8, sticky="w")
 
             count = self.video_count(channel.name)

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
+from ..models.channel import Channel, is_video_task_runnable
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.logger import emit
@@ -177,6 +178,15 @@ class AutomationWorker:
                     resolved_url = ""
                 outcome.video_key = resolve_video_key(task, resolved_url)
 
+                def _is_task_channel_disabled() -> bool:
+                    ch_name = (task.channel or "").strip().lower()
+                    if not ch_name:
+                        return False
+                    for c in self.config_mgr.get_channels():
+                        if (c.get("name") or "").strip().lower() == ch_name:
+                            return not c.get("enabled", True) or c.get("archived", False)
+                    return False
+
                 try:
                     enable_interactivity, interactivity_cfg = self._interactivity_settings()
                     result = watch_video(
@@ -190,6 +200,7 @@ class AutomationWorker:
                         end_buffer_seconds=self._end_buffer_seconds(),
                         enable_interactivity=enable_interactivity,
                         interactivity_config=interactivity_cfg,
+                        should_stop_callback=_is_task_channel_disabled,
                     )
                     outcome.watched_seconds += max(0.0, result.watched_seconds)
                     outcome.ad_seconds += max(0.0, result.ad_seconds)
@@ -281,6 +292,18 @@ class AutomationWorker:
                     task = self.video_tasks[task_idx]
 
                 task_idx += 1
+                if task.channel:
+                    raw_channels = self.config_mgr.get_channels()
+                    channel_objs = [Channel.from_dict(c) for c in raw_channels]
+                    if not is_video_task_runnable(task, channel_objs, self.stats_store):
+                        emit(
+                            self.log_queue,
+                            f"Skipping task '{task.title or task.keywords or task.url}': channel '{task.channel}' is unchecked/disabled.",
+                        )
+                        if self.dispatcher is not None:
+                            self.dispatcher.release_task(task)
+                        continue
+
                 if self.stats_store is not None and task.max_runs > 0:
                     rec = self.stats_store.find_for_task(task)
                     if rec is not None and rec.runs >= task.max_runs:

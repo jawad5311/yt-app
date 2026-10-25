@@ -3,7 +3,7 @@ import queue
 import random
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from selenium.webdriver.common.by import By
 
@@ -519,6 +519,7 @@ def watch_video(
     interactivity_config: Optional[Dict[str, Any]] = None,
     pause_event: Optional[threading.Event] = None,
     completion_ratio: float = 0.95,
+    should_stop_callback: Optional[Callable[[], bool]] = None,
 ) -> WatchResult:
     """Watch the target video for a fixed duration or its full length."""
     is_full_mode = duration_seconds is None or duration_seconds <= 0
@@ -611,6 +612,10 @@ def watch_video(
             emit(log_queue, "Watchtime interrupted by user.")
             return _result(False, "interrupted", interrupted=True)
 
+        if should_stop_callback is not None and should_stop_callback():
+            emit(log_queue, "Playback stopped: target channel was disabled/unchecked.")
+            return _result(False, "channel_disabled", interrupted=True)
+
         # User-requested pause
         if pause_event is not None and pause_event.is_set():
             emit(log_queue, "Playback paused by user.")
@@ -623,6 +628,9 @@ def watch_video(
                 if stop_event is not None and stop_event.is_set():
                     emit(log_queue, "Watchtime interrupted by user while paused.")
                     return _result(False, "interrupted", interrupted=True)
+                if should_stop_callback is not None and should_stop_callback():
+                    emit(log_queue, "Playback stopped while paused: target channel was disabled/unchecked.")
+                    return _result(False, "channel_disabled", interrupted=True)
                 time.sleep(0.5)
             pause_duration = max(0.0, time.time() - pause_start)
             started_at += pause_duration

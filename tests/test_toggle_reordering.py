@@ -105,3 +105,49 @@ def test_unchecking_video_moves_to_channel_bottom():
     # Re-grouping reflects this order
     new_groups = group_videos_by_channel(video_tasks, channels)
     assert [t.title for _, t in new_groups[0].videos] == ["V2", "V3", "V1"]
+
+
+def test_watch_video_stops_immediately_when_channel_is_disabled():
+    from src.automation.youtube_actions import watch_video
+    driver = MagicMock()
+    driver.execute_script.return_value = 100.0
+
+    stop_called = False
+    def should_stop():
+        nonlocal stop_called
+        stop_called = True
+        return True
+
+    res = watch_video(
+        driver=driver,
+        duration_seconds=60,
+        enable_interactivity=False,
+        should_stop_callback=should_stop,
+    )
+
+    assert stop_called is True
+    assert res.interrupted is True
+    assert res.completed is False
+
+
+def test_automation_worker_skips_task_with_disabled_channel():
+    from src.automation.worker import AutomationWorker
+    cfg_mgr = MagicMock()
+    # Configure channels where ChannelX is disabled
+    cfg_mgr.get_channels.return_value = [
+        {"name": "ChannelX", "url": "https://youtube.com/@ChannelX", "enabled": False, "archived": False}
+    ]
+    cfg_mgr.get_setting.return_value = "true"
+
+    task = VideoTask(title="Task 1", channel="ChannelX", enabled=True)
+    worker = AutomationWorker(
+        account=Account(email="test@gmail.com", password="pwd"),
+        video_tasks=[task],
+        config_mgr=cfg_mgr,
+    )
+    worker.driver = MagicMock()
+    worker._run_task = MagicMock()
+
+    worker.run()
+    # Task 1 must NOT have been run because its channel is disabled!
+    assert not worker._run_task.called
