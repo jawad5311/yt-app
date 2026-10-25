@@ -795,15 +795,6 @@ class QueueView(ctk.CTkFrame):
 
         ctk.CTkButton(
             action_btn_frame,
-            text="🔗 View",
-            width=65,
-            fg_color="#2E7D32",
-            hover_color="#1B5E20",
-            command=lambda u=task.url: self.open_video_url(u),
-        ).pack(side="left", padx=(0, 4))
-
-        ctk.CTkButton(
-            action_btn_frame,
             text="✏ Edit",
             width=60,
             fg_color="#1F6AA5",
