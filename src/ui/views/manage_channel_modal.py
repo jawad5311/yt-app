@@ -6,6 +6,7 @@ Allows users to:
    When this watch time is achieved, the automation stops playing this channel's videos.
 """
 
+from tkinter import messagebox
 from typing import Any, Callable, List, Optional, Tuple
 import customtkinter as ctk
 
@@ -184,6 +185,15 @@ class ManageChannelModal(ctk.CTkToplevel):
 
         ctk.CTkButton(
             btn_frame,
+            text="🗑 Delete all videos",
+            width=140,
+            fg_color="#DC2626",
+            hover_color="#991B1B",
+            command=self._delete_all_videos,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btn_frame,
             text="Cancel",
             width=100,
             fg_color="transparent",
@@ -246,6 +256,60 @@ class ManageChannelModal(ctk.CTkToplevel):
             ch_view = getattr(self.app_controller, "views", {}).get("channels")
             if ch_view is not None and hasattr(ch_view, "load_channels"):
                 ch_view.load_channels()
+
+        if callable(self.on_applied):
+            self.on_applied()
+
+        self.destroy()
+
+
+    def _delete_all_videos(self, confirm: bool = True):
+        """Remove all video tasks for this channel from the queue while preserving all historical stats and watch data."""
+        ch_name = self.channel.name or "Uncategorized"
+        target_ch_name = (self.channel.name or "").strip().lower()
+
+        current_tasks = getattr(self.parent_view, "video_tasks", []) or []
+        if target_ch_name:
+            matching = [t for t in current_tasks if (t.channel or "").strip().lower() == target_ch_name]
+        else:
+            matching = [t for t in current_tasks if not bool((t.channel or "").strip())]
+
+        if not matching:
+            if confirm:
+                messagebox.showinfo("No Videos", f"There are no videos in the queue for '{ch_name}'.", parent=self)
+            return
+
+        if confirm:
+            num = len(matching)
+            ok = messagebox.askyesno(
+                "Delete All Videos",
+                f"Are you sure you want to remove all {num} video(s) of '{ch_name}' from the queue?\n\n"
+                "Note: Watch time history, runs, and statistics will be safely preserved in storage.",
+                parent=self,
+            )
+            if not ok:
+                return
+
+        # Filter out this channel's videos without touching StatRecords
+        if target_ch_name:
+            self.parent_view.video_tasks = [
+                t for t in current_tasks
+                if (t.channel or "").strip().lower() != target_ch_name
+            ]
+        else:
+            self.parent_view.video_tasks = [
+                t for t in current_tasks
+                if bool((t.channel or "").strip())
+            ]
+
+        if hasattr(self.app_controller, "queued_video_tasks"):
+            self.app_controller.queued_video_tasks = self.parent_view.video_tasks
+
+        if hasattr(self.parent_view, "save_queue"):
+            self.parent_view.save_queue()
+
+        if hasattr(self.parent_view, "refresh_list"):
+            self.parent_view.refresh_list()
 
         if callable(self.on_applied):
             self.on_applied()

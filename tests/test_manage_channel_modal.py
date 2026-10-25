@@ -134,3 +134,35 @@ def test_session_tracker_detects_target_achieved():
     tracker.add_watch_delta("TargetChan", 100.0)
 
     assert tracker.is_channel_target_achieved("TargetChan") is True
+
+
+def test_manage_channel_modal_delete_all_videos():
+    modal = ManageChannelModal.__new__(ManageChannelModal)
+    modal.channel = Channel(name="MyChannel")
+    modal.on_applied = MagicMock()
+    modal.destroy = MagicMock()
+
+    t1 = VideoTask(title="v1", channel="MyChannel")
+    t2 = VideoTask(title="v2", channel="MyChannel")
+    t3 = VideoTask(title="v3", channel="OtherChannel")
+
+    mock_parent = MagicMock()
+    mock_parent.video_tasks = [t1, t2, t3]
+    modal.parent_view = mock_parent
+
+    mock_app = MagicMock()
+    mock_app.queued_video_tasks = [t1, t2, t3]
+    modal.app_controller = mock_app
+
+    # Execute deletion without confirmation prompt
+    modal._delete_all_videos(confirm=False)
+
+    # Only OtherChannel videos should remain
+    assert modal.parent_view.video_tasks == [t3]
+    assert mock_app.queued_video_tasks == [t3]
+    mock_parent.save_queue.assert_called_once()
+    mock_parent.refresh_list.assert_called_once()
+    modal.on_applied.assert_called_once()
+    modal.destroy.assert_called_once()
+    # Stats store is untouched
+    assert not hasattr(mock_app.stats_store, "remove_for_task") or not mock_app.stats_store.remove_for_task.called
