@@ -1,7 +1,21 @@
+import os
 import random
 import re
+import sys
 import time
+from pathlib import Path
 from typing import Any, Optional
+
+
+def get_project_root() -> Path:
+    """Return the base directory for user data, logs, and config files.
+
+    When running from source, returns the repository root.
+    When running as a PyInstaller frozen bundle, returns the directory containing the executable.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def human_like_delay(min_seconds: float = 0.5, max_seconds: float = 1.2) -> None:

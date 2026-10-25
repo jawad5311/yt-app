@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..models.channel import Channel
+from ..utils.helpers import get_project_root
 from ..models.video_task import DEFAULT_WATCHTIME_DURATION
 
 
@@ -53,7 +54,7 @@ class ConfigManager:
 
     def __init__(self, config_file: Optional[Path] = None):
         if config_file is None:
-            config_file = Path(__file__).resolve().parent.parent.parent / "settings.json"
+            config_file = get_project_root() / "settings.json"
         self.config_file = Path(config_file)
         self.credentials_file = self.config_file.with_name("credentials.json")
         self._lock = threading.Lock()

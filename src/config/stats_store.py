@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from ..models.video_task import VideoTask
+from ..utils.helpers import get_project_root
 from ..models.watch_stats import (
     StatRecord,
     TaskOutcome,
@@ -28,7 +29,7 @@ class StatsStore:
 
     def __init__(self, stats_file: Optional[Path] = None):
         if stats_file is None:
-            stats_file = Path(__file__).resolve().parent.parent.parent / "stats.json"
+            stats_file = get_project_root() / "stats.json"
         self.stats_file = Path(stats_file)
         self._lock = threading.RLock()
         self.records: Dict[str, StatRecord] = {}

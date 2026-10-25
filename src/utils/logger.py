@@ -1,4 +1,5 @@
 import logging
+from .helpers import get_project_root
 import queue
 import re
 from pathlib import Path
@@ -22,7 +23,7 @@ def redact_secrets(text: Any) -> str:
 def init_logging(log_dir: Optional[Path] = None) -> Path:
     """Initialize logging handler to file logs/automation.log."""
     if log_dir is None:
-        log_dir = Path(__file__).resolve().parent.parent.parent / "logs"
+        log_dir = get_project_root() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "automation.log"
 

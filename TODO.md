@@ -117,7 +117,7 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] Add `TODO.md`.
 - [x] Add `TESTING.md` (full staged test path with results log).
 - [x] Add `logs/.gitkeep`.
-- [ ] Document the PyInstaller build once a packaging script exists.
+- [x] Document the PyInstaller build once a packaging script exists.
 - [ ] Record Full Video test results in FEATURES.md and tick the checklist.
 
 ## 🗓 Backlog (see FEATURES.md → To Be Implemented)
@@ -128,5 +128,5 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [ ] Session summary export (JSON/CSV).
 - [ ] Scheduled runs and per-account proxy/user-agent settings.
 - [ ] Retry/backoff policy for sign-in failures.
-- [ ] PyInstaller build script.
+- [x] PyInstaller build script (uild.bat & yt_tool.spec).
 - [ ] Browser-level integration smoke test and `pytest-cov` coverage reporting.

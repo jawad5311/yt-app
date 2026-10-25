@@ -15,11 +15,12 @@ import undetected_chromedriver as uc
 
 from ..models.account import Account
 from ..utils.logger import emit
+from ..utils.helpers import get_project_root
 
 
 def get_runtime_profiles_dir() -> Path:
     """Path to account Chrome profiles directory."""
-    runtime_dir = Path(__file__).resolve().parent.parent.parent / "runtime" / "chrome_profiles"
+    runtime_dir = get_project_root() / "runtime" / "chrome_profiles"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     return runtime_dir
 
@@ -100,7 +101,7 @@ DRIVER_INIT_LOCK = threading.Lock()
 
 def get_chromedriver_cache_dir() -> Path:
     """Directory holding chromedriver copies (one per Chrome major version)."""
-    path = Path(__file__).resolve().parent.parent.parent / "runtime" / "tools" / "chromedriver"
+    path = get_project_root() / "runtime" / "tools" / "chromedriver"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

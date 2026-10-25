@@ -38,6 +38,7 @@ extensions/
 # PyInstaller
 *.manifest
 *.spec
+!yt_tool.spec
 
 # IDE
 .idea/
