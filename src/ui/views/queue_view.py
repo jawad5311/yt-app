@@ -179,6 +179,17 @@ class QueueView(ctk.CTkFrame):
         if callable(show_view) and "channels" in getattr(self.app_controller, "views", {}):
             show_view("channels")
 
+    def open_manage_channel_modal(self, group: Any):
+        """Open modal dialog to manage run limits and target watch time for this channel."""
+        from .manage_channel_modal import ManageChannelModal
+        ManageChannelModal(
+            self,
+            channel=group.channel,
+            group_videos=group.videos,
+            app_controller=self.app_controller,
+            on_applied=self.refresh_list,
+        )
+
     def reassign_channel(self, old_name: str, new_name: str) -> None:
         """Follow a channel rename so the video relation stays intact."""
         changed = False
@@ -494,11 +505,15 @@ class QueueView(ctk.CTkFrame):
         title = f"{arrow}📺 {group.name}"
         if not group.is_uncategorized and not group.channel.enabled:
             title += " [DISABLED]"
+        elif not group.is_uncategorized and group.channel.target_achieved:
+            title += " [TARGET ACHIEVED]"
         title += f"  •  {group.count} video(s)"
 
         totals_line = self._group_totals_line(group)
         if totals_line:
             title += f"  •  {totals_line}"
+        if not group.is_uncategorized and getattr(group.channel, "target_watch_seconds", 0.0) > 0:
+            title += f"  •  Target: {group.channel.target_watch_hours:.1f}h"
         title_lbl = ctk.CTkLabel(
             header,
             text=title,
@@ -567,7 +582,7 @@ class QueueView(ctk.CTkFrame):
             width=85,
             fg_color="#1F6AA5",
             hover_color="#144870",
-            command=self.open_channels_view,
+            command=lambda g=group: self.open_manage_channel_modal(g),
         ).pack(side="left")
 
         if is_collapsed:
