@@ -1213,16 +1213,6 @@ class ChannelsView(ctk.CTkFrame):
                 command=_move_channel_down,
             ).pack(side="left", padx=(0, 6))
 
-            if channel.url:
-                ctk.CTkButton(
-                    action_frame,
-                    text="🔗 Open",
-                    width=65,
-                    fg_color="#2E7D32",
-                    hover_color="#1B5E20",
-                    command=lambda u=channel.url: self.open_channel_url(u),
-                ).pack(side="left", padx=(0, 4))
-
             ctk.CTkButton(
                 action_frame,
                 text="🎬 Videos",
@@ -1231,16 +1221,6 @@ class ChannelsView(ctk.CTkFrame):
                 hover_color="#1D4ED8",
                 command=lambda ch=channel: self.open_channel_videos_modal(ch),
             ).pack(side="left", padx=(0, 4))
-
-            if channel.url:
-                ctk.CTkButton(
-                    action_frame,
-                    text="🔄 Fetch",
-                    width=60,
-                    fg_color="#0D9488",
-                    hover_color="#0F766E",
-                    command=lambda ch=channel: self.fetch_videos_for_channel(ch),
-                ).pack(side="left", padx=(0, 4))
 
             ctk.CTkButton(
                 action_frame,
