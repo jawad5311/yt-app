@@ -26,6 +26,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Syncing configuration and account files to build folder...
+if exist "settings.json" copy /y "settings.json" "dist\YTAutomationTool\settings.json" >nul
+if exist "stats.json" copy /y "stats.json" "dist\YTAutomationTool\stats.json" >nul
+if exist "accounts.txt" copy /y "accounts.txt" "dist\YTAutomationTool\accounts.txt" >nul
+if exist "credentials.json" copy /y "credentials.json" "dist\YTAutomationTool\credentials.json" >nul
+
 echo.
 echo =========================================================
 echo   Build Successful!

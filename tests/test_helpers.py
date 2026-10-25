@@ -16,13 +16,29 @@ def test_get_project_root_unfrozen():
     assert (root / "src").is_dir()
 
 
-def test_get_project_root_frozen(tmp_path):
+def test_get_project_root_frozen_standalone(tmp_path):
     fake_exe = tmp_path / "app.exe"
     with patch.object(sys, "frozen", True, create=True), patch.object(
         sys, "executable", str(fake_exe)
     ):
         root = get_project_root()
         assert root == tmp_path
+
+
+def test_get_project_root_frozen_in_repo(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "main.py").write_text("# main", encoding="utf-8")
+    (repo_root / "settings.json").write_text("{}", encoding="utf-8")
+    dist_dir = repo_root / "dist" / "YTAutomationTool"
+    dist_dir.mkdir(parents=True)
+    fake_exe = dist_dir / "YTAutomationTool.exe"
+
+    with patch.object(sys, "frozen", True, create=True), patch.object(
+        sys, "executable", str(fake_exe)
+    ):
+        root = get_project_root()
+        assert root == repo_root
 
 
 def test_extract_video_id():

@@ -11,10 +11,18 @@ def get_project_root() -> Path:
     """Return the base directory for user data, logs, and config files.
 
     When running from source, returns the repository root.
-    When running as a PyInstaller frozen bundle, returns the directory containing the executable.
+    When running as a PyInstaller frozen bundle:
+      - If located inside a repo dist/ folder, points to the repo root so existing
+        channels, settings, and accounts are immediately available.
+      - If deployed elsewhere standalone, uses the executable folder.
     """
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        exe_dir = Path(sys.executable).resolve().parent
+        if (exe_dir.parent / "main.py").exists() and (exe_dir.parent / "settings.json").exists():
+            return exe_dir.parent
+        if (exe_dir.parent.parent / "main.py").exists() and (exe_dir.parent.parent / "settings.json").exists():
+            return exe_dir.parent.parent
+        return exe_dir
     return Path(__file__).resolve().parent.parent.parent
 
 
