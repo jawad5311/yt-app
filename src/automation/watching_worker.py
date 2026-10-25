@@ -792,6 +792,10 @@ class WatchingWorker:
                         existing_t.max_runs = task.max_runs
                         item["max_runs"] = task.max_runs
                         changed = True
+                    if getattr(existing_t, "target_multiplier", 0.0) == 0.0 and getattr(task, "target_multiplier", 0.0) > 0.0:
+                        existing_t.target_multiplier = task.target_multiplier
+                        item["target_multiplier"] = task.target_multiplier
+                        changed = True
                     if changed:
                         self.config_mgr.set_video_queue(raw_queue)
                     self._emit_event(("add_video_task", existing_t.to_dict()))
@@ -850,10 +854,14 @@ class WatchingWorker:
 
         # 2. Check recorded run count from stats_store
         current_runs = 0
+        watch_seconds = 0.0
+        video_duration = 0.0
         if self.stats_store:
             rec = self.stats_store.find_for_task(existing_task or temp_task) or self.stats_store.get(vid_key)
             if rec:
                 current_runs = rec.runs
+                watch_seconds = rec.watch_seconds
+                video_duration = rec.video_duration
 
         if existing_task is not None:
             # If manually disabled in queue
@@ -864,11 +872,14 @@ class WatchingWorker:
                 if not matching_ch or not matching_ch[0].enabled or matching_ch[0].archived:
                     return False, existing_task, f"channel '{existing_task.channel}' is disabled or not active"
 
-            limit = existing_task.max_runs if existing_task.max_runs > 0 else 3
-            if current_runs >= limit:
-                return False, existing_task, f"already reached run limit ({current_runs}/{limit} runs completed)"
+            eff_dur = video_duration if video_duration > 0 else getattr(existing_task, "duration_seconds", 0.0)
+            if existing_task.is_target_reached(current_runs, watch_seconds, eff_dur):
+                reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and watch_seconds / eff_dur >= existing_task.target_multiplier) else f"max views limit reached ({current_runs}/{existing_task.max_runs})"
+                return False, existing_task, f"already reached target/limit: {reason}"
 
-            return True, existing_task, f"eligible ({current_runs}/{limit} runs completed)"
+            limit_desc = f"max_views={existing_task.max_runs}" if existing_task.max_runs > 0 else "unlimited views"
+            mult_desc = f"target={existing_task.target_multiplier:.1f}x" if existing_task.target_multiplier > 0 else "unlimited target"
+            return True, existing_task, f"eligible ({current_runs} runs completed, {limit_desc}, {mult_desc})"
 
         # 3. Not in queue, but check if stats_store has already recorded >= 3 runs
         if current_runs >= 3:
@@ -1061,13 +1072,25 @@ class WatchingWorker:
             f"Channel: {channel_display}\nURL: {full_url}\nTitle: {title}",
         )
 
+        inherited_mult = 0.0
+        inherited_max_runs = 3
+        raw_q = self.config_mgr.get_video_queue()
+        for q_item in raw_q:
+            if (q_item.get("channel") or "").strip().lower() == channel_display.strip().lower():
+                if q_item.get("target_multiplier", 0.0) > 0:
+                    inherited_mult = float(q_item["target_multiplier"])
+                if q_item.get("max_runs", 0) > 0:
+                    inherited_max_runs = int(q_item["max_runs"])
+                break
+
         video_task = VideoTask(
             url=full_url,
             title=title,
             channel=channel_display,
             watchtime_duration="Full Video",
             enabled=True,
-            max_runs=3,
+            max_runs=inherited_max_runs,
+            target_multiplier=inherited_mult,
         )
         registered_task = self._ensure_video_in_queue(video_task)
 
@@ -1121,7 +1144,18 @@ class WatchingWorker:
             if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_name):
                 return True
             active_names = {c.name.lower() for c in self.get_target_channels()}
-            return ch_name.lower() not in active_names
+            if ch_name.lower() not in active_names:
+                return True
+            if registered_task and getattr(registered_task, "target_multiplier", 0.0) > 0:
+                rec = self.stats_store.find_for_task(registered_task) if self.stats_store else None
+                prev_watched = rec.watch_seconds if rec else 0.0
+                curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
+                total_w = prev_watched + curr_watch
+                eff_d = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(registered_task, "duration_seconds", 0.0)
+                if eff_d > 0 and (total_w / eff_d) >= registered_task.target_multiplier:
+                    emit(self.log_queue, f"Video '{registered_task.title}' reached target multiplier ({registered_task.target_multiplier:.2f}x). Stopping video playback.")
+                    return True
+            return False
 
         self.channel_tracker.set_active_channel(channel_display)
         watch_res = watch_video(

@@ -43,6 +43,7 @@ class SessionChannelTracker:
         self.original_names: Dict[str, str] = {}
         # Channel whose video is currently playing
         self.active_channel_name: Optional[str] = None
+        self._active_watch_delta: float = 0.0
         self._lock = threading.RLock()
 
         # Cache known channel names
@@ -53,9 +54,15 @@ class SessionChannelTracker:
     def set_active_channel(self, channel_name: Optional[str]) -> None:
         """Set the channel whose video is currently playing."""
         with self._lock:
+            self._active_watch_delta = 0.0
             self.active_channel_name = (channel_name or "").strip() if channel_name else None
             if self.active_channel_name:
                 self.original_names[self._canon_name(self.active_channel_name)] = self.active_channel_name
+
+    def get_active_watch_delta(self) -> float:
+        """Return watch seconds accumulated during current active video playback."""
+        with self._lock:
+            return self._active_watch_delta
 
     def add_watch_delta(self, channel_name: str, delta_seconds: float) -> None:
         """Add watch seconds. Only increments if this channel's video is currently playing."""
@@ -71,6 +78,7 @@ class SessionChannelTracker:
             if active_clean != target_clean:
                 return
 
+            self._active_watch_delta += delta_seconds
             key = active_clean
             self.original_names.setdefault(key, channel_name)
 

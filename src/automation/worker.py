@@ -189,14 +189,23 @@ class AutomationWorker:
 
                 def _is_task_channel_disabled() -> bool:
                     ch_name = (task.channel or "").strip().lower()
-                    if not ch_name:
-                        return False
-                    if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_name):
-                        return True
-                    for c in self.config_mgr.get_channels():
-                        if (c.get("name") or "").strip().lower() == ch_name:
-                            ch_obj = Channel.from_dict(c)
-                            return not ch_obj.enabled or ch_obj.archived or ch_obj.target_achieved
+                    if ch_name:
+                        if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_name):
+                            return True
+                        for c in self.config_mgr.get_channels():
+                            if (c.get("name") or "").strip().lower() == ch_name:
+                                ch_obj = Channel.from_dict(c)
+                                if not ch_obj.enabled or ch_obj.archived or ch_obj.target_achieved:
+                                    return True
+                    if getattr(task, "target_multiplier", 0.0) > 0 and self.stats_store is not None:
+                        rec = self.stats_store.find_for_task(task)
+                        prev_watched = rec.watch_seconds if rec else 0.0
+                        curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
+                        total_w = prev_watched + curr_watch
+                        eff_d = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(task, "duration_seconds", 0.0)
+                        if eff_d > 0 and (total_w / eff_d) >= task.target_multiplier:
+                            emit(self.log_queue, f"Video '{task.title}' reached target multiplier ({task.target_multiplier:.2f}x). Stopping video playback.")
+                            return True
                     return False
 
                 try:
@@ -334,12 +343,16 @@ class AutomationWorker:
                             self.dispatcher.release_task(task)
                         continue
 
-                if self.stats_store is not None and task.max_runs > 0:
+                if self.stats_store is not None:
                     rec = self.stats_store.find_for_task(task)
-                    if rec is not None and rec.runs >= task.max_runs:
+                    current_runs = rec.runs if rec is not None else 0
+                    watch_sec = rec.watch_seconds if rec is not None else 0.0
+                    vid_dur = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(task, "duration_seconds", 0.0)
+                    if task.is_target_reached(current_runs, watch_sec, vid_dur):
+                        reason = f"target multiplier {task.target_multiplier:.1f}x reached" if (getattr(task, "target_multiplier", 0.0) > 0 and vid_dur > 0 and watch_sec / vid_dur >= task.target_multiplier) else f"max views limit of {task.max_runs} reached"
                         emit(
                             self.log_queue,
-                            f"Skipping task '{task.title or task.keywords or task.url}': reached run limit of {task.max_runs}.",
+                            f"Skipping task '{task.title or task.keywords or task.url}': {reason}.",
                         )
                         if self.dispatcher is not None:
                             self.dispatcher.release_task(task)
