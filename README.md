@@ -7,6 +7,7 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 ## Features
 
 - **Organic Keyword Search & Navigation**: Opens the YouTube home page, types the target keyword character-by-character with human micro-delays, scans the top 15 results for a matching video ID or title, then smooth-scrolls and clicks the result. A direct-URL fallback runs only when no organic match is found (and can be disabled in Settings).
+- **Autonomous "Start Browsing" Recommendation Loop**: In addition to standard queue automation, a dedicated loop discovers and plays videos matching your saved channels directly from the YouTube Home feed (~100 videos inspected after a 5s load) and watch-page sidebar recommendations, chaining playback continuously without closing the browser window.
 - **Stealth Browser Engine**: Powered by `undetected-chromedriver` and `selenium`, with the installed Chrome major version auto-detected from the Windows registry and a separate Chrome profile preserved per account under `runtime/chrome_profiles/`.
 - **Multi-Account & Multi-Threaded Execution**: Supports loading multiple accounts (`email:password`) and running 1–10 parallel browser sessions.
 - **Persistent Account Profiles**: Each account uses its own profile directory under `runtime/chrome_profiles`, preserving cookies, sessions, and browser settings between runs.
@@ -224,6 +225,20 @@ Click **💾 Save Settings** to apply. Settings are persisted in `settings.json`
 3. Watch the **progress bar and status line** on the Dashboard (completed/total tasks across all workers), with detailed output on the **Logs** screen and in `logs/automation.log` (API keys are redacted).
 4. A failed sign-in or a failed task is reported on the Dashboard status line as well as in the logs; failed tasks are retried once automatically.
 5. Click **⏹ Stop Automation** to stop; workers finish their current check-cycle and clean up their browser sessions.
+
+### 4b. Start Autonomous Watching Loop ("Start Browsing")
+
+In addition to static queue execution, you can launch continuous recommendation watching:
+
+1. Add at least one channel in the **📺 Channels** tab with a valid channel URL (`https://youtube.com/@handle` or `/channel/...`).
+2. On the **Dashboard**, click **▶ Start Browsing** (runs in parallel to or instead of queue automation).
+3. The worker signs in (or uses existing session cookies) and navigates to `https://www.youtube.com/`.
+4. It pauses **5 seconds** for complete page layout hydration, then progressively scrolls the feed to inspect and extract ~100 video cards one-by-one.
+5. Scanned channel URLs and handles are matched against your stored channels. When a match is found, the card is clicked organically.
+6. The video is watched with normal human interactivity, ad handling, and watch-time statistics.
+7. When playback approaches completion, **the browser window does not close** — it inspects the sidebar's **Recommended / Up Next** feed for any matching stored channel URLs.
+8. If a match is found, it clicks into that recommendation; if no match is found, it navigates back to the YouTube Homepage, waits 5s, re-scans ~100 videos, and repeats.
+9. Click **⏹ Stop Watching** at any time to halt the loop and close the browser session.
 
 ## Project Layout Notes
 

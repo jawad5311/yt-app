@@ -51,6 +51,8 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] **Skip Ads** toggle and **Max Ad Watch (seconds)** entry on the Settings screen, persisted to `settings.json`.
 - [x] All settings exposed and saved from the Settings screen with validation.
 
+- [x] **Autonomous "Start Browsing" Recommendation Loop** (`src/automation/watching_worker.py`) — continuous watching loop triggered by **▶ Start Browsing**: signs in, visits homepage (5s load wait), scrolls and inspects ~100 videos matching stored channel URLs, opens and watches video, inspects watch-page recommendations without closing browser window, chains matching videos, and falls back to homepage feed.
+
 ### Channels (video grouping & auto-fetch)
 
 - [x] **`Channel` model** (`src/models/channel.py`) — name + URL with URL normalization (`youtube.com/@x` → `https://…`), duplicate/blank-name validation, and `group_videos_by_channel()` bucketing (channel order preserved, original queue indexes preserved, trailing *Uncategorized* group).
