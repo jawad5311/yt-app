@@ -14,7 +14,7 @@ from ..config.stats_store import StatsStore
 from ..models.account import Account
 from ..models.channel import Channel, is_video_task_runnable
 from ..models.video_task import VideoTask
-from ..models.watch_stats import format_duration
+from ..models.watch_stats import format_duration, resolve_video_key
 from ..utils.logger import emit, init_logging
 from .views.accounts_view import AccountsView
 from .views.channels_view import ChannelsView
@@ -79,8 +79,8 @@ class YTBotApp(ctk.CTk):
         nav_items = [
             ("dashboard", "📊 Dashboard"),
             ("accounts", "👤 Accounts"),
-            ("queue", "🎥 Video Queue"),
             ("channels", "📺 Channels"),
+            ("queue", "🎥 Video Queue"),
             ("settings", "⚙ Settings"),
             ("logs", "📋 Logs"),
         ]
@@ -109,8 +109,8 @@ class YTBotApp(ctk.CTk):
         self.views: Dict[str, Any] = {
             "dashboard": DashboardView(self.container, self),
             "accounts": AccountsView(self.container, self),
-            "queue": QueueView(self.container, self),
             "channels": ChannelsView(self.container, self),
+            "queue": QueueView(self.container, self),
             "settings": SettingsView(self.container, self),
             "logs": LogsView(self.container, self),
         }
@@ -343,13 +343,17 @@ class YTBotApp(ctk.CTk):
         self.views["dashboard"].reset_progress()
         self.views["dashboard"].set_status("Starting watch session...", "info")
 
+        total_loops = 1
+        if "dashboard" in self.views and hasattr(self.views["dashboard"], "get_loop_count"):
+            total_loops = self.views["dashboard"].get_loop_count()
+
         threading.Thread(
             target=self._run_watching_session,
-            args=(self.loaded_accounts[0], active_channels),
+            args=(self.loaded_accounts[0], active_channels, total_loops),
             daemon=True,
         ).start()
 
-    def _run_watching_session(self, account: Account, channels: List[Channel]):
+    def _run_watching_session(self, account: Account, channels: List[Channel], total_loops: int = 1):
         """Execute the continuous watching recommendation session."""
         worker = WatchingWorker(
             account=account,
@@ -360,6 +364,8 @@ class YTBotApp(ctk.CTk):
             event_queue=self.event_queue,
             stats_store=self.stats_store,
             pause_event=self.pause_event,
+            total_loops=total_loops,
+            open_videos=True,
         )
         worker.run()
 
@@ -405,6 +411,41 @@ class YTBotApp(ctk.CTk):
             total_sum = sum(t for _, t in self.worker_progress.values())
             self.views["dashboard"].set_progress(done_sum, total_sum)
             # Watch counters are written when a task finishes: repaint them.
+            self.refresh_watch_stats()
+        elif kind == "add_video_task" and len(event) == 2:
+            task_dict = event[1]
+            queue_view = self.views.get("queue")
+            if queue_view is not None:
+                vid_key = resolve_video_key(VideoTask.from_dict(task_dict), task_dict.get("url", ""))
+                match_found = False
+                for t in queue_view.video_tasks:
+                    if resolve_video_key(t, t.url) == vid_key:
+                        match_found = True
+                        if not t.channel and task_dict.get("channel"):
+                            t.channel = task_dict.get("channel")
+                        if t.max_runs == 0 and task_dict.get("max_runs", 0) > 0:
+                            t.max_runs = int(task_dict.get("max_runs", 0))
+                        break
+                if not match_found:
+                    new_t = VideoTask.from_dict(task_dict)
+                    queue_view.video_tasks.append(new_t)
+                queue_view.save_queue()
+                queue_view.refresh_list()
+            self.refresh_watch_stats()
+        elif kind == "update_video_duration" and len(event) == 3:
+            task_dict, dur_sec = event[1], event[2]
+            queue_view = self.views.get("queue")
+            if queue_view is not None:
+                vid_key = resolve_video_key(VideoTask.from_dict(task_dict), task_dict.get("url", ""))
+                for t in queue_view.video_tasks:
+                    if resolve_video_key(t, t.url) == vid_key:
+                        t.duration_seconds = int(dur_sec)
+                        m, s = divmod(int(dur_sec), 60)
+                        h, m = divmod(m, 60)
+                        t.duration_text = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+                        break
+                queue_view.save_queue()
+                queue_view.refresh_list()
             self.refresh_watch_stats()
         elif kind == "status" and len(event) == 3:
             _, message, level = event
