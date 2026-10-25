@@ -518,7 +518,7 @@ def watch_video(
     enable_interactivity: bool = True,
     interactivity_config: Optional[Dict[str, Any]] = None,
     pause_event: Optional[threading.Event] = None,
-    completion_ratio: float = 0.95,
+    completion_ratio: Optional[float] = None,
     should_stop_callback: Optional[Callable[[], bool]] = None,
     on_watch_tick: Optional[Callable[[float], None]] = None,
 ) -> WatchResult:
@@ -530,6 +530,13 @@ def watch_video(
         if (end_buffer_seconds is None or end_buffer_seconds <= 0)
         else float(end_buffer_seconds)
     )
+
+    # Random completion cutoff between 95% and 100% (e.g. 0.95 to 0.995)
+    if completion_ratio is not None and completion_ratio > 0:
+        effective_completion_ratio = float(completion_ratio)
+    else:
+        effective_completion_ratio = random.uniform(0.95, 0.995)
+    logged_95_pct = False
 
     cfg = interactivity_config or {}
     simulator = HumanInteractivitySimulator(
@@ -780,19 +787,31 @@ def watch_video(
                 f"Playback timeline update: video currently playing at {cur_fmt} / {dur_fmt} (watchtime counter: {int(watched_seconds // 60)}m {int(watched_seconds % 60):02d}s)",
             )
 
-        # Playback finished (stops before autoplay countdown or next-video navigation triggers)
-        effective_buffer = calculate_end_buffer(video_duration, target_buffer)
-        threshold_time = (
-            min(video_duration - effective_buffer, video_duration * completion_ratio)
-            if completion_ratio < 1.0
-            else (video_duration - effective_buffer)
-        )
-        if video_duration > 0 and (ended or curr_time >= threshold_time):
-            pct = int((curr_time / video_duration) * 100) if video_duration > 0 else 100
+        # Milestone: Log when video reaches 95% completion
+        if video_duration > 0 and curr_time >= (video_duration * 0.95) and not logged_95_pct:
+            logged_95_pct = True
+            target_pct_fmt = round(effective_completion_ratio * 100, 1)
             emit(
                 log_queue,
-                f"Video playback reached {pct}% completion ({_format_clock(curr_time)} / "
-                f"{_format_clock(video_duration)})! Proceeding to recommended videos.",
+                f"Video viewed for 95% ({_format_clock(curr_time)} / {_format_clock(video_duration)}). "
+                f"Closing randomly between 95%–100% (target cutoff: {target_pct_fmt}%)...",
+            )
+
+        # Playback finished check (random 95%–100% cutoff, capped at video_duration - 1.0s to avoid autoplay countdown)
+        effective_buffer = calculate_end_buffer(video_duration, target_buffer)
+        raw_cutoff = video_duration * effective_completion_ratio
+        if completion_ratio is not None and completion_ratio > 0:
+            threshold_time = min(video_duration - effective_buffer, raw_cutoff) if effective_completion_ratio < 1.0 else (video_duration - effective_buffer)
+        else:
+            threshold_time = min(video_duration - 1.0, max(video_duration * 0.95, raw_cutoff))
+
+        if video_duration > 0 and (ended or curr_time >= threshold_time):
+            pct = round((curr_time / video_duration) * 100, 1) if video_duration > 0 else 100
+            target_pct_fmt = round(effective_completion_ratio * 100, 1)
+            emit(
+                log_queue,
+                f"Video playback reached {pct}% completion (cutoff: {target_pct_fmt}%) "
+                f"({_format_clock(curr_time)} / {_format_clock(video_duration)})! Closing video and moving to next.",
             )
             return _result(True, "ended", playback_finished=True)
 

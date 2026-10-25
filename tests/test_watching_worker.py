@@ -247,7 +247,7 @@ class TestWatchingWorker:
         worker.click_home_video = MagicMock(side_effect=click_side_effect)
 
         def watch_side_effect(*args, **kwargs):
-            assert kwargs.get("duration_seconds") == 60
+            assert kwargs.get("duration_seconds") is None or kwargs.get("duration_seconds") == 60
             worker.stop_event.set()
             return WatchResult(completed=True, watched_seconds=190.0, video_duration=190.0, playback_finished=True)
 

@@ -1135,7 +1135,7 @@ class WatchingWorker:
             pass
 
         enable_interactivity, interactivity_cfg = self._interactivity_settings()
-        emit(self.log_queue, f"\n--- Watching Video (1-Minute Test): '{title}' ({channel_display}) ---")
+        emit(self.log_queue, f"\n--- Watching Video: '{title}' ({channel_display}) ---")
         self._report_status(f"Watching: {title}", "info")
 
         def _should_stop(ch_name=channel_display) -> bool:
@@ -1157,10 +1157,11 @@ class WatchingWorker:
                     return True
             return False
 
+        target_watch_duration = registered_task.parse_duration_seconds()
         self.channel_tracker.set_active_channel(channel_display)
         watch_res = watch_video(
             self.driver,
-            duration_seconds=60,
+            duration_seconds=target_watch_duration,
             stop_event=self.stop_event,
             log_queue=self.log_queue,
             full_timeout_seconds=self._full_video_timeout_seconds(),

@@ -217,3 +217,44 @@ def test_skip_button_ignores_visit_site_cta():
         "aria-label": "Skip ad",
     }.get(attr, "")
     assert is_genuine_skip_button(skip_btn) is True
+
+
+def test_watch_video_random_cutoff_between_95_and_100_percent():
+    import queue
+    driver = MagicMock()
+    driver.current_url = "https://www.youtube.com/watch?v=test95percent"
+    log_q = queue.Queue()
+
+    # 1000s duration video (so 95% is 950s)
+    states = [
+        {"found": True, "paused": False, "ended": False, "currentTime": 500.0, "duration": 1000.0, "isAd": False},
+        {"found": True, "paused": False, "ended": False, "currentTime": 951.0, "duration": 1000.0, "isAd": False},
+        {"found": True, "paused": False, "ended": False, "currentTime": 996.0, "duration": 1000.0, "isAd": False},
+    ]
+
+    def mock_exec(script, *args):
+        if "currentTime" in script:
+            return states.pop(0) if states else {"found": True, "paused": False, "ended": True, "currentTime": 1000.0, "duration": 1000.0, "isAd": False}
+        return None
+
+    driver.execute_script.side_effect = mock_exec
+
+    result = watch_video(
+        driver,
+        duration_seconds=None,
+        log_queue=log_q,
+        enable_interactivity=False,
+    )
+
+    assert result.completed is True
+    assert result.playback_finished is True
+    assert result.reason == "ended"
+
+    # Check logs for 95% milestone notification and final random cutoff
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    assert "Video viewed for 95%" in log_text
+    assert "Closing randomly between 95%–100%" in log_text
