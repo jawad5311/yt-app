@@ -711,7 +711,7 @@ class QueueView(ctk.CTkFrame):
 
         stats_lbl = ctk.CTkLabel(
             card,
-            text=format_watch_line(record, max_runs=task.max_runs),
+            text=format_watch_line(record, max_runs=task.max_runs, use_hours=True),
             justify="left",
             font=ctk.CTkFont(size=12),
             anchor="w",

@@ -13,7 +13,7 @@ from ...models.channel import (
     clean_channel_url,
 )
 from ...models.video_task import VideoTask
-from ...models.watch_stats import format_duration, format_totals_line
+from ...models.watch_stats import format_duration, format_hours, format_totals_line
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
     extract_fallback_channel_name,
@@ -196,10 +196,10 @@ class ChannelsView(ctk.CTkFrame):
         return "@channel"
 
     def get_channel_watch_time(self, channel: Channel) -> str:
-        """Calculate total watch time from all recorded videos for this channel."""
+        """Calculate total watch time from all recorded videos for this channel in hours (1-digit float)."""
         store = getattr(self.app_controller, "stats_store", None)
         if not store:
-            return "0s"
+            return "0.0 hours"
         clean = (channel.name or "").strip()
         names = {
             clean.lower(),
@@ -212,7 +212,7 @@ class ChannelsView(ctk.CTkFrame):
                 ch_rec = (record.channel or "").strip().lower()
                 if ch_rec in names:
                     total_sec += float(record.watch_seconds)
-        return format_duration(total_sec)
+        return format_hours(total_sec)
 
     def channel_stats_line(self, channel_name: str) -> str:
         """``27 runs · 12h 04m watched`` for one channel row, or ``""``."""
@@ -772,6 +772,11 @@ class ChannelsView(ctk.CTkFrame):
                 if task.max_runs > 0:
                     status_info += f"  |  Limit: {task.max_runs} runs"
                 label_parts.append(status_info)
+
+                store = getattr(self.app_controller, "stats_store", None)
+                rec = store.find_for_task(task) if store else None
+                v_watch_sec = float(rec.watch_seconds) if rec else 0.0
+                label_parts.append(f"Total Watch Time: {format_hours(v_watch_sec)}")
 
                 ctk.CTkLabel(
                     card,

@@ -279,6 +279,12 @@ def totals_for(records: Iterable[StatRecord]) -> Totals:
     return totals
 
 
+def format_hours(seconds: float) -> str:
+    """Format duration in hours with 1 digit floating point: e.g. '0.1 hours', '1.5 hours'."""
+    hours = max(0.0, float(seconds)) / 3600.0
+    return f"{hours:.1f} hours"
+
+
 def format_duration(seconds: float) -> str:
     """Human duration: ``58s`` · ``1m 05s`` · ``4h 32m``."""
     total = int(max(0.0, seconds))
@@ -289,8 +295,12 @@ def format_duration(seconds: float) -> str:
     return f"{total // 3600}h {(total % 3600) // 60:02d}m"
 
 
-def format_watch_line(record: Optional[StatRecord], max_runs: int = 0) -> str:
-    """Queue-card line: ``▶ 12 runs · 4h 32m watched · last ✅`` or with limit progress."""
+def format_watch_line(
+    record: Optional[StatRecord],
+    max_runs: int = 0,
+    use_hours: bool = False,
+) -> str:
+    """Queue-card line: ``▶ 12 runs · 4.4 hours watched · last ✅`` or with limit progress."""
     current_runs = record.runs if record is not None else 0
     if max_runs > 0:
         if current_runs >= max_runs:
@@ -312,7 +322,8 @@ def format_watch_line(record: Optional[StatRecord], max_runs: int = 0) -> str:
             return f"▶ {runs_str}"
         return "▶ Not run yet"
 
-    line = f"▶ {runs_str} · {format_duration(record.watch_seconds)} watched"
+    time_str = format_hours(record.watch_seconds) if use_hours else format_duration(record.watch_seconds)
+    line = f"▶ {runs_str} · {time_str} watched"
     if record is not None and record.last_result:
         icon = RESULT_ICONS.get(record.last_result)
         if icon:
@@ -349,6 +360,7 @@ __all__ = [
     "calculate_length_equivalent_runs",
     "fold_records",
     "format_duration",
+    "format_hours",
     "format_totals_line",
     "format_watch_line",
     "group_records_by_channel",
