@@ -152,6 +152,13 @@ class ChannelsView(ctk.CTkFrame):
 
     def load_channels(self) -> None:
         self.channels = [Channel.from_dict(entry) for entry in self.app_controller.config_mgr.get_channels()]
+        store = getattr(self.app_controller, "stats_store", None)
+        if store:
+            for ch in self.channels:
+                if getattr(ch, "watch_seconds", 0.0) <= 0.0:
+                    hist_totals = store.channel_totals(ch.name)
+                    if hist_totals.watch_seconds > 0:
+                        ch.watch_seconds = hist_totals.watch_seconds
         self.refresh_list()
 
     def save_channels(self) -> None:

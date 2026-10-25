@@ -1,3 +1,4 @@
+from .session_tracker import SessionChannelTracker
 import logging
 import queue
 import threading
@@ -49,6 +50,14 @@ class AutomationWorker:
         self.driver: Any = None
         self.skip_ads = True
         self.max_ad_seconds = 32
+        ch_objs = [Channel.from_dict(c) for c in self.config_mgr.get_channels()] if self.config_mgr else []
+        self.channel_tracker = SessionChannelTracker(
+            config_mgr=self.config_mgr,
+            stats_store=self.stats_store,
+            channels=ch_objs,
+            emit_event=self._emit_event,
+            log_queue=self.log_queue,
+        )
 
     # ------------------------------------------------------------------ events
 
@@ -189,6 +198,8 @@ class AutomationWorker:
 
                 try:
                     enable_interactivity, interactivity_cfg = self._interactivity_settings()
+                    ch_name = task.channel or "Uncategorized"
+                    self.channel_tracker.set_active_channel(ch_name)
                     result = watch_video(
                         self.driver,
                         task.parse_duration_seconds(),
@@ -201,7 +212,9 @@ class AutomationWorker:
                         enable_interactivity=enable_interactivity,
                         interactivity_config=interactivity_cfg,
                         should_stop_callback=_is_task_channel_disabled,
+                        on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
                     )
+                    self.channel_tracker.set_active_channel(None)
                     outcome.watched_seconds += max(0.0, result.watched_seconds)
                     outcome.ad_seconds += max(0.0, result.ad_seconds)
                     if result.video_duration > 0:
@@ -345,4 +358,12 @@ class AutomationWorker:
             emit(self.log_queue, f"Critical error during worker session for {self.account.email}: {exc}", logging.ERROR)
             self._report_status(f"Worker crashed for {self.account.email}: {exc}", "error")
         finally:
+            if hasattr(self, "channel_tracker"):
+                self.channel_tracker.on_stop()
             close_driver(self.driver, log_queue=self.log_queue)
+
+    def stop(self) -> None:
+        """Stop worker execution."""
+        self.stop_event.set()
+        if hasattr(self, "channel_tracker"):
+            self.channel_tracker.on_stop()

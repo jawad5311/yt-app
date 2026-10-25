@@ -130,9 +130,27 @@ class StatsStore:
         with self._lock:
             return dict(self.records)
 
+    def add_channel_watch_seconds(self, channel_name: str, seconds: float) -> None:
+        """Add watch seconds for a channel to stats store."""
+        if seconds <= 0:
+            return
+        clean = (channel_name or "").strip()
+        key = f"channel::{clean.lower().lstrip('@')}"
+        with self._lock:
+            rec = self.records.get(key)
+            if rec is None:
+                rec = StatRecord(channel=channel_name)
+                self.records[key] = rec
+            rec.watch_seconds += seconds
+            self._save_unlocked()
+
     def for_channel(self, channel: str) -> List[StatRecord]:
         with self._lock:
-            return [record for record in self.records.values() if record.channel == channel]
+            clean = (channel or "").strip().lower().lstrip("@")
+            return [
+                record for record in self.records.values()
+                if (record.channel or "").strip().lower().lstrip("@") == clean
+            ]
 
     def channel_totals(self, channel: str) -> Totals:
         return totals_for(self.for_channel(channel))

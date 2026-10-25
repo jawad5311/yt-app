@@ -480,6 +480,8 @@ class YTBotApp(ctk.CTk):
                 else:
                     self._queue_needs_refresh = True
             self.refresh_watch_stats()
+        elif kind == "channel_watch_time_updated":
+            self.refresh_watch_stats()
         elif kind == "status" and len(event) == 3:
             _, message, level = event
             self.views["dashboard"].set_status(message, level)

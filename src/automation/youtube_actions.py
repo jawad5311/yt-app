@@ -520,6 +520,7 @@ def watch_video(
     pause_event: Optional[threading.Event] = None,
     completion_ratio: float = 0.95,
     should_stop_callback: Optional[Callable[[], bool]] = None,
+    on_watch_tick: Optional[Callable[[float], None]] = None,
 ) -> WatchResult:
     """Watch the target video for a fixed duration or its full length."""
     is_full_mode = duration_seconds is None or duration_seconds <= 0
@@ -698,6 +699,11 @@ def watch_video(
         paused = bool(video_state.get("paused", False))
         if not is_ad and not paused:
             watched_seconds += delta
+            if on_watch_tick is not None:
+                try:
+                    on_watch_tick(delta)
+                except Exception:
+                    pass
 
         # ------------------------------------------------------------ ads ----
         if is_ad:

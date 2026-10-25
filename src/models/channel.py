@@ -74,6 +74,7 @@ class Channel:
     url: str = ""
     enabled: bool = True
     archived: bool = False
+    watch_seconds: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"name": self.name, "url": self.url}
@@ -81,6 +82,8 @@ class Channel:
             data["enabled"] = False
         if self.archived:
             data["archived"] = True
+        if self.watch_seconds > 0.0:
+            data["watch_seconds"] = round(self.watch_seconds, 3)
         return data
 
     @classmethod
@@ -93,11 +96,13 @@ class Channel:
         archived_val = data.get("archived", False)
         if isinstance(archived_val, str):
             archived_val = archived_val.lower() in ("true", "1", "yes")
+        watch_sec_val = float(data.get("watch_seconds", 0.0) or 0.0)
         return cls(
             name=str(data.get("name") or "").strip(),
             url=normalize_channel_url(str(data.get("url") or "")),
             enabled=bool(enabled_val),
             archived=bool(archived_val),
+            watch_seconds=watch_sec_val,
         )
 
     @classmethod

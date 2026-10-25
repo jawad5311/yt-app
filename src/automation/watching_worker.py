@@ -1,3 +1,4 @@
+from .session_tracker import SessionChannelTracker
 """Watching Worker.
 
 Manages autonomous video discovery and continuous chained playback:
@@ -375,6 +376,13 @@ class WatchingWorker:
         self.driver: Any = None
         self.skip_ads = True
         self.max_ad_seconds = 32
+        self.channel_tracker = SessionChannelTracker(
+            config_mgr=self.config_mgr,
+            stats_store=self.stats_store,
+            channels=self.channels,
+            emit_event=self._emit_event,
+            log_queue=self.log_queue,
+        )
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -1098,6 +1106,7 @@ class WatchingWorker:
                             active_names = {c.name.lower() for c in self.get_target_channels()}
                             return ch_name.lower() not in active_names
 
+                        self.channel_tracker.set_active_channel(matched_rec_channel_name)
                         watch_res = watch_video(
                             self.driver,
                             duration_seconds=60,
@@ -1111,7 +1120,9 @@ class WatchingWorker:
                             interactivity_config=interactivity_cfg,
                             pause_event=self.pause_event,
                             should_stop_callback=_should_stop_rec,
+                            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(matched_rec_channel_name, d),
                         )
+                        self.channel_tracker.set_active_channel(None)
 
                         watched_count += 1
                         vid_id = extract_video_id(matched_rec_url) or matched_rec_url
@@ -1321,6 +1332,7 @@ class WatchingWorker:
                     active_names = {c.name.lower() for c in self.get_target_channels()}
                     return ch_name.lower() not in active_names
 
+                self.channel_tracker.set_active_channel(channel_display)
                 watch_res = watch_video(
                     self.driver,
                     duration_seconds=60,
@@ -1334,7 +1346,9 @@ class WatchingWorker:
                     interactivity_config=interactivity_cfg,
                     pause_event=self.pause_event,
                     should_stop_callback=_should_stop_home,
+                    on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(channel_display, d),
                 )
+                self.channel_tracker.set_active_channel(None)
 
                 watched_count += 1
                 vid_id = extract_video_id(clean_href) or clean_href
@@ -1372,4 +1386,12 @@ class WatchingWorker:
             emit(self.log_queue, f"Critical error during watching session: {exc}", logging.ERROR)
             self._report_status(f"Watching error: {exc}", "error")
         finally:
+            if hasattr(self, "channel_tracker"):
+                self.channel_tracker.on_stop()
             close_driver(self.driver, log_queue=self.log_queue)
+
+    def stop(self) -> None:
+        """Stop the continuous watching loop and all running tasks."""
+        self.stop_event.set()
+        if hasattr(self, "channel_tracker"):
+            self.channel_tracker.on_stop()
