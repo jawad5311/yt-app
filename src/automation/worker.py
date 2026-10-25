@@ -9,7 +9,6 @@ from ..models.account import Account
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.logger import emit
-from .adblock import ensure_adblock
 from .dispatcher import TaskDispatcher
 from .driver import close_driver, setup_driver
 from .login import perform_google_login
@@ -92,7 +91,11 @@ class AutomationWorker:
         enabled = self.config_mgr.get_bool("EnableHumanInteractivity", True)
         config: Dict[str, Any] = {
             "scroll_comments": self.config_mgr.get_bool("RandomScrolling", True),
-            "variable_speed": self.config_mgr.get_bool("VariableSpeed", True),
+            "variable_speed": False,
+            "toggle_captions": self.config_mgr.get_bool("ToggleCaptions", True),
+            "expand_description": self.config_mgr.get_bool("ExpandDescription", True),
+            "like_comments": self.config_mgr.get_bool("LikeComments", True),
+            "like_video": self.config_mgr.get_bool("LikeVideo", True),
             "adjust_quality": self.config_mgr.get_bool("AdjustQuality", True),
             "quality_level": self.config_mgr.get_setting("QualityLevel", "360p"),
             "micro_pauses": self.config_mgr.get_bool("RandomMicroPauses", True),
@@ -237,8 +240,7 @@ class AutomationWorker:
 
         try:
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
-            adblock_path = ensure_adblock(log_queue=self.log_queue) if self.skip_ads else None
-            self.driver = setup_driver(self.account, log_queue=self.log_queue, adblock_path=adblock_path)
+            self.driver = setup_driver(self.account, log_queue=self.log_queue)
 
             if self.stop_event.is_set():
                 return

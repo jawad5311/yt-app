@@ -1,7 +1,9 @@
 import json
 import logging
+import os
 import queue
 import shutil
+import subprocess
 import threading
 import urllib.request
 import winreg
@@ -13,7 +15,6 @@ import undetected_chromedriver as uc
 
 from ..models.account import Account
 from ..utils.logger import emit
-from .adblock import load_extension_cdp
 
 
 def get_runtime_profiles_dir() -> Path:
@@ -24,7 +25,19 @@ def get_runtime_profiles_dir() -> Path:
 
 
 def cleanup_profile_locks(profile_path: Path) -> None:
-    """Remove lock files from Chrome user-data directory to prevent crash on startup."""
+    """Terminate lingering Chrome processes and remove lock files to prevent startup hangs."""
+    if os.name == "nt":
+        dir_name = profile_path.name
+        ps_script = (
+            f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe' or Name = 'chromedriver.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{dir_name}*' }} | "
+            f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        )
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=10)
+        except Exception:
+            pass
+
     lock_names = ["SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile"]
     for lock in lock_names:
         lock_file = profile_path / lock
@@ -225,6 +238,7 @@ def setup_driver(
         launch_kwargs["driver_executable_path"] = str(driver_path)
 
     try:
+        emit(log_queue, "Launching Chrome browser instance...")
         with DRIVER_INIT_LOCK:
             try:
                 driver = uc.Chrome(options=options, **launch_kwargs)
@@ -237,8 +251,6 @@ def setup_driver(
                 driver = uc.Chrome(options=options, **launch_kwargs)
         driver.set_page_load_timeout(45)
 
-        if adblock_path is not None:
-            load_extension_cdp(driver, adblock_path, log_queue)
 
         # First successful automatic download -> keep a copy for offline launches.
         if driver_path is None and chrome_major:
@@ -260,10 +272,20 @@ def setup_driver(
 
 
 def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None) -> None:
-    """Safely quit driver session."""
+    """Safely quit driver session and terminate lingering browser processes."""
     if driver is not None:
         try:
+            browser_pid = getattr(driver, "browser_pid", None)
             driver.quit()
+            if browser_pid and os.name == "nt":
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(browser_pid)],
+                        capture_output=True,
+                        timeout=5,
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
         emit(log_queue, "Browser session closed.")
