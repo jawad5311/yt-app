@@ -799,6 +799,7 @@ def simulate_reading_comments_or_description(
     min_read_seconds: float = 4.0,
     max_read_seconds: float = 8.0,
     like_comments: bool = False,
+    expand_description: bool = False,
 ) -> bool:
     """Simulate a user scrolling down to read comments or description during a long video.
 
@@ -827,8 +828,9 @@ def simulate_reading_comments_or_description(
     except Exception:
         pass
 
-    # Step 2: Click '...more' button to expand video description
-    expand_video_description(driver, log_queue=log_queue)
+    # Step 2: Click '...more' button to expand video description if requested
+    if expand_description:
+        expand_video_description(driver, log_queue=log_queue)
 
     # Step 3: Pause down there to read
     read_duration = random.uniform(min_read_seconds, max_read_seconds)
@@ -959,6 +961,9 @@ class HumanInteractivitySimulator:
         self.like_video_target_time = 0.0
         self.will_expand_description = False
         self.expand_description_target_time = 0.0
+        self.late_interactions_done = False
+        self.late_interactions_target_time = 0.0
+        self.interaction_order = "video_then_comments" 
         self.will_adjust_quality = False
         self.chosen_quality = "360p"
         self.will_toggle_captions = False
@@ -991,24 +996,25 @@ class HumanInteractivitySimulator:
         else:
             self.chosen_quality = random.choice(["360p", "480p"])
 
-        # For each video: scroll down and click description once, then scroll down and like comments once
+        # 1. Expand video description after 10% of the video is watched
         self.will_expand_description = bool(self.expand_description)
-        self.will_like_comments = bool(self.like_comments)
-        self.will_browse_desc_comments = bool(self.expand_description or self.like_comments)
-        if self.will_browse_desc_comments:
-            self.browse_desc_comments_target_time = random.uniform(
-                12.0, min(24.0, max(14.0, effective_duration * 0.35))
-            )
-            self.expand_description_target_time = self.browse_desc_comments_target_time
-            self.like_comments_target_time = self.browse_desc_comments_target_time
+        if self.will_expand_description:
+            # 10% progress + small random jitter (0.5 - 2s)
+            self.expand_description_target_time = max(3.0, (effective_duration * 0.10) + random.uniform(0.5, 2.0))
 
-        # Like video at 50-60% progress + random delay
+        # 2. Like comments and like video at 70-80% progress + random delay
+        self.will_like_comments = bool(self.like_comments)
         self.will_like_video = bool(self.like_video)
-        if self.will_like_video:
-            progress_ratio = random.uniform(0.50, 0.60)
-            random_delay = random.uniform(2.0, 6.0)
-            target = (effective_duration * progress_ratio) + random_delay
-            self.like_video_target_time = min(target, max(10.0, effective_duration - 4.0))
+
+        progress_ratio_70_80 = random.uniform(0.70, 0.80)
+        random_delay = random.uniform(2.0, 6.0)
+        late_target = (effective_duration * progress_ratio_70_80) + random_delay
+        self.late_interactions_target_time = min(late_target, max(10.0, effective_duration * 0.92))
+        self.like_comments_target_time = self.late_interactions_target_time
+        self.like_video_target_time = self.late_interactions_target_time
+
+        # Randomize order: sometimes like video then comments, sometimes comments then video
+        self.interaction_order = random.choice(["video_then_comments", "comments_then_video"])
 
         # Closed captions
         self.will_toggle_captions = bool(self.toggle_captions and (random.random() < self.caption_chance))
@@ -1106,39 +1112,80 @@ class HumanInteractivitySimulator:
                 ensure_normal_speed(driver)
                 self.speed_applied = True
 
-        # ---------------- Browse description (click once) & comments (like once) ---
+        # ---------------- Expand description (after 10% watched) -----------
         if (
-            self.will_browse_desc_comments
-            and not self.browse_desc_comments_done
+            self.expand_description
+            and self.will_expand_description
+            and not self.description_expanded
             and not paused
-            and curr_time >= self.browse_desc_comments_target_time
+            and curr_time >= self.expand_description_target_time
         ):
-            d_ok, c_ok = browse_description_and_like_comment(
-                driver,
-                stop_event=stop_event,
-                log_queue=log_queue,
-                expand_desc=self.expand_description and not self.description_expanded,
-                like_comm=self.like_comments and not self.comments_liked,
-            )
-            self.browse_desc_comments_done = True
-            self.description_expanded = True
-            self.comments_liked = True
-            if d_ok:
-                result["description_expanded"] = True
-            if c_ok:
-                result["comments_liked"] = 1
+            try:
+                scroll_down = random.randint(300, 450)
+                driver.execute_script(f"window.scrollBy({{top: {scroll_down}, behavior: 'smooth'}});")
+            except Exception:
+                pass
+            _interruptible_sleep(random.uniform(0.8, 1.4), stop_event)
 
-        # ---------------- Like video (at 50-60% + delay) --------------------
+            expanded = expand_video_description(driver, log_queue=log_queue)
+            self.description_expanded = True
+            if expanded:
+                result["description_expanded"] = True
+
+            _interruptible_sleep(random.uniform(1.2, 2.0), stop_event)
+            try:
+                driver.execute_script("window.scrollTo({top: 0, behavior: 'smooth'});")
+            except Exception:
+                pass
+
+        # ---------------- Late interactions: like comments & video (70-80% + delay) -
         if (
-            self.like_video
-            and self.will_like_video
-            and not self.video_liked
+            not self.late_interactions_done
             and not paused
-            and curr_time >= self.like_video_target_time
+            and curr_time >= self.late_interactions_target_time
         ):
-            like_active_video(driver, log_queue=log_queue)
-            self.video_liked = True
-            result["video_liked"] = True
+            self.late_interactions_done = True
+
+            def _do_like_video():
+                if self.like_video and self.will_like_video and not self.video_liked:
+                    like_active_video(driver, log_queue=log_queue)
+                    self.video_liked = True
+                    result["video_liked"] = True
+
+            def _do_like_comments():
+                if self.like_comments and self.will_like_comments and not self.comments_liked:
+                    try:
+                        driver.execute_script("""
+                            var c = document.querySelector('#comments, ytd-comments');
+                            if (c) {
+                                c.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            } else {
+                                window.scrollBy({ top: 650, behavior: 'smooth' });
+                            }
+                        """)
+                    except Exception:
+                        pass
+                    _interruptible_sleep(random.uniform(1.2, 2.0), stop_event)
+
+                    liked_count = like_random_comments(driver, min_likes=1, max_likes=2, stop_event=stop_event, log_queue=log_queue)
+                    self.comments_liked = True
+                    if liked_count > 0:
+                        result["comments_liked"] = liked_count
+
+                    _interruptible_sleep(random.uniform(1.0, 1.8), stop_event)
+                    try:
+                        driver.execute_script("window.scrollTo({top: 0, behavior: 'smooth'});")
+                    except Exception:
+                        pass
+
+            if self.interaction_order == "video_then_comments":
+                _do_like_video()
+                _interruptible_sleep(random.uniform(1.5, 3.0), stop_event)
+                _do_like_comments()
+            else:
+                _do_like_comments()
+                _interruptible_sleep(random.uniform(1.5, 3.0), stop_event)
+                _do_like_video()
 
         # ---------------- Closed captions (enable early) --------------------
         if (
@@ -1215,7 +1262,8 @@ class HumanInteractivitySimulator:
                 driver,
                 stop_event=stop_event,
                 log_queue=log_queue,
-                like_comments=self.like_comments and not self.comments_liked,
+                like_comments=False,
+                expand_description=self.expand_description and not self.description_expanded,
             )
             self.scroll_comments_done = True
             if scroll_ok:

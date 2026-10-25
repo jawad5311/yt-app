@@ -1,6 +1,6 @@
 import queue
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.automation.interactivity import (
     browse_description_and_like_comment,
@@ -331,12 +331,20 @@ def test_like_active_video():
     assert like_active_video(driver, log_queue=q) is False
 
 
-def test_simulator_plans_like_video_at_50_to_60_percent():
-    sim = HumanInteractivitySimulator(enabled=True, like_video=True)
+def test_simulator_plans_interactions_at_10_percent_and_70_to_80_percent():
+    sim = HumanInteractivitySimulator(enabled=True, like_video=True, like_comments=True, expand_description=True)
     sim.plan_session(video_duration=200.0)
+
+    # 1. Description expands after 10%
+    assert sim.will_expand_description is True
+    assert 19.0 <= sim.expand_description_target_time <= 25.0
+
+    # 2. Like comments and video planned at 70-80% + random delay
     assert sim.will_like_video is True
-    # 50-60% of 200s is 100s - 120s, plus 2-6s delay -> between 102s and 126s
-    assert 100.0 <= sim.like_video_target_time <= 130.0
+    assert sim.will_like_comments is True
+    # 70-80% of 200s is 140s - 160s, plus 2-6s delay -> 142s - 166s
+    assert 140.0 <= sim.late_interactions_target_time <= 170.0
+    assert sim.interaction_order in ("video_then_comments", "comments_then_video")
 
 
 def test_browse_description_and_like_comment_once():
@@ -393,3 +401,73 @@ def test_simulator_pauses_randomly():
     assert sim_pause.will_micro_pause is True
     assert sim_pause.micro_pause_target_time > 0.0
 
+
+
+def test_simulator_executes_10_percent_description_and_randomized_late_likes():
+    driver = MagicMock()
+    # Mock JS returns
+    def exec_script(script, *args):
+        if "tp-yt-paper-button#expand" in script or "description-inline-expander" in script:
+            return {"expanded": True}
+        if "ytd-toggle-button-renderer" in script or "like-button" in script or "LIKE_VIDEO_JS" in script:
+            return {"success": True, "already_liked": False}
+        if "ytd-comment-thread-renderer" in script or "LIKE_COMMENT_JS" in script:
+            return {"found": True, "author": "@random_user"}
+        return True
+
+    driver.execute_script.side_effect = exec_script
+
+    # Test 1: Order video_then_comments
+    sim1 = HumanInteractivitySimulator(enabled=True, like_video=True, like_comments=True, expand_description=True)
+    sim1.plan_session(video_duration=100.0)
+    sim1.interaction_order = "video_then_comments"
+    sim1.expand_description_target_time = 10.0
+    sim1.late_interactions_target_time = 75.0
+
+    call_order = []
+    with patch("src.automation.interactivity.expand_video_description") as mock_exp, \
+         patch("src.automation.interactivity.like_active_video") as mock_like_vid, \
+         patch("src.automation.interactivity.like_random_comments") as mock_like_com, \
+         patch("src.automation.interactivity._interruptible_sleep", return_value=False):
+
+        mock_exp.side_effect = lambda *a, **k: call_order.append("expand_desc") or True
+        mock_like_vid.side_effect = lambda *a, **k: call_order.append("like_video") or True
+        mock_like_com.side_effect = lambda *a, **k: call_order.append("like_comment") or 1
+
+        # At 5s: nothing due yet
+        res = sim1.on_playback_tick(driver, curr_time=5.0, video_duration=100.0, is_ad=False, paused=False)
+        assert len(call_order) == 0
+
+        # At 10s: description expands!
+        res = sim1.on_playback_tick(driver, curr_time=10.0, video_duration=100.0, is_ad=False, paused=False)
+        assert call_order == ["expand_desc"]
+        assert sim1.description_expanded is True
+
+        # At 75s: late interactions fire in order: video then comments
+        res = sim1.on_playback_tick(driver, curr_time=75.0, video_duration=100.0, is_ad=False, paused=False)
+        assert call_order == ["expand_desc", "like_video", "like_comment"]
+        assert sim1.video_liked is True
+        assert sim1.comments_liked is True
+
+    # Test 2: Order comments_then_video
+    sim2 = HumanInteractivitySimulator(enabled=True, like_video=True, like_comments=True, expand_description=True)
+    sim2.plan_session(video_duration=100.0)
+    sim2.interaction_order = "comments_then_video"
+    sim2.expand_description_target_time = 10.0
+    sim2.late_interactions_target_time = 75.0
+
+    call_order2 = []
+    with patch("src.automation.interactivity.expand_video_description") as mock_exp, \
+         patch("src.automation.interactivity.like_active_video") as mock_like_vid, \
+         patch("src.automation.interactivity.like_random_comments") as mock_like_com, \
+         patch("src.automation.interactivity._interruptible_sleep", return_value=False):
+
+        mock_exp.side_effect = lambda *a, **k: call_order2.append("expand_desc") or True
+        mock_like_vid.side_effect = lambda *a, **k: call_order2.append("like_video") or True
+        mock_like_com.side_effect = lambda *a, **k: call_order2.append("like_comment") or 1
+
+        # At 75s: late interactions fire in order: comments then video
+        res = sim2.on_playback_tick(driver, curr_time=75.0, video_duration=100.0, is_ad=False, paused=False)
+        assert call_order2 == ["expand_desc", "like_comment", "like_video"]
+        assert sim2.video_liked is True
+        assert sim2.comments_liked is True
