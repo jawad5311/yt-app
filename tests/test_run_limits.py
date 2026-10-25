@@ -341,3 +341,36 @@ def test_is_video_task_runnable_respects_target_multiplier(tmp_path):
         success=True,
     ))
     assert is_video_task_runnable(task, channels, stats_store=store) is False
+
+
+def test_queue_view_inline_entry_blank_and_zero_behavior():
+    def parse_target(val_str, current_val):
+        s = val_str.strip()
+        if not s or s in ("0", "0.0", "∞"):
+            return 0.0
+        try:
+            return max(0.0, float(s))
+        except ValueError:
+            return current_val
+
+    def parse_views(val_str, current_val):
+        s = val_str.strip()
+        if not s or s in ("0", "∞"):
+            return 0
+        try:
+            return max(0, int(s))
+        except ValueError:
+            return current_val
+
+    assert parse_target("", 2.0) == 0.0
+    assert parse_target("   ", 3.0) == 0.0
+    assert parse_views("", 5) == 0
+    assert parse_views("   ", 3) == 0
+
+    assert parse_target("3", 0.0) == 3.0
+    assert parse_target("2.5", 0.0) == 2.5
+    assert parse_views("5", 0) == 5
+    assert parse_views("10", 2) == 10
+
+    assert parse_target("0", 3.0) == 0.0
+    assert parse_views("0", 5) == 0

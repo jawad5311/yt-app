@@ -808,11 +808,11 @@ class QueueView(ctk.CTkFrame):
             action_btn_frame,
             width=46,
             height=28,
-            placeholder_text="∞",
+            placeholder_text="0",
             justify="center",
         )
-        if getattr(task, "target_multiplier", 0.0) > 0:
-            target_entry.insert(0, str(int(task.target_multiplier)) if task.target_multiplier.is_integer() else f"{task.target_multiplier:.1f}")
+        target_val = getattr(task, "target_multiplier", 0.0)
+        target_entry.insert(0, str(int(target_val)) if target_val.is_integer() else f"{target_val:.1f}")
         target_entry.pack(side="left", padx=(0, 2))
         ctk.CTkLabel(action_btn_frame, text="x", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
 
@@ -821,40 +821,43 @@ class QueueView(ctk.CTkFrame):
             action_btn_frame,
             width=46,
             height=28,
-            placeholder_text="∞",
+            placeholder_text="0",
             justify="center",
         )
-        if task.max_runs > 0:
-            views_entry.insert(0, str(task.max_runs))
+        views_entry.insert(0, str(task.max_runs))
         views_entry.pack(side="left", padx=(0, 8))
 
         def _on_target_change(*_):
             val_str = target_entry.get().strip()
-            try:
-                new_val = max(0.0, float(val_str)) if val_str else 0.0
-            except ValueError:
-                new_val = getattr(task, "target_multiplier", 0.0)
-                target_entry.delete(0, "end")
-                if new_val > 0:
-                    target_entry.insert(0, str(int(new_val)) if new_val.is_integer() else f"{new_val:.1f}")
-            if new_val != getattr(task, "target_multiplier", 0.0):
-                task.target_multiplier = new_val
-                self.save_queue()
-                self.refresh_list()
+            if not val_str or val_str in ("0", "0.0", "∞"):
+                new_val = 0.0
+            else:
+                try:
+                    new_val = max(0.0, float(val_str))
+                except ValueError:
+                    new_val = getattr(task, "target_multiplier", 0.0)
+
+            task.target_multiplier = new_val
+            self.save_queue()
+            target_entry.delete(0, "end")
+            target_entry.insert(0, str(int(new_val)) if new_val.is_integer() else f"{new_val:.1f}")
+            self.refresh_list()
 
         def _on_views_change(*_):
             val_str = views_entry.get().strip()
-            try:
-                new_val = max(0, int(val_str)) if val_str else 0
-            except ValueError:
-                new_val = task.max_runs
-                views_entry.delete(0, "end")
-                if new_val > 0:
-                    views_entry.insert(0, str(new_val))
-            if new_val != task.max_runs:
-                task.max_runs = new_val
-                self.save_queue()
-                self.refresh_list()
+            if not val_str or val_str in ("0", "∞"):
+                new_val = 0
+            else:
+                try:
+                    new_val = max(0, int(val_str))
+                except ValueError:
+                    new_val = task.max_runs
+
+            task.max_runs = new_val
+            self.save_queue()
+            views_entry.delete(0, "end")
+            views_entry.insert(0, str(new_val))
+            self.refresh_list()
 
         target_entry.bind("<FocusOut>", _on_target_change)
         target_entry.bind("<Return>", _on_target_change)
