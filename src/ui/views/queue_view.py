@@ -68,8 +68,59 @@ class QueueView(ctk.CTkFrame):
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="Queued Target Videos")
         self.scroll_frame.grid(row=2, column=0, padx=20, pady=(10, 20), sticky="nsew")
         self.scroll_frame.grid_columnconfigure(0, weight=1)
+        self._setup_fast_scrolling()
 
         self.load_initial_queue()
+
+    def _setup_fast_scrolling(self):
+        """Install smooth, responsive, batched mouse wheel scrolling on the scroll frame."""
+        canvas = self.scroll_frame._parent_canvas
+        canvas_str = str(canvas)
+
+        self._wheel_accum = 0
+        self._wheel_job = None
+
+        def _flush_wheel():
+            self._wheel_job = None
+            delta = self._wheel_accum
+            self._wheel_accum = 0
+            if delta == 0:
+                return
+            try:
+                if abs(delta) < 10:
+                    step = -int(delta * 25)
+                else:
+                    step = -int(delta / 2)
+                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
+                    canvas.yview("scroll", step, "units")
+            except Exception:
+                pass
+
+        def _on_mousewheel(event):
+            w_str = str(event.widget)
+            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
+                self._wheel_accum += event.delta
+                if self._wheel_job is None:
+                    self._wheel_job = canvas.after_idle(_flush_wheel)
+                return "break"
+
+        def _on_linux_scroll_up(event):
+            w_str = str(event.widget)
+            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
+                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
+                    canvas.yview("scroll", -60, "units")
+                return "break"
+
+        def _on_linux_scroll_down(event):
+            w_str = str(event.widget)
+            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
+                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
+                    canvas.yview("scroll", 60, "units")
+                return "break"
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+")
+        canvas.bind_all("<Button-4>", _on_linux_scroll_up, add="+")
+        canvas.bind_all("<Button-5>", _on_linux_scroll_down, add="+")
 
     def _default_watch_duration(self) -> str:
         """Default duration for newly created tasks (Settings -> Default Watch Duration)."""
