@@ -48,6 +48,13 @@ def test_key_from_task_url_uses_video_id():
     assert resolve_video_key(task) == "dQw4w9WgXcQ"
 
 
+def test_task_url_takes_precedence_over_resolved_url():
+    task = VideoTask(url=WATCH_URL)
+    stale_url = "https://www.youtube.com/watch?v=stale_video_123"
+    assert resolve_video_id(task, stale_url) == "dQw4w9WgXcQ"
+    assert resolve_video_key(task, stale_url) == "dQw4w9WgXcQ"
+
+
 def test_resolved_page_url_gives_keyword_tasks_a_real_id():
     task = VideoTask(keywords="python tutorial")
     assert resolve_video_key(task) == "task:python tutorial"

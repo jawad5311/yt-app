@@ -668,3 +668,45 @@ class TestDashboardButtonsAndState:
             view.start_watching_btn.configure.assert_called_with(state="normal")
             view.stop_btn.configure.assert_called_with(state="disabled", text="⏹ Stop")
             view.pause_btn.configure.assert_called_with(state="disabled", text="⏸ Pause", fg_color="#D97706")
+
+
+    def test_record_watch_uses_task_identity_over_stale_current_url(self, tmp_path):
+        from src.config.stats_store import StatsStore
+        from src.models.account import Account
+        from src.models.video_task import VideoTask
+        stats_file = tmp_path / "stats.json"
+        stats_store = StatsStore(stats_file=stats_file)
+        cfg_mgr = MagicMock()
+        worker = WatchingWorker(
+            account=Account(email="test@gmail.com", password="pwd"),
+            channels=[],
+            config_mgr=cfg_mgr,
+            stats_store=stats_store,
+        )
+        worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/watch?v=11111111111"
+
+        task = VideoTask(
+            url="https://www.youtube.com/watch?v=22222222222",
+            title="Correct Video Title",
+            channel="@testchannel",
+        )
+
+        worker._record_watch(
+            title="Some other title",
+            channel_name="@otherchannel",
+            watch_seconds=60.0,
+            ad_seconds=5.0,
+            duration=120.0,
+            completed=True,
+            task=task,
+        )
+
+        # Must be recorded under 22222222222, NOT 11111111111
+        assert stats_store.get("11111111111") is None
+        record = stats_store.get("22222222222")
+        assert record is not None
+        assert record.label == "Correct Video Title"
+        assert record.channel == "@testchannel"
+        assert record.runs == 1
+        assert record.watch_seconds == 60.0

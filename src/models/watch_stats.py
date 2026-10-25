@@ -247,7 +247,7 @@ def resolve_video_id(task: VideoTask, resolved_url: str = "") -> Optional[str]:
     ``resolved_url`` (``driver.current_url`` after navigation) is what makes
     keyword-only tasks share one identity across runs.
     """
-    for candidate in (resolved_url, task.url):
+    for candidate in (task.url, resolved_url):
         video_id = extract_video_id(candidate)
         if video_id:
             return video_id

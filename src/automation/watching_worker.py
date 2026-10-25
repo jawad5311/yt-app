@@ -740,11 +740,13 @@ class WatchingWorker:
                     channel=channel_name,
                 )
             key = resolve_video_key(task, current_url)
+            rec_label = (task.title or "").strip() or title or key
+            rec_channel = (task.channel or "").strip() or channel_name
             outcome = TaskOutcome(
                 video_key=key,
                 task_key=key,
-                label=title or key,
-                channel=channel_name,
+                label=rec_label,
+                channel=rec_channel,
                 attempts=1,
                 success=completed,
                 watched_seconds=watch_seconds,
