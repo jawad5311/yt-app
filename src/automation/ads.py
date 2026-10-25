@@ -15,8 +15,8 @@ from typing import Optional
 
 # A skippable ad watched for ~30s is monetised for the creator, so never skip
 # earlier than 30s and skip somewhere in the 30-35s window.
-SKIP_AFTER_MIN = 30.0
-SKIP_AFTER_MAX = 35.0
+SKIP_AFTER_MIN = 5.0
+SKIP_AFTER_MAX = 10.0
 
 # Single JS probe replacing the old ad detection: it reads the player state and
 # classifies ads vs. main video. The old check matched `.video-ads` (always in
@@ -51,7 +51,7 @@ return {
 
 
 def pick_skip_delay() -> float:
-    """Randomised monetisation window: skip an ad after 30-35 seconds."""
+    """Randomised skip window: skip an ad after 5-10 seconds randomly."""
     return random.uniform(SKIP_AFTER_MIN, SKIP_AFTER_MAX)
 
 
@@ -95,7 +95,7 @@ class AdWatchState:
         if skip_ads:
             if self.break_ad_seconds >= self.skip_target:
                 return (
-                    f"monetisation window reached "
+                    f"monetisation skip window reached "
                     f"({self.break_ad_seconds:.0f}s of ~{self.skip_target:.0f}s)"
                 )
             return None

@@ -4,6 +4,8 @@ from src.automation.youtube_actions import (
     calculate_end_buffer,
     disable_player_autoplay,
     ensure_video_playing,
+    find_skip_button,
+    trigger_skip_ad,
     watch_video,
 )
 
@@ -124,3 +126,94 @@ def test_ensure_video_playing_via_large_play_button():
     driver.find_elements.side_effect = lambda by, sel: [large_btn] if "ytp-large-play-button" in sel else []
 
     assert ensure_video_playing(driver) is True
+
+
+def test_watch_video_pause_resume_does_not_expire_budget():
+    """Verify pausing and resuming does not prematurely expire duration budget."""
+    import threading
+    driver = MagicMock()
+    driver.current_url = "https://www.youtube.com/watch?v=pausevid123"
+
+    pause_ev = threading.Event()
+    stop_ev = threading.Event()
+
+    ticks = 0
+    def mock_exec(script, *args):
+        nonlocal ticks
+        if "currentTime" in script:
+            ticks += 1
+            if ticks == 1:
+                # Pause on first tick
+                pause_ev.set()
+            elif ticks >= 3:
+                stop_ev.set()
+            return {"found": True, "paused": False, "ended": False, "currentTime": float(ticks * 5), "duration": 300.0, "isAd": False}
+        return {"playing": True}
+
+    driver.execute_script.side_effect = mock_exec
+
+    # Unpause in another thread after short delay
+    def unpause():
+        import time
+        time.sleep(0.1)
+        pause_ev.clear()
+
+    t = threading.Thread(target=unpause)
+    t.start()
+
+    from unittest.mock import patch
+    with patch("time.sleep", return_value=None):
+        # Stop after 3 ticks
+        def stop_after_ticks(*args, **kwargs):
+            if ticks >= 3:
+                stop_ev.set()
+        
+        result = watch_video(
+            driver,
+            duration_seconds=60,
+            pause_event=pause_ev,
+            stop_event=stop_ev,
+            enable_interactivity=False,
+        )
+
+    t.join()
+    # It was stopped cleanly by user, not prematurely by duration_reached
+    assert result.interrupted is True
+
+
+def test_find_and_trigger_skip_ad_with_hover():
+    driver = MagicMock()
+    mock_btn = MagicMock()
+    mock_btn.is_displayed.return_value = True
+    driver.find_elements.return_value = [mock_btn]
+
+    # find_skip_button finds the button
+    btn = find_skip_button(driver)
+    assert btn == mock_btn
+
+    # trigger_skip_ad executes hover + click sequence
+    res = trigger_skip_ad(driver)
+    assert res is True
+
+
+def test_skip_button_ignores_visit_site_cta():
+    from src.automation.youtube_actions import is_genuine_skip_button
+
+    # 1. Advertiser CTA button like "Visit site" should be rejected
+    visit_btn = MagicMock()
+    visit_btn.text = "Visit site"
+    visit_btn.get_attribute.side_effect = lambda attr: {
+        "class": "ytp-ad-button ytp-ad-button-link ytp-ad-component--clickable",
+        "aria-label": "Visit site",
+    }.get(attr, "")
+    assert is_genuine_skip_button(visit_btn) is False
+
+    # 2. Genuine skip button should be accepted
+    skip_btn = MagicMock()
+    skip_btn.text = "Skip"
+    skip_btn.get_attribute.side_effect = lambda attr: {
+        "class": "ytp-skip-ad-button",
+        "id": "skip-button:g",
+        "aria-label": "Skip ad",
+    }.get(attr, "")
+    assert is_genuine_skip_button(skip_btn) is True
