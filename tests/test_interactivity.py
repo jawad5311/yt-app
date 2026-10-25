@@ -167,6 +167,7 @@ def test_simulator_plan_session_long_video():
         toggle_captions=True,
         quality_chance=1.0,
         caption_chance=1.0,
+        pause_chance=1.0,
     )
 
     sim.plan_session(video_duration=300.0)
@@ -209,6 +210,7 @@ def test_simulator_on_playback_tick_triggers_actions():
         toggle_captions=True,
         quality_chance=1.0,
         caption_chance=1.0,
+        pause_chance=1.0,
     )
     sim.plan_session(video_duration=200.0)
     # Set targets to exact known times
@@ -379,4 +381,15 @@ def test_simulate_reading_comments_does_not_double_like_when_disabled():
         like_comments=False,
     )
     assert ok is True
+
+def test_simulator_pauses_randomly():
+    sim_no_pause = HumanInteractivitySimulator(enabled=True, micro_pauses=True, pause_chance=0.0)
+    sim_no_pause.plan_session(video_duration=200.0)
+    assert sim_no_pause.will_micro_pause is False
+    assert sim_no_pause.micro_pause_target_time == 0.0
+
+    sim_pause = HumanInteractivitySimulator(enabled=True, micro_pauses=True, pause_chance=1.0)
+    sim_pause.plan_session(video_duration=200.0)
+    assert sim_pause.will_micro_pause is True
+    assert sim_pause.micro_pause_target_time > 0.0
 

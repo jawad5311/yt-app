@@ -917,6 +917,7 @@ class HumanInteractivitySimulator:
         speed_chance: float = 0.0,          # 0.0 -> no speed changes away from 1x
         quality_chance: float = 0.85,
         caption_chance: float = 0.65,
+        pause_chance: float = 0.40,
     ):
         self.enabled = enabled
         self.scroll_comments = scroll_comments
@@ -931,6 +932,7 @@ class HumanInteractivitySimulator:
         self.speed_chance = speed_chance
         self.quality_chance = quality_chance
         self.caption_chance = caption_chance
+        self.pause_chance = pause_chance
 
         # Session state
         self.planned = False
@@ -949,6 +951,7 @@ class HumanInteractivitySimulator:
         self.browse_desc_comments_target_time = 0.0
         self.will_browse_desc_comments = False
 
+        self.will_micro_pause = False
         self.will_change_speed = False
         self.will_like_comments = False
         self.like_comments_target_time = 0.0
@@ -1019,8 +1022,11 @@ class HumanInteractivitySimulator:
             else:
                 self.caption_disable_time = 0.0
 
-        # Micro-pauses
-        if effective_duration >= 25.0:
+        # Micro-pauses: pause randomly, not on every video
+        self.will_micro_pause = bool(
+            self.micro_pauses and (random.random() < self.pause_chance)
+        )
+        if self.will_micro_pause and effective_duration >= 25.0:
             midway_min = max(15.0, effective_duration * 0.30)
             midway_max = min(effective_duration * 0.55, effective_duration - 10.0)
             if midway_max > midway_min:
@@ -1028,11 +1034,14 @@ class HumanInteractivitySimulator:
             else:
                 self.micro_pause_target_time = midway_min
 
-            if effective_duration >= 140.0:
+            if effective_duration >= 140.0 and random.random() < 0.40:
                 p2_min = max(self.micro_pause_target_time + 30.0, effective_duration * 0.65)
                 p2_max = min(effective_duration * 0.85, effective_duration - 15.0)
                 if p2_max > p2_min:
                     self.micro_pause2_target_time = random.uniform(p2_min, p2_max)
+        else:
+            self.micro_pause_target_time = 0.0
+            self.micro_pause2_target_time = 0.0
 
         if self.is_long_video:
             # Scrolling down to read comments/description
@@ -1158,6 +1167,7 @@ class HumanInteractivitySimulator:
         # ---------------- Midway micro-pause (human distraction) -----------
         if (
             self.micro_pauses
+            and self.will_micro_pause
             and self.micro_pause_target_time > 0
             and not self.micro_pause_done
             and not paused
@@ -1176,6 +1186,7 @@ class HumanInteractivitySimulator:
         # ---------------- Second micro-pause (for longer videos) ------------
         if (
             self.micro_pauses
+            and self.will_micro_pause
             and self.micro_pause2_target_time > 0
             and not self.micro_pause2_done
             and not paused

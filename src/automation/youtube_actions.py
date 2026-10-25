@@ -545,6 +545,7 @@ def watch_video(
         speed_chance=cfg.get("speed_chance", 0.0),
         quality_chance=cfg.get("quality_chance", 0.85),
         caption_chance=cfg.get("caption_chance", 0.65),
+        pause_chance=cfg.get("pause_chance", 0.40),
     )
 
     initial_video_id: Optional[str] = None
