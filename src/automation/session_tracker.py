@@ -43,7 +43,7 @@ class SessionChannelTracker:
         self.original_names: Dict[str, str] = {}
         # Channel whose video is currently playing
         self.active_channel_name: Optional[str] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Cache known channel names
         for ch in self.channels:
@@ -93,6 +93,58 @@ class SessionChannelTracker:
                     hours_to_commit = current_mins // 60
                     self.minute_counters[key] = current_mins % 60
                     self._commit_hours(channel_name, float(hours_to_commit))
+
+            # Check if this channel has achieved its target watch time
+            if self.is_channel_target_achieved(channel_name):
+                # When target is reached, commit uncommitted minutes immediately to settings
+                uncommitted = self.minute_counters.get(key, 0)
+                if uncommitted > 0:
+                    self._commit_seconds(channel_name, uncommitted * 60.0)
+                    self.minute_counters[key] = 0
+                if self.log_queue:
+                    total_h = self.get_current_total_watch_seconds(channel_name) / 3600.0
+                    emit(
+                        self.log_queue,
+                        f"Target watch time achieved for channel '{channel_name}'! Total watch time reached {total_h:.1f} hours.",
+                    )
+
+    def get_current_total_watch_seconds(self, channel_name: str) -> float:
+        """Calculate total watch seconds for a channel (persisted watch_seconds + active session delta)."""
+        if not channel_name:
+            return 0.0
+        key = self._canon_name(channel_name)
+        base = 0.0
+        for ch in self.channels:
+            if self._canon_name(ch.name) == key:
+                base = getattr(ch, "watch_seconds", 0.0)
+                break
+        if base <= 0.0 and self.config_mgr:
+            for ch_dict in self.config_mgr.get_channels():
+                if self._canon_name(ch_dict.get("name", "")) == key:
+                    base = float(ch_dict.get("watch_seconds", 0.0) or 0.0)
+                    break
+        with self._lock:
+            session_sec = self.minute_counters.get(key, 0) * 60.0 + self.second_accumulators.get(key, 0.0)
+        return base + session_sec
+
+    def is_channel_target_achieved(self, channel_name: str) -> bool:
+        """Check if channel has reached its configured target watch time (target_watch_seconds)."""
+        if not channel_name:
+            return False
+        key = self._canon_name(channel_name)
+        target_sec = 0.0
+        for ch in self.channels:
+            if self._canon_name(ch.name) == key:
+                target_sec = getattr(ch, "target_watch_seconds", 0.0)
+                break
+        if target_sec <= 0.0 and self.config_mgr:
+            for ch_dict in self.config_mgr.get_channels():
+                if self._canon_name(ch_dict.get("name", "")) == key:
+                    target_sec = float(ch_dict.get("target_watch_seconds", 0.0) or 0.0)
+                    break
+        if target_sec <= 0.0:
+            return False
+        return self.get_current_total_watch_seconds(channel_name) >= target_sec
 
     def on_stop(self) -> None:
         """Called when script is stopped: converts all remaining minutes to hours and updates channel total watch time."""
