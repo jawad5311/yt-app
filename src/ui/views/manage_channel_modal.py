@@ -1,9 +1,10 @@
 """Manage Channel Modal.
 
 Allows users to:
-1. Adjust the run limit for all videos under a channel.
-2. Set the target total watch time (in hours) to generate for this channel.
-   When this watch time is achieved, the automation stops playing this channel's videos.
+1. Set the target watch multiplier (e.g. 2.0x) for each video under a channel.
+2. Set the maximum number of views a video can have (cap to avoid YouTube red flags).
+3. Set the target total watch time (in hours) to generate for this channel.
+4. Delete all videos of this channel from the queue while preserving historical stats.
 """
 
 from tkinter import messagebox
@@ -15,7 +16,7 @@ from ...models.video_task import VideoTask
 
 
 class ManageChannelModal(ctk.CTkToplevel):
-    """Modal dialog for configuring channel-wide run limits and target watch time."""
+    """Modal dialog for configuring channel-wide target multipliers, max views caps, and target watch time."""
 
     def __init__(
         self,
@@ -34,8 +35,8 @@ class ManageChannelModal(ctk.CTkToplevel):
 
         ch_title = channel.name or "Uncategorized"
         self.title(f"Manage Channel — {ch_title}")
-        self.geometry("520x490")
-        self.minsize(460, 430)
+        self.geometry("540x630")
+        self.minsize(480, 560)
         self.grab_set()
 
         self._build_ui()
@@ -45,7 +46,7 @@ class ManageChannelModal(ctk.CTkToplevel):
 
         # 1. Header
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, padx=24, pady=(20, 10), sticky="ew")
+        header.grid(row=0, column=0, padx=24, pady=(18, 8), sticky="ew")
 
         ch_name = self.channel.name or "Uncategorized"
         ctk.CTkLabel(
@@ -65,67 +66,112 @@ class ManageChannelModal(ctk.CTkToplevel):
             anchor="w",
         ).pack(fill="x", pady=(2, 0))
 
-        # 2. Box 1: Run Limit for All Videos
-        card_runs = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
-        card_runs.grid(row=1, column=0, padx=24, pady=(10, 10), sticky="ew")
+        # 2. Box 1: Target Watch Multiplier (per Video)
+        card_mult = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
+        card_mult.grid(row=1, column=0, padx=24, pady=(6, 6), sticky="ew")
 
         ctk.CTkLabel(
-            card_runs,
-            text="Run Limit for All Videos",
+            card_mult,
+            text="Target Watch Multiplier (per Video)",
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
-        ).pack(fill="x", padx=16, pady=(12, 2))
+        ).pack(fill="x", padx=16, pady=(10, 2))
 
         ctk.CTkLabel(
-            card_runs,
-            text="Apply this run limit to every video currently under this channel.",
+            card_mult,
+            text="Stop viewing each video once it generates this multiplier of its duration (e.g. 2.0 = 2x length). Set to 0 for unlimited.",
             font=ctk.CTkFont(size=12),
             text_color=("gray35", "gray65"),
+            wraplength=460,
+            justify="left",
             anchor="w",
-        ).pack(fill="x", padx=16, pady=(0, 8))
+        ).pack(fill="x", padx=16, pady=(0, 6))
 
-        # Initial run limit from first video or default 3
-        init_runs = 3
+        init_mult = 0.0
         if self.group_videos:
             for _, t in self.group_videos:
-                if t.max_runs > 0:
-                    init_runs = t.max_runs
+                if getattr(t, "target_multiplier", 0.0) > 0:
+                    init_mult = t.target_multiplier
                     break
+        init_mult_str = str(int(init_mult)) if init_mult.is_integer() else f"{init_mult:.1f}"
 
-        run_row = ctk.CTkFrame(card_runs, fg_color="transparent")
-        run_row.pack(fill="x", padx=16, pady=(0, 14))
+        mult_row = ctk.CTkFrame(card_mult, fg_color="transparent")
+        mult_row.pack(fill="x", padx=16, pady=(0, 10))
 
-        self.run_entry = ctk.CTkEntry(run_row, width=90, font=ctk.CTkFont(size=13))
-        self.run_entry.insert(0, str(init_runs))
-        self.run_entry.pack(side="left")
+        self.multiplier_entry = ctk.CTkEntry(mult_row, width=90, font=ctk.CTkFont(size=13))
+        self.multiplier_entry.insert(0, init_mult_str)
+        self.multiplier_entry.pack(side="left")
 
         ctk.CTkLabel(
-            run_row,
-            text="runs per video (e.g. 3)",
+            mult_row,
+            text="x target multiplier (e.g. 2.0 or 0 for unlimited)",
             font=ctk.CTkFont(size=13),
             text_color=("gray30", "gray70"),
         ).pack(side="left", padx=(10, 0))
 
-        # 3. Box 2: Target Watch Time for Channel (Hours)
+        # 3. Box 2: Max Views Cap (per Video)
+        card_views = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
+        card_views.grid(row=2, column=0, padx=24, pady=(6, 6), sticky="ew")
+
+        ctk.CTkLabel(
+            card_views,
+            text="Max Views Cap (per Video)",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(10, 2))
+
+        ctk.CTkLabel(
+            card_views,
+            text="Maximum number of views a video can have. Stops playing once reached to avoid YouTube algorithm flags. Set to 0 for unlimited.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray35", "gray65"),
+            wraplength=460,
+            justify="left",
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(0, 6))
+
+        init_views = 0
+        if self.group_videos:
+            for _, t in self.group_videos:
+                if t.max_runs > 0:
+                    init_views = t.max_runs
+                    break
+
+        views_row = ctk.CTkFrame(card_views, fg_color="transparent")
+        views_row.pack(fill="x", padx=16, pady=(0, 10))
+
+        self.max_views_entry = ctk.CTkEntry(views_row, width=90, font=ctk.CTkFont(size=13))
+        self.max_views_entry.insert(0, str(init_views))
+        self.max_views_entry.pack(side="left")
+        self.run_entry = self.max_views_entry  # Backwards compatibility alias
+
+        ctk.CTkLabel(
+            views_row,
+            text="views max (e.g. 5 or 0 for unlimited)",
+            font=ctk.CTkFont(size=13),
+            text_color=("gray30", "gray70"),
+        ).pack(side="left", padx=(10, 0))
+
+        # 4. Box 3: Target Watch Time for Channel (Hours)
         card_target = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
-        card_target.grid(row=2, column=0, padx=24, pady=(10, 10), sticky="ew")
+        card_target.grid(row=3, column=0, padx=24, pady=(6, 6), sticky="ew")
 
         ctk.CTkLabel(
             card_target,
             text="Target Channel Watch Time (Hours)",
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
-        ).pack(fill="x", padx=16, pady=(12, 2))
+        ).pack(fill="x", padx=16, pady=(10, 2))
 
         ctk.CTkLabel(
             card_target,
-            text="The script stops playing this channel's videos once this watch time is achieved. Set to 0 for unlimited.",
+            text="The script stops playing this channel's videos once this total watch time is achieved. Set to 0 for unlimited.",
             font=ctk.CTkFont(size=12),
             text_color=("gray35", "gray65"),
-            wraplength=440,
+            wraplength=460,
             justify="left",
             anchor="w",
-        ).pack(fill="x", padx=16, pady=(0, 8))
+        ).pack(fill="x", padx=16, pady=(0, 6))
 
         target_row = ctk.CTkFrame(card_target, fg_color="transparent")
         target_row.pack(fill="x", padx=16, pady=(0, 8))
@@ -150,7 +196,7 @@ class ManageChannelModal(ctk.CTkToplevel):
         # Status badge if target set
         if getattr(self.channel, "target_watch_seconds", 0.0) > 0:
             status_row = ctk.CTkFrame(card_target, fg_color="transparent")
-            status_row.pack(fill="x", padx=16, pady=(0, 12))
+            status_row.pack(fill="x", padx=16, pady=(0, 10))
             is_achieved = self.channel.target_achieved
             color = "#10B981" if is_achieved else "#2563EB"
             status_text = (
@@ -166,10 +212,9 @@ class ManageChannelModal(ctk.CTkToplevel):
                 anchor="w",
             ).pack(fill="x")
         else:
-            # Spacer
             ctk.CTkFrame(card_target, fg_color="transparent", height=4).pack()
 
-        # 4. Error message area
+        # 5. Error message area
         self.err_lbl = ctk.CTkLabel(
             self,
             text="",
@@ -177,11 +222,11 @@ class ManageChannelModal(ctk.CTkToplevel):
             text_color="#EF4444",
             anchor="w",
         )
-        self.err_lbl.grid(row=3, column=0, padx=24, pady=(2, 6), sticky="w")
+        self.err_lbl.grid(row=4, column=0, padx=24, pady=(2, 4), sticky="w")
 
-        # 5. Buttons
+        # 6. Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.grid(row=4, column=0, padx=24, pady=(8, 20), sticky="ew")
+        btn_frame.grid(row=5, column=0, padx=24, pady=(6, 16), sticky="ew")
 
         ctk.CTkButton(
             btn_frame,
@@ -212,38 +257,62 @@ class ManageChannelModal(ctk.CTkToplevel):
         ).pack(side="right")
 
     def _apply(self):
-        # 1. Validate run limit
-        raw_runs = self.run_entry.get().strip()
-        try:
-            run_val = int(raw_runs)
-            if run_val < 1:
-                self.err_lbl.configure(text="Run limit must be at least 1.")
-                return
-        except ValueError:
-            self.err_lbl.configure(text="Please enter a valid whole number for run limit.")
-            return
+        # 1. Validate target multiplier
+        mult_val = 0.0
+        if hasattr(self, "multiplier_entry"):
+            raw_mult = self.multiplier_entry.get().strip()
+            if raw_mult:
+                try:
+                    mult_val = float(raw_mult)
+                    if mult_val < 0:
+                        self.err_lbl.configure(text="Target multiplier cannot be negative.")
+                        return
+                except ValueError:
+                    self.err_lbl.configure(text="Please enter a valid number for target multiplier.")
+                    return
 
-        # 2. Validate target watch hours
-        raw_target = self.target_entry.get().strip()
-        try:
-            target_hrs = float(raw_target)
-            if target_hrs < 0:
-                self.err_lbl.configure(text="Target watch time cannot be negative.")
-                return
-        except ValueError:
-            self.err_lbl.configure(text="Please enter a valid number for target watch hours.")
-            return
+        # 2. Validate max views cap
+        views_entry = getattr(self, "max_views_entry", getattr(self, "run_entry", None))
+        max_views_val = 0
+        if views_entry is not None:
+            raw_views = views_entry.get().strip()
+            if raw_views:
+                try:
+                    max_views_val = int(raw_views)
+                    if max_views_val < 0:
+                        self.err_lbl.configure(text="Max views cap cannot be negative.")
+                        return
+                except ValueError:
+                    self.err_lbl.configure(text="Please enter a valid whole number for max views.")
+                    return
+
+        # 3. Validate target watch hours
+        target_hrs = 0.0
+        if hasattr(self, "target_entry"):
+            raw_target = self.target_entry.get().strip()
+            if raw_target:
+                try:
+                    target_hrs = float(raw_target)
+                    if target_hrs < 0:
+                        self.err_lbl.configure(text="Target watch time cannot be negative.")
+                        return
+                except ValueError:
+                    self.err_lbl.configure(text="Please enter a valid number for target watch hours.")
+                    return
 
         target_seconds = round(target_hrs * 3600.0, 3)
 
-        # 3. Apply run limit to all videos in this channel group
+        # 4. Apply target multiplier and max views cap to all videos in this channel group
         for _, task in self.group_videos:
-            task.max_runs = run_val
+            task.target_multiplier = mult_val
+            task.max_runs = max_views_val
 
         if hasattr(self.parent_view, "save_queue"):
             self.parent_view.save_queue()
+        if hasattr(self.parent_view, "refresh_list"):
+            self.parent_view.refresh_list()
 
-        # 4. Apply target watch seconds to channel
+        # 5. Apply target watch seconds to channel
         ch_name_clean = (self.channel.name or "").strip().lower()
         if ch_name_clean:
             channels = [Channel.from_dict(c) for c in self.app_controller.config_mgr.get_channels()]
@@ -261,7 +330,6 @@ class ManageChannelModal(ctk.CTkToplevel):
             self.on_applied()
 
         self.destroy()
-
 
     def _delete_all_videos(self, confirm: bool = True):
         """Remove all video tasks for this channel from the queue while preserving all historical stats and watch data."""

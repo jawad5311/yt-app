@@ -256,7 +256,7 @@ class QueueView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
-        modal.geometry("520x630")
+        modal.geometry("520x700")
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
@@ -336,7 +336,14 @@ class QueueView(ctk.CTkFrame):
             command=open_channel_dialog,
         ).pack(anchor="w", padx=20, pady=(0, 10))
 
-        ctk.CTkLabel(modal, text="Full Runs Limit (Max Full Runs):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        ctk.CTkLabel(modal, text="Target Multiplier (e.g. 2.0x, 0 or blank = unlimited):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        target_multiplier_entry = ctk.CTkEntry(modal, placeholder_text="e.g. 2.0 (0 or blank = unlimited)", width=460)
+        if getattr(target_task, "target_multiplier", 0.0) > 0:
+            mult_val = target_task.target_multiplier
+            target_multiplier_entry.insert(0, str(int(mult_val)) if mult_val.is_integer() else f"{mult_val:.1f}")
+        target_multiplier_entry.pack(padx=20, pady=(0, 10))
+
+        ctk.CTkLabel(modal, text="Max Views Cap (Full Runs Limit, 0 or blank = unlimited):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         max_runs_entry = ctk.CTkEntry(modal, placeholder_text="e.g. 5 (0 or blank = unlimited)", width=460)
         if target_task.max_runs > 0:
             max_runs_entry.insert(0, str(target_task.max_runs))
@@ -350,6 +357,12 @@ class QueueView(ctk.CTkFrame):
             if not url and not t1 and not t2 and not t3:
                 messagebox.showerror("Error", "Please provide at least a URL or Video Title!", parent=modal)
                 return
+
+            raw_mult = target_multiplier_entry.get().strip()
+            try:
+                target_mult_val = max(0.0, float(raw_mult)) if raw_mult else 0.0
+            except ValueError:
+                target_mult_val = 0.0
 
             raw_limit = max_runs_entry.get().strip()
             try:
@@ -369,6 +382,7 @@ class QueueView(ctk.CTkFrame):
                 channel="" if channel_option.get() == NO_CHANNEL_VALUE else channel_option.get(),
                 enabled=target_task.enabled,
                 max_runs=max_runs_val,
+                target_multiplier=target_mult_val,
                 duration_seconds=target_task.duration_seconds,
                 duration_text=target_task.duration_text,
             )
@@ -724,10 +738,16 @@ class QueueView(ctk.CTkFrame):
         store = self._stats()
         record = store.find_for_task(task) if store is not None else None
         current_runs = record.runs if record is not None else 0
-        is_limit_reached = task.max_runs > 0 and current_runs >= task.max_runs
+        watch_sec = record.watch_seconds if record else 0.0
 
         effective_duration = float(record.video_duration if record and record.video_duration > 0 else getattr(task, "duration_seconds", 0.0))
-        mult_str = format_watch_multiplier(record.watch_seconds if record else 0.0, effective_duration)
+        mult_str = format_watch_multiplier(watch_sec, effective_duration)
+
+        is_limit_reached = task.is_target_reached(
+            current_runs=current_runs,
+            watch_seconds=watch_sec,
+            video_duration=effective_duration,
+        )
 
         t_text = task.title or task.url
         if len(t_text) > 55:
@@ -746,11 +766,19 @@ class QueueView(ctk.CTkFrame):
         elif not task.enabled:
             status_prefix = "[DISABLED] "
         elif is_limit_reached:
-            status_prefix = "[LIMIT REACHED] "
+            target_hit = task.target_multiplier > 0 and effective_duration > 0 and (watch_sec / effective_duration) >= task.target_multiplier
+            views_hit = task.max_runs > 0 and current_runs >= task.max_runs
+            if target_hit and views_hit:
+                status_prefix = "[TARGET & MAX VIEWS REACHED] "
+            elif target_hit:
+                status_prefix = "[TARGET MULTIPLIER REACHED] "
+            else:
+                status_prefix = "[MAX VIEWS REACHED] "
 
-        limit_suffix = f" | Limit: {task.max_runs} full runs" if task.max_runs > 0 else ""
+        target_suffix = f" | Target: {task.target_multiplier:.1f}x" if getattr(task, "target_multiplier", 0.0) > 0 else ""
+        limit_suffix = f" | Max Views: {task.max_runs}" if task.max_runs > 0 else ""
         mult_suffix = f" | Multiplier: {mult_str}" if mult_str else ""
-        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{limit_suffix}{mult_suffix}"
+        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{target_suffix}{limit_suffix}{mult_suffix}"
         lbl = ctk.CTkLabel(
             card,
             text=info_text,
@@ -769,42 +797,69 @@ class QueueView(ctk.CTkFrame):
             anchor="w",
             text_color=("gray40", "gray60"),
         )
-        stats_lbl.grid(row=1, column=2, padx=10, pady=(2, 6 if task.max_runs > 0 else 10), sticky="ew")
+        stats_lbl.grid(row=1, column=2, padx=10, pady=(2, 6 if (task.max_runs > 0 or getattr(task, "target_multiplier", 0.0) > 0) else 10), sticky="ew")
 
         # Action Buttons Frame (Fixed to column 3 on the right edge)
         action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
         action_btn_frame.grid(row=0, column=3, rowspan=2, padx=10, pady=10, sticky="e")
 
-        limit_lbl = ctk.CTkLabel(action_btn_frame, text="Full Runs Limit:", font=ctk.CTkFont(size=12, weight="bold"))
-        limit_lbl.pack(side="left", padx=(0, 4))
-
-        limit_entry = ctk.CTkEntry(
+        ctk.CTkLabel(action_btn_frame, text="Target:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 2))
+        target_entry = ctk.CTkEntry(
             action_btn_frame,
-            width=52,
+            width=46,
+            height=28,
+            placeholder_text="∞",
+            justify="center",
+        )
+        if getattr(task, "target_multiplier", 0.0) > 0:
+            target_entry.insert(0, str(int(task.target_multiplier)) if task.target_multiplier.is_integer() else f"{task.target_multiplier:.1f}")
+        target_entry.pack(side="left", padx=(0, 2))
+        ctk.CTkLabel(action_btn_frame, text="x", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
+
+        ctk.CTkLabel(action_btn_frame, text="Max Views:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 2))
+        views_entry = ctk.CTkEntry(
+            action_btn_frame,
+            width=46,
             height=28,
             placeholder_text="∞",
             justify="center",
         )
         if task.max_runs > 0:
-            limit_entry.insert(0, str(task.max_runs))
-        limit_entry.pack(side="left", padx=(0, 8))
+            views_entry.insert(0, str(task.max_runs))
+        views_entry.pack(side="left", padx=(0, 8))
 
-        def _on_limit_change(*_):
-            val_str = limit_entry.get().strip()
+        def _on_target_change(*_):
+            val_str = target_entry.get().strip()
+            try:
+                new_val = max(0.0, float(val_str)) if val_str else 0.0
+            except ValueError:
+                new_val = getattr(task, "target_multiplier", 0.0)
+                target_entry.delete(0, "end")
+                if new_val > 0:
+                    target_entry.insert(0, str(int(new_val)) if new_val.is_integer() else f"{new_val:.1f}")
+            if new_val != getattr(task, "target_multiplier", 0.0):
+                task.target_multiplier = new_val
+                self.save_queue()
+                self.refresh_list()
+
+        def _on_views_change(*_):
+            val_str = views_entry.get().strip()
             try:
                 new_val = max(0, int(val_str)) if val_str else 0
             except ValueError:
                 new_val = task.max_runs
-                limit_entry.delete(0, "end")
+                views_entry.delete(0, "end")
                 if new_val > 0:
-                    limit_entry.insert(0, str(new_val))
+                    views_entry.insert(0, str(new_val))
             if new_val != task.max_runs:
                 task.max_runs = new_val
                 self.save_queue()
                 self.refresh_list()
 
-        limit_entry.bind("<FocusOut>", _on_limit_change)
-        limit_entry.bind("<Return>", _on_limit_change)
+        target_entry.bind("<FocusOut>", _on_target_change)
+        target_entry.bind("<Return>", _on_target_change)
+        views_entry.bind("<FocusOut>", _on_views_change)
+        views_entry.bind("<Return>", _on_views_change)
 
         ctk.CTkButton(
             action_btn_frame,
@@ -824,22 +879,20 @@ class QueueView(ctk.CTkFrame):
             command=lambda i=index: self.remove_task(i),
         ).pack(side="left")
 
-        # Progress bar with dynamic color transition:
-        # Interpolates from light yellow to light green for 0 to (limit - 1),
-        # and turns dark green when the final target limit is reached.
-        if task.max_runs > 0:
-            ratio = min(1.0, max(0.0, current_runs / task.max_runs))
-            if current_runs >= task.max_runs:
-                # Target limit reached: Dark Green
+        # Progress bar with dynamic color transition
+        has_target = getattr(task, "target_multiplier", 0.0) > 0 and effective_duration > 0
+        has_views_cap = task.max_runs > 0
+        if has_target or has_views_cap:
+            r_target = (watch_sec / (task.target_multiplier * effective_duration)) if has_target else 0.0
+            r_views = (current_runs / task.max_runs) if has_views_cap else 0.0
+            ratio = min(1.0, max(0.0, max(r_target, r_views)))
+            if is_limit_reached or ratio >= 1.0:
                 p_color = ("#1B5E20", "#2E7D32")
             else:
-                # Interpolate from light yellow to light green from 0 up to (limit - 1)
-                sub_ratio = min(1.0, max(0.0, current_runs / max(1, task.max_runs - 1)))
-                # Light mode: #FFF176 (255, 241, 118) -> #81C784 (129, 199, 132)
+                sub_ratio = ratio
                 r_light = int(255 + (129 - 255) * sub_ratio)
                 g_light = int(241 + (199 - 241) * sub_ratio)
                 b_light = int(118 + (132 - 118) * sub_ratio)
-                # Dark mode: #FBC02D (251, 192, 45) -> #66BB6A (102, 187, 106)
                 r_dark = int(251 + (102 - 251) * sub_ratio)
                 g_dark = int(192 + (187 - 192) * sub_ratio)
                 b_dark = int(45 + (106 - 45) * sub_ratio)
