@@ -1,7 +1,8 @@
 """Channel Video Fetcher.
 
 Fetches video metadata directly from YouTube channel pages without external dependencies.
-Extracts Video IDs, titles, and video durations using YouTube's embedded ytInitialData JSON.
+Extracts Video IDs, titles, and video durations using YouTube's embedded ytInitialData JSON
+and standard HTML metadata.
 """
 
 import json
@@ -103,6 +104,26 @@ def extract_yt_initial_data(html: str) -> Optional[Dict[str, Any]]:
     if not html:
         return None
 
+    # Marker-based extraction for real YouTube pages
+    markers = [
+        "var ytInitialData = ",
+        "window[\"ytInitialData\"] = ",
+        "ytInitialData = ",
+    ]
+    for m in markers:
+        idx = html.find(m)
+        if idx != -1:
+            start = idx + len(m)
+            end = html.find(";</script>", start)
+            if end == -1:
+                end = html.find("</script>", start)
+            if end != -1:
+                chunk = html[start:end].strip().rstrip(";")
+                try:
+                    return json.loads(chunk)
+                except json.JSONDecodeError:
+                    pass
+
     patterns = [
         r"var ytInitialData\s*=\s*({.+?});</script>",
         r"ytInitialData\s*=\s*({.+?});",
@@ -122,6 +143,13 @@ def extract_channel_title(data: Dict[str, Any]) -> str:
     """Extract official channel title from ytInitialData."""
     if not isinstance(data, dict):
         return ""
+
+    # Check microformat
+    mf = data.get("microformat", {})
+    if isinstance(mf, dict):
+        mf_ren = mf.get("microformatDataRenderer", {})
+        if isinstance(mf_ren, dict) and mf_ren.get("title"):
+            return str(mf_ren["title"]).strip()
 
     # Check channelMetadataRenderer
     metadata = data.get("metadata", {})
@@ -150,6 +178,94 @@ def extract_channel_title(data: Dict[str, Any]) -> str:
                         return str(simple_text).strip()
 
     return ""
+
+
+def extract_channel_title_from_html(html: str) -> str:
+    """Extract channel title directly from HTML metadata (og:title, <title>, meta name=title, ytInitialData)."""
+    if not html:
+        return ""
+
+    # 1. Check og:title meta tag
+    og_m = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if not og_m:
+        og_m = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', html, re.IGNORECASE)
+    if og_m and og_m.group(1).strip():
+        name = og_m.group(1).strip()
+        if name and not name.lower().endswith(" - youtube") and name.lower() != "youtube":
+            return name
+
+    # 2. Check <title> tag
+    t_m = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
+    if t_m:
+        name = t_m.group(1).strip()
+        name = re.sub(r'\s*-\s*YouTube\s*$', '', name, flags=re.IGNORECASE).strip()
+        if name and name.lower() != "youtube":
+            return name
+
+    # 3. Check ytInitialData
+    data = extract_yt_initial_data(html)
+    if data:
+        t = extract_channel_title(data)
+        if t:
+            return t
+
+    # 4. Check name="title" meta tag
+    meta_m = re.search(r'<meta\s+name=["\']title["\']\s+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    if meta_m and meta_m.group(1).strip():
+        name = meta_m.group(1).strip()
+        if name and name.lower() != "youtube":
+            return name
+
+    return ""
+
+
+def fetch_channel_title_online(channel_input: str, timeout: int = 10) -> Optional[str]:
+    """Contact YouTube and fetch the official human-readable channel name.
+
+    Returns the resolved name (e.g. 'Iamcarhacker' instead of '@iamcarhacker'),
+    or None if the network request fails or the page cannot be reached.
+    """
+    clean_input = (channel_input or "").strip()
+    if not clean_input:
+        return None
+
+    # Build canonical / base channel URL
+    if not clean_input.startswith("http://") and not clean_input.startswith("https://"):
+        if clean_input.startswith("@"):
+            url = f"https://www.youtube.com/{clean_input}"
+        elif clean_input.startswith("youtube.com") or clean_input.startswith("www.youtube.com"):
+            url = f"https://{clean_input}"
+        else:
+            url = f"https://www.youtube.com/@{clean_input}"
+    else:
+        url = clean_input
+
+    # Strip subpaths like /videos or /shorts to fetch the main channel page
+    clean_base = url.split("?")[0].split("#")[0].rstrip("/")
+    for sub in ("/videos", "/shorts", "/streams", "/featured", "/community"):
+        if clean_base.endswith(sub):
+            clean_base = clean_base[: -len(sub)]
+
+    req = urllib.request.Request(
+        clean_base,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            html = response.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    title = extract_channel_title_from_html(html)
+    return title if title else None
 
 
 def extract_videos_from_data(
@@ -305,14 +421,17 @@ def fetch_channel_videos(
         )
 
     data = extract_yt_initial_data(html)
-    if not data:
+    channel_title = extract_channel_title(data) if data else ""
+    if not channel_title:
+        channel_title = extract_channel_title_from_html(html)
+
+    if not data and not channel_title:
         return ChannelFetchResult(
             channel_url=url,
             error="Could not parse YouTube page response (bot verification or changed page structure).",
         )
 
-    channel_title = extract_channel_title(data)
-    videos = extract_videos_from_data(data, max_results=max_results)
+    videos = extract_videos_from_data(data, max_results=max_results) if data else []
 
     return ChannelFetchResult(
         channel_title=channel_title,

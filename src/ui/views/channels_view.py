@@ -17,6 +17,7 @@ from ...models.watch_stats import format_duration, format_hours, format_totals_l
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
     extract_fallback_channel_name,
+    fetch_channel_title_online,
     fetch_channel_videos,
     normalize_channel_url,
 )
@@ -71,6 +72,15 @@ class ChannelsView(ctk.CTkFrame):
             btn_frame,
             text="+ Add Channel",
             command=lambda: self.open_channel_modal(),
+        ).pack(side="left", padx=(0, 10))
+
+        ctk.CTkButton(
+            btn_frame,
+            text="🔄 Sync Names",
+            width=105,
+            fg_color="#0D9488",
+            hover_color="#0F766E",
+            command=self.sync_all_channel_names,
         ).pack(side="left", padx=(0, 10))
 
         self.current_tab = "Active"
@@ -243,26 +253,82 @@ class ChannelsView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Channel" if is_editing else "Add Channel")
-        modal.geometry("520x300" if not is_editing else "470x230")
+        modal.geometry("540x350" if not is_editing else "540x280")
         modal.grab_set()
 
+        ctk.CTkLabel(modal, text="Channel URL or Handle:", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=20, pady=(12, 2)
+        )
+        url_frame = ctk.CTkFrame(modal, fg_color="transparent")
+        url_frame.pack(padx=20, pady=(0, 4), fill="x")
+
+        url_entry = ctk.CTkEntry(
+            url_frame,
+            placeholder_text="https://www.youtube.com/@handle or @handle",
+            width=350,
+        )
+        url_entry.insert(0, target.url)
+        url_entry.pack(side="left", fill="x", expand=True)
+
+        fetch_btn = ctk.CTkButton(
+            url_frame,
+            text="🔍 Fetch Name",
+            width=110,
+            height=28,
+            fg_color="#0D9488",
+            hover_color="#0F766E",
+        )
+        fetch_btn.pack(side="right", padx=(8, 0))
+
+        status_lbl = ctk.CTkLabel(
+            modal,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+            anchor="w",
+        )
+        status_lbl.pack(anchor="w", padx=20, pady=(0, 4))
+
         ctk.CTkLabel(modal, text="Channel Name:", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", padx=20, pady=(15, 2)
+            anchor="w", padx=20, pady=(4, 2)
         )
         name_entry = ctk.CTkEntry(
             modal,
-            placeholder_text="e.g. My Channel (optional if URL provided)",
-            width=460,
+            placeholder_text="e.g. My Channel (auto-fetched from URL if blank)",
+            width=500,
         )
         name_entry.insert(0, target.name)
         name_entry.pack(padx=20, pady=(0, 10))
 
-        ctk.CTkLabel(modal, text="Channel URL:", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", padx=20, pady=(5, 2)
-        )
-        url_entry = ctk.CTkEntry(modal, placeholder_text="https://www.youtube.com/@handle", width=460)
-        url_entry.insert(0, target.url)
-        url_entry.pack(padx=20, pady=(0, 10))
+        def _do_fetch_name(silent_if_empty=False):
+            u = url_entry.get().strip()
+            if not u:
+                if not silent_if_empty:
+                    status_lbl.configure(text="Please enter a channel URL or handle first.", text_color="#EF4444")
+                return
+            fetch_btn.configure(state="disabled", text="⏳ Fetching...")
+            status_lbl.configure(text="Contacting YouTube for official channel name...", text_color=("gray40", "gray60"))
+
+            def _bg():
+                fetched = fetch_channel_title_online(u)
+                def _ui():
+                    try:
+                        fetch_btn.configure(state="normal", text="🔍 Fetch Name")
+                        if fetched:
+                            name_entry.delete(0, "end")
+                            name_entry.insert(0, fetched)
+                            status_lbl.configure(text=f"✓ Detected: '{fetched}'", text_color="#10B981")
+                        else:
+                            status_lbl.configure(text="Could not auto-detect channel name; you can type it above.", text_color="#F59E0B")
+                    except Exception:
+                        pass
+                modal.after(0, _ui)
+
+            threading.Thread(target=_bg, daemon=True).start()
+
+        fetch_btn.configure(command=lambda: _do_fetch_name(silent_if_empty=False))
+        url_entry.bind("<FocusOut>", lambda e: _do_fetch_name(silent_if_empty=True) if (not name_entry.get().strip() or name_entry.get().strip().startswith("@")) else None)
+        url_entry.bind("<Return>", lambda e: _do_fetch_name(silent_if_empty=False))
 
         fetch_var = ctk.BooleanVar(value=True)
         limit_var = ctk.StringVar(value="25")
@@ -363,7 +429,8 @@ class ChannelsView(ctk.CTkFrame):
 
             # Case: Channel Name left empty, but URL provided without auto-fetch
             if not raw_name and raw_url:
-                raw_name = extract_fallback_channel_name(raw_url)
+                fetched = fetch_channel_title_online(raw_url)
+                raw_name = fetched or extract_fallback_channel_name(raw_url)
 
             try:
                 channel = Channel.parse(
@@ -565,7 +632,7 @@ class ChannelsView(ctk.CTkFrame):
                 )
                 return
 
-            resolved_name = (res.channel_title or "").strip() or extract_fallback_channel_name(raw_url)
+            resolved_name = (res.channel_title or "").strip() or fetch_channel_title_online(raw_url) or extract_fallback_channel_name(raw_url)
             # Ensure unique name among existing channels
             unique_name = resolved_name
             counter = 2
@@ -895,6 +962,73 @@ class ChannelsView(ctk.CTkFrame):
                 "Channel Removed",
                 f"'{removed.name}' was removed. {unassigned} video(s) moved to {UNCATEGORIZED_LABEL}.",
             )
+
+    def sync_all_channel_names(self) -> None:
+        """Fetch and update official YouTube channel names for all configured channels."""
+        channels_with_urls = [ch for ch in self.channels if ch.url]
+        if not channels_with_urls:
+            messagebox.showinfo("Sync Channel Names", "No channels with URLs configured to sync.", parent=self)
+            return
+
+        toast = ctk.CTkToplevel(self)
+        toast.title("Syncing Channel Names...")
+        toast.geometry("400x140")
+        toast.grab_set()
+
+        lbl = ctk.CTkLabel(
+            toast,
+            text=f"Fetching official channel names from YouTube (0/{len(channels_with_urls)})...",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            wraplength=360,
+        )
+        lbl.pack(pady=(20, 10))
+
+        prog = ctk.CTkProgressBar(toast, mode="indeterminate", width=320)
+        prog.pack(pady=(0, 15))
+        prog.start()
+
+        def _bg_sync():
+            updated_count = 0
+            for i, ch in enumerate(channels_with_urls):
+                try:
+                    def _update_progress(idx=i+1, name=ch.name):
+                        try:
+                            lbl.configure(text=f"Resolving '{name}' ({idx}/{len(channels_with_urls)})...")
+                        except Exception:
+                            pass
+                    toast.after(0, _update_progress)
+
+                    official_name = fetch_channel_title_online(ch.url)
+                    if official_name and official_name.strip() and official_name != ch.name:
+                        old_name = ch.name
+                        ch.name = official_name.strip()
+                        queue = self._queue_view()
+                        if queue is not None:
+                            queue.reassign_channel(old_name, ch.name)
+                        updated_count += 1
+                except Exception:
+                    pass
+
+            def _done():
+                try:
+                    prog.stop()
+                    toast.destroy()
+                except Exception:
+                    pass
+                self.save_channels()
+                self.load_channels()
+                queue = self._queue_view()
+                if queue is not None:
+                    queue.refresh_list()
+                messagebox.showinfo(
+                    "Sync Complete",
+                    f"Channel names updated: {updated_count} channel(s) updated to official YouTube names.",
+                    parent=self,
+                )
+
+            self.after(0, _done)
+
+        threading.Thread(target=_bg_sync, daemon=True).start()
 
     def clear_channels(self) -> None:
         if not self.channels:

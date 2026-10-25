@@ -243,3 +243,43 @@ def test_fetch_channel_videos_http_error(mock_urlopen):
     result = fetch_channel_videos("@nonexistent")
     assert result.error is not None
     assert "HTTP Error 404" in result.error
+
+
+def test_extract_channel_title_from_html():
+    from src.utils.channel_fetcher import extract_channel_title_from_html
+
+    # og:title meta tag
+    html_og = '<html><head><meta property="og:title" content="Iamcarhacker"></head><body></body></html>'
+    assert extract_channel_title_from_html(html_og) == "Iamcarhacker"
+
+    # <title> tag with ' - YouTube' suffix
+    html_title = '<html><head><title>TUBE begins - YouTube</title></head><body></body></html>'
+    assert extract_channel_title_from_html(html_title) == "TUBE begins"
+
+    # meta name="title"
+    html_meta = '<html><head><meta name="title" content="Tech Insider"></head><body></body></html>'
+    assert extract_channel_title_from_html(html_meta) == "Tech Insider"
+
+
+@patch("urllib.request.urlopen")
+def test_fetch_channel_title_online(mock_urlopen):
+    from src.utils.channel_fetcher import fetch_channel_title_online
+
+    html = '<html><head><meta property="og:title" content="Official Car Hacker Channel"></head></html>'
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = html.encode("utf-8")
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+    name = fetch_channel_title_online("@iamcarhacker")
+    assert name == "Official Car Hacker Channel"
+
+
+@patch("urllib.request.urlopen")
+def test_fetch_channel_videos_fallback_to_html_title(mock_urlopen):
+    html = '<html><head><meta property="og:title" content="Fallback Car Hacker"></head><body><script>var ytInitialData = {"contents": {}};</script></body></html>'
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = html.encode("utf-8")
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+    result = fetch_channel_videos("@iamcarhacker")
+    assert result.channel_title == "Fallback Car Hacker"
