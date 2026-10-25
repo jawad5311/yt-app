@@ -56,13 +56,13 @@ class SettingsView(ctk.CTkFrame):
         self.duration_menu.set(configured_duration if configured_duration in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION)
         self.duration_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Block Ads toggle (formerly Skip Ads)
+        # Auto-Skip Ads toggle (script-based native skip)
         self.skip_ads_switch = ctk.CTkSwitch(
             container,
-            text="Block Ads entirely (block with uBlock Lite + skip fallback after 30-35s)",
+            text="Auto-Skip Ads (automatically clicks Skip Ad after 5-10s)",
             font=ctk.CTkFont(weight="bold"),
         )
-        if self.config_mgr.get_bool("BlockAds", self.config_mgr.get_bool("SkipAds", False)):
+        if self.config_mgr.get_bool("SkipAds", True) or self.config_mgr.get_bool("BlockAds", False):
             self.skip_ads_switch.select()
         else:
             self.skip_ads_switch.deselect()
@@ -70,7 +70,7 @@ class SettingsView(ctk.CTkFrame):
 
         ctk.CTkLabel(
             container,
-            text="Off = watch every ad (monetisation) with the escape cap below.",
+            text="Off = watch every ad with the escape cap below.",
             font=ctk.CTkFont(size=12),
             text_color=("gray40", "gray60"),
         ).pack(anchor="w", padx=15, pady=(0, 12))
@@ -139,19 +139,19 @@ class SettingsView(ctk.CTkFrame):
             self.scroll_switch.deselect()
         self.scroll_switch.pack(anchor="w", padx=30, pady=(2, 4))
 
-        self.speed_switch = ctk.CTkSwitch(
+        self.caption_switch = ctk.CTkSwitch(
             container,
-            text="Variable Playback Speeds (occasionally set playback speed to 1.25x)",
+            text="Toggle Closed Captions (occasionally enable or disable subtitles)",
         )
-        if self.config_mgr.get_bool("VariableSpeed", True):
-            self.speed_switch.select()
+        if self.config_mgr.get_bool("ToggleCaptions", True):
+            self.caption_switch.select()
         else:
-            self.speed_switch.deselect()
-        self.speed_switch.pack(anchor="w", padx=30, pady=(2, 4))
+            self.caption_switch.deselect()
+        self.caption_switch.pack(anchor="w", padx=30, pady=(2, 4))
 
         self.quality_switch = ctk.CTkSwitch(
             container,
-            text="Bandwidth Saver Quality (adjust video quality to 360p / 720p)",
+            text="Bandwidth Saver Quality (adjust video quality to 360p or 480p)",
         )
         if self.config_mgr.get_bool("AdjustQuality", True):
             self.quality_switch.select()
@@ -162,9 +162,9 @@ class SettingsView(ctk.CTkFrame):
         ctk.CTkLabel(container, text="Target Bandwidth-Saving Quality:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=45, pady=(2, 2)
         )
-        self.quality_menu = ctk.CTkOptionMenu(container, values=["360p", "720p"], width=120)
+        self.quality_menu = ctk.CTkOptionMenu(container, values=["360p", "480p", "Random (360p / 480p)"], width=170)
         configured_q = self.config_mgr.get_setting("QualityLevel", "360p")
-        self.quality_menu.set(configured_q if configured_q in ["360p", "720p"] else "360p")
+        self.quality_menu.set(configured_q if configured_q in ["360p", "480p", "Random (360p / 480p)"] else "360p")
         self.quality_menu.pack(anchor="w", padx=45, pady=(0, 6))
 
         self.micro_pause_switch = ctk.CTkSwitch(
@@ -246,7 +246,8 @@ class SettingsView(ctk.CTkFrame):
 
         self.config_mgr.set_setting("EnableHumanInteractivity", str(bool(self.interactivity_switch.get())))
         self.config_mgr.set_setting("RandomScrolling", str(bool(self.scroll_switch.get())))
-        self.config_mgr.set_setting("VariableSpeed", str(bool(self.speed_switch.get())))
+        self.config_mgr.set_setting("VariableSpeed", "False")
+        self.config_mgr.set_setting("ToggleCaptions", str(bool(self.caption_switch.get())))
         self.config_mgr.set_setting("AdjustQuality", str(bool(self.quality_switch.get())))
         self.config_mgr.set_setting("QualityLevel", self.quality_menu.get())
         self.config_mgr.set_setting("RandomMicroPauses", str(bool(self.micro_pause_switch.get())))
