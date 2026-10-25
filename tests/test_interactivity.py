@@ -361,3 +361,22 @@ def test_click_and_verify_comment_like_rejects_already_liked():
     candidate = {"found": True, "button": mock_btn, "author": "@tester"}
     # Must reject liking an already-liked comment
     assert click_and_verify_comment_like(driver, candidate) is False
+
+def test_like_random_comments_bounds():
+    driver = MagicMock()
+    driver.execute_script.return_value = {'found': True, 'author': '@user'}
+    liked = like_random_comments(driver)
+    assert liked in (1, 2)
+
+
+def test_simulate_reading_comments_does_not_double_like_when_disabled():
+    driver = MagicMock()
+    driver.execute_script.return_value = {'found': True, 'author': '@user'}
+    ok = simulate_reading_comments_or_description(
+        driver,
+        min_read_seconds=0.01,
+        max_read_seconds=0.02,
+        like_comments=False,
+    )
+    assert ok is True
+

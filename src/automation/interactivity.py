@@ -587,7 +587,7 @@ def expand_video_description(
 def like_random_comments(
     driver: Any,
     min_likes: int = 1,
-    max_likes: int = 1,
+    max_likes: int = 2,
     stop_event: Optional[threading.Event] = None,
     log_queue: Optional[queue.Queue] = None,
 ) -> int:
@@ -777,7 +777,7 @@ def browse_description_and_like_comment(
             return desc_done, False
 
         # 4. Like only 1 comment once (with strict check that it is not already liked)
-        liked_count = like_random_comments(driver, min_likes=1, max_likes=1, stop_event=stop_event, log_queue=log_queue)
+        liked_count = like_random_comments(driver, min_likes=1, max_likes=2, stop_event=stop_event, log_queue=log_queue)
         comment_done = (liked_count > 0)
 
         _interruptible_sleep(random.uniform(1.2, 1.8), stop_event)
@@ -798,6 +798,7 @@ def simulate_reading_comments_or_description(
     log_queue: Optional[queue.Queue] = None,
     min_read_seconds: float = 4.0,
     max_read_seconds: float = 8.0,
+    like_comments: bool = False,
 ) -> bool:
     """Simulate a user scrolling down to read comments or description during a long video.
 
@@ -835,8 +836,9 @@ def simulate_reading_comments_or_description(
     if _interruptible_sleep(half_time, stop_event):
         return False
 
-    # Like 1 to 3 random comments while browsing comments
-    like_random_comments(driver, min_likes=1, max_likes=3, stop_event=stop_event, log_queue=log_queue)
+    # Like 1 or 2 random comments while browsing comments (if not already liked)
+    if like_comments:
+        like_random_comments(driver, min_likes=1, max_likes=2, stop_event=stop_event, log_queue=log_queue)
 
     # Small scroll jitter while reading comments
     try:
@@ -1202,6 +1204,7 @@ class HumanInteractivitySimulator:
                 driver,
                 stop_event=stop_event,
                 log_queue=log_queue,
+                like_comments=self.like_comments and not self.comments_liked,
             )
             self.scroll_comments_done = True
             if scroll_ok:
