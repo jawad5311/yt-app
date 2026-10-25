@@ -275,3 +275,69 @@ def test_app_runnable_video_count_excludes_unchecked_and_archived(tmp_path):
     # Only "Checked Active" and "Checked Uncategorized" are runnable (2 out of 6)
     assert count == 2
 
+
+
+def test_video_task_target_multiplier_and_max_views():
+    # Video duration = 600s (10 min)
+    task = VideoTask(
+        title="Multiplier Video",
+        duration_seconds=600.0,
+        target_multiplier=2.5,
+        max_runs=5,
+    )
+
+    # 1. Neither reached: 1 run (10 min = 600s watched, mult = 1.0x < 2.5x, runs = 1 < 5)
+    assert task.is_target_reached(current_runs=1, watch_seconds=600.0, video_duration=600.0) is False
+
+    # 2. Target multiplier reached: 2 runs but 1500s watched (mult = 2.5x >= 2.5x, runs = 2 < 5)
+    assert task.is_target_reached(current_runs=2, watch_seconds=1500.0, video_duration=600.0) is True
+
+    # 3. Max views cap reached: 5 runs but only 900s watched (mult = 1.5x < 2.5x, runs = 5 >= 5)
+    assert task.is_target_reached(current_runs=5, watch_seconds=900.0, video_duration=600.0) is True
+
+    # 4. Unlimited multiplier (0.0): only max_runs is checked
+    task_no_mult = VideoTask(title="Views Only", max_runs=3, target_multiplier=0.0)
+    assert task_no_mult.is_target_reached(current_runs=2, watch_seconds=10000.0, video_duration=600.0) is False
+    assert task_no_mult.is_target_reached(current_runs=3, watch_seconds=10000.0, video_duration=600.0) is True
+
+    # 5. Unlimited views cap (0): only target_multiplier is checked
+    task_no_cap = VideoTask(title="Mult Only", max_runs=0, target_multiplier=2.0)
+    assert task_no_cap.is_target_reached(current_runs=10, watch_seconds=1100.0, video_duration=600.0) is False
+    assert task_no_cap.is_target_reached(current_runs=10, watch_seconds=1200.0, video_duration=600.0) is True
+
+
+def test_is_video_task_runnable_respects_target_multiplier(tmp_path):
+    store = StatsStore(stats_file=tmp_path / "stats.json")
+    # 10 minute video (600s), target multiplier 2.0x, max_runs=10
+    task = VideoTask(
+        url="https://www.youtube.com/watch?v=targetmulttest",
+        duration_seconds=600.0,
+        target_multiplier=2.0,
+        max_runs=10,
+    )
+    v_key = resolve_video_key(task)
+    channels = [Channel(name="Default")]
+
+    assert is_video_task_runnable(task, channels, stats_store=store) is True
+
+    # Watch 1 run of 600s -> multiplier 1.0x < 2.0x -> still runnable
+    store.record(TaskOutcome(
+        video_key=v_key,
+        task_key=v_key,
+        watched_seconds=600.0,
+        video_duration=600.0,
+        playback_finished=True,
+        success=True,
+    ))
+    assert is_video_task_runnable(task, channels, stats_store=store) is True
+
+    # Watch another 600s -> total 1200s, multiplier 2.0x >= 2.0x target reached -> NOT runnable!
+    store.record(TaskOutcome(
+        video_key=v_key,
+        task_key=v_key,
+        watched_seconds=600.0,
+        video_duration=600.0,
+        playback_finished=True,
+        success=True,
+    ))
+    assert is_video_task_runnable(task, channels, stats_store=store) is False

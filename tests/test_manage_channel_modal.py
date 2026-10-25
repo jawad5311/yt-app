@@ -68,6 +68,11 @@ def test_manage_channel_modal_apply():
     mock_run_entry = MagicMock()
     mock_run_entry.get.return_value = "5"
     modal.run_entry = mock_run_entry
+    modal.max_views_entry = mock_run_entry
+
+    mock_mult_entry = MagicMock()
+    mock_mult_entry.get.return_value = "2.0"
+    modal.multiplier_entry = mock_mult_entry
 
     mock_target_entry = MagicMock()
     mock_target_entry.get.return_value = "2.5"
@@ -80,6 +85,8 @@ def test_manage_channel_modal_apply():
 
     assert t1.max_runs == 5
     assert t2.max_runs == 5
+    assert t1.target_multiplier == 2.0
+    assert t2.target_multiplier == 2.0
     modal.parent_view.save_queue.assert_called_once()
     assert channel.target_watch_seconds == 2.5 * 3600.0
     mock_app.config_mgr.set_channels.assert_called_once()
@@ -91,20 +98,32 @@ def test_manage_channel_modal_validation():
     modal = ManageChannelModal.__new__(ManageChannelModal)
     modal.channel = Channel(name="GamerChannel")
     modal.group_videos = []
+    modal.parent_view = MagicMock()
     modal.err_lbl = MagicMock()
 
-    # Invalid run limit
-    modal.run_entry = MagicMock()
-    modal.run_entry.get.return_value = "invalid"
+    # Invalid multiplier
+    modal.multiplier_entry = MagicMock()
+    modal.multiplier_entry.get.return_value = "-1.0"
+    modal._apply()
+    assert "cannot be negative" in modal.err_lbl.configure.call_args[1]["text"]
+
+    modal.multiplier_entry.get.return_value = "invalid"
+    modal._apply()
+    assert "valid number" in modal.err_lbl.configure.call_args[1]["text"]
+
+    # Valid multiplier, invalid max views
+    modal.multiplier_entry.get.return_value = "2.0"
+    modal.max_views_entry = MagicMock()
+    modal.max_views_entry.get.return_value = "invalid"
     modal._apply()
     assert "valid whole number" in modal.err_lbl.configure.call_args[1]["text"]
 
-    modal.run_entry.get.return_value = "0"
+    modal.max_views_entry.get.return_value = "-5"
     modal._apply()
-    assert "at least 1" in modal.err_lbl.configure.call_args[1]["text"]
+    assert "cannot be negative" in modal.err_lbl.configure.call_args[1]["text"]
 
-    # Invalid target hours
-    modal.run_entry.get.return_value = "3"
+    # Valid views, invalid target hours
+    modal.max_views_entry.get.return_value = "5"
     modal.target_entry = MagicMock()
     modal.target_entry.get.return_value = "bad"
     modal._apply()
