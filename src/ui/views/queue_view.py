@@ -165,6 +165,16 @@ class QueueView(ctk.CTkFrame):
         self.app_controller.config_mgr.set_video_queue(dict_list)
         self.app_controller.on_queue_changed(self.video_tasks)
 
+    def show_popup_notification(self, title: str, message: str) -> None:
+        """Display a pop-up notification dialog for user updates."""
+        try:
+            messagebox.showinfo(title, message, parent=self)
+        except Exception:
+            try:
+                messagebox.showinfo(title, message)
+            except Exception:
+                pass
+
     # -------------------------------------------------------------- channels
 
     def _channels(self) -> List[Channel]:
@@ -828,7 +838,20 @@ class QueueView(ctk.CTkFrame):
         views_entry.insert(0, str(task.max_runs))
         views_entry.pack(side="left", padx=(0, 8))
 
-        def _on_target_change(*_):
+        updating_target = False
+
+        def _revert_target(*_):
+            if updating_target:
+                return
+            try:
+                curr_stored = getattr(task, "target_multiplier", 0.0)
+                target_entry.delete(0, "end")
+                target_entry.insert(0, str(int(curr_stored)) if curr_stored.is_integer() else f"{curr_stored:.1f}")
+            except Exception:
+                pass
+
+        def _on_target_enter(*_):
+            nonlocal updating_target
             val_str = target_entry.get().strip()
             if not val_str or val_str in ("0", "0.0", "∞"):
                 new_val = 0.0
@@ -836,15 +859,40 @@ class QueueView(ctk.CTkFrame):
                 try:
                     new_val = max(0.0, float(val_str))
                 except ValueError:
-                    new_val = getattr(task, "target_multiplier", 0.0)
+                    _revert_target()
+                    return
 
-            task.target_multiplier = new_val
-            self.save_queue()
-            target_entry.delete(0, "end")
-            target_entry.insert(0, str(int(new_val)) if new_val.is_integer() else f"{new_val:.1f}")
-            self.refresh_list()
+            updating_target = True
+            try:
+                task.target_multiplier = new_val
+                self.save_queue()
+                self.refresh_list()
+            finally:
+                updating_target = False
 
-        def _on_views_change(*_):
+            val_disp = f"{int(new_val)}x" if new_val.is_integer() else f"{new_val:.1f}x"
+            t_title = task.title or task.url or f"Video #{position}"
+            if len(t_title) > 35:
+                t_title = t_title[:32] + "..."
+            self.show_popup_notification(
+                "Target Multiplier Updated",
+                f"Target value updated to {val_disp} for:\n'{t_title}'",
+            )
+
+        updating_views = False
+
+        def _revert_views(*_):
+            if updating_views:
+                return
+            try:
+                curr_stored = task.max_runs
+                views_entry.delete(0, "end")
+                views_entry.insert(0, str(curr_stored))
+            except Exception:
+                pass
+
+        def _on_views_enter(*_):
+            nonlocal updating_views
             val_str = views_entry.get().strip()
             if not val_str or val_str in ("0", "∞"):
                 new_val = 0
@@ -852,18 +900,30 @@ class QueueView(ctk.CTkFrame):
                 try:
                     new_val = max(0, int(val_str))
                 except ValueError:
-                    new_val = task.max_runs
+                    _revert_views()
+                    return
 
-            task.max_runs = new_val
-            self.save_queue()
-            views_entry.delete(0, "end")
-            views_entry.insert(0, str(new_val))
-            self.refresh_list()
+            updating_views = True
+            try:
+                task.max_runs = new_val
+                self.save_queue()
+                self.refresh_list()
+            finally:
+                updating_views = False
 
-        target_entry.bind("<FocusOut>", _on_target_change)
-        target_entry.bind("<Return>", _on_target_change)
-        views_entry.bind("<FocusOut>", _on_views_change)
-        views_entry.bind("<Return>", _on_views_change)
+            val_disp = str(new_val) if new_val > 0 else "0 (unlimited)"
+            t_title = task.title or task.url or f"Video #{position}"
+            if len(t_title) > 35:
+                t_title = t_title[:32] + "..."
+            self.show_popup_notification(
+                "Max Views Updated",
+                f"Max views value updated to {val_disp} for:\n'{t_title}'",
+            )
+
+        target_entry.bind("<FocusOut>", _revert_target)
+        target_entry.bind("<Return>", _on_target_enter)
+        views_entry.bind("<FocusOut>", _revert_views)
+        views_entry.bind("<Return>", _on_views_enter)
 
         ctk.CTkButton(
             action_btn_frame,
