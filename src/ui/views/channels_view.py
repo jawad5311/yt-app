@@ -1,3 +1,4 @@
+import re
 import threading
 import webbrowser
 from tkinter import messagebox
@@ -12,7 +13,7 @@ from ...models.channel import (
     clean_channel_url,
 )
 from ...models.video_task import VideoTask
-from ...models.watch_stats import format_totals_line
+from ...models.watch_stats import format_duration, format_totals_line
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
     extract_fallback_channel_name,
@@ -173,6 +174,45 @@ class ChannelsView(ctk.CTkFrame):
     def video_count(self, channel_name: str) -> int:
         tasks = getattr(self.app_controller, "queued_video_tasks", None) or []
         return sum(1 for task in tasks if task.channel == channel_name)
+
+    def get_channel_handle(self, channel: Channel) -> str:
+        """Extract a clean @handle from the channel URL or name."""
+        url_str = (channel.url or "").strip()
+        match = re.search(r"@([a-zA-Z0-9_.-]+)", url_str)
+        if match:
+            return f"@{match.group(1).rstrip('/')}"
+        name_str = (channel.name or "").strip()
+        match_name = re.search(r"@([a-zA-Z0-9_.-]+)", name_str)
+        if match_name:
+            return f"@{match_name.group(1).rstrip('/')}"
+        for prefix in ("/c/", "/user/"):
+            if prefix in url_str:
+                part = url_str.split(prefix)[-1].split("/")[0].split("?")[0]
+                if part:
+                    return f"@{part}"
+        if name_str:
+            clean_handle = name_str.lstrip("@").replace(" ", "")
+            return f"@{clean_handle}"
+        return "@channel"
+
+    def get_channel_watch_time(self, channel: Channel) -> str:
+        """Calculate total watch time from all recorded videos for this channel."""
+        store = getattr(self.app_controller, "stats_store", None)
+        if not store:
+            return "0s"
+        clean = (channel.name or "").strip()
+        names = {
+            clean.lower(),
+            clean.lstrip("@").lower(),
+            f"@{clean.lstrip('@')}".lower(),
+        }
+        total_sec = 0.0
+        with store._lock:
+            for record in store.records.values():
+                ch_rec = (record.channel or "").strip().lower()
+                if ch_rec in names:
+                    total_sec += float(record.watch_seconds)
+        return format_duration(total_sec)
 
     def channel_stats_line(self, channel_name: str) -> str:
         """``27 runs · 12h 04m watched`` for one channel row, or ``""``."""
@@ -942,18 +982,20 @@ class ChannelsView(ctk.CTkFrame):
             chk.configure(command=_toggle_channel)
             chk.grid(row=0, column=0, padx=(12, 4), pady=8, sticky="w")
 
-            count = self.video_count(channel.name)
-            subtitle = channel.url or "No URL"
+            raw_name = (channel.name or "").strip()
+            clean_name = raw_name.lstrip("@").strip() or raw_name or "Channel"
             status_tag = ""
             if channel.archived:
                 status_tag = " [ARCHIVED]"
             elif not channel.enabled:
                 status_tag = " [DISABLED]"
 
-            info_text = f"{pos}. {channel.name}{status_tag}\n{subtitle}  |  {count} video(s)  (Click to view videos)"
-            stats_line = self.channel_stats_line(channel.name)
-            if stats_line:
-                info_text += f"\n{stats_line}"
+            line1 = f"{pos} - {clean_name}{status_tag}"
+            line2 = self.get_channel_handle(channel)
+            watch_time_str = self.get_channel_watch_time(channel)
+            line3 = f"Total Watch Time: {watch_time_str}"
+
+            info_text = f"{line1}\n{line2}\n{line3}"
 
             def _on_channel_click(event=None, ch=channel):
                 self.open_channel_videos_modal(ch)
