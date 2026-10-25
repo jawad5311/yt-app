@@ -67,4 +67,4 @@ def test_format_watch_line_with_hours():
 
     rec2 = StatRecord(runs=1, watch_seconds=500.0, last_result="success")
     line2 = format_watch_line(rec2, use_hours=True)
-    assert "0.1 hours watched" in line2
+    assert "8 min watched" in line2

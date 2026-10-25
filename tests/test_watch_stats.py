@@ -288,3 +288,43 @@ def test_format_watch_line_with_multiplier():
     rec2 = StatRecord(runs=2, watch_seconds=7200.0, video_duration=3600.0)
     line2 = format_watch_line(rec2, use_hours=True)
     assert "2.0 hours watched (2x)" in line2
+
+
+def test_format_watch_time():
+    from src.models.watch_stats import format_watch_time
+
+    # Watch time < 60 min and video length <= 60 min -> minutes
+    assert format_watch_time(watch_seconds=431.6, duration_seconds=451.4) == "7 min watched"
+    assert format_watch_time(watch_seconds=50.0, duration_seconds=451.4) == "1 min watched"
+    assert format_watch_time(watch_seconds=3590.0, duration_seconds=3590.0) == "60 min watched"
+    assert format_watch_time(watch_seconds=0.0, duration_seconds=451.4) == "0 min watched"
+
+    # Watch time >= 60 min -> hours
+    assert format_watch_time(watch_seconds=3600.0, duration_seconds=600.0) == "1.0 hours watched"
+    assert format_watch_time(watch_seconds=5400.0, duration_seconds=1800.0) == "1.5 hours watched"
+
+    # Video length > 60 min (> 3600s) -> hours
+    assert format_watch_time(watch_seconds=1800.0, duration_seconds=7200.0) == "0.5 hours watched"
+    assert format_watch_time(watch_seconds=180.0, duration_seconds=5400.0) == "0.1 hours watched"
+
+
+def test_format_watch_line_with_minutes_hours_and_video_length():
+    from src.models.watch_stats import StatRecord, format_watch_line
+
+    # 1. Video under 60 min: displays 'XX min watched' and 'Length: XX min'
+    rec_short = StatRecord(runs=1, watch_seconds=431.6, video_duration=451.4, last_result="success")
+    line_short = format_watch_line(rec_short, max_runs=3, use_hours=True)
+    assert "1/3 full runs (2 remaining)" in line_short
+    assert "7 min watched (1x)" in line_short
+    assert "Length: 8 min" in line_short
+    assert "last ✅" in line_short
+
+    # 2. Video length > 60 min: watch time converts to hours, length in minutes
+    rec_long = StatRecord(runs=1, watch_seconds=1800.0, video_duration=7200.0, last_result="success")
+    line_long = format_watch_line(rec_long, use_hours=True)
+    assert "0.5 hours watched (0.2x)" in line_long
+    assert "Length: 120 min" in line_long
+
+    # 3. Video not run yet with known length
+    line_unrun = format_watch_line(None, max_runs=5, task_duration=451.4)
+    assert line_unrun == "▶ 0/5 full runs (5 remaining) (0x) · Length: 8 min"

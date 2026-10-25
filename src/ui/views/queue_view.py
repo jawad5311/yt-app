@@ -778,7 +778,8 @@ class QueueView(ctk.CTkFrame):
         target_suffix = f" | Target: {task.target_multiplier:.1f}x" if getattr(task, "target_multiplier", 0.0) > 0 else ""
         limit_suffix = f" | Max Views: {task.max_runs}" if task.max_runs > 0 else ""
         mult_suffix = f" | Multiplier: {mult_str}" if mult_str else ""
-        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{target_suffix}{limit_suffix}{mult_suffix}"
+        length_suffix = f" | Length: {max(1, int(round(effective_duration / 60.0)))} min" if effective_duration > 0 else ""
+        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{length_suffix}{target_suffix}{limit_suffix}{mult_suffix}"
         lbl = ctk.CTkLabel(
             card,
             text=info_text,
