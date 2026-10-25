@@ -191,9 +191,12 @@ class AutomationWorker:
                     ch_name = (task.channel or "").strip().lower()
                     if not ch_name:
                         return False
+                    if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_name):
+                        return True
                     for c in self.config_mgr.get_channels():
                         if (c.get("name") or "").strip().lower() == ch_name:
-                            return not c.get("enabled", True) or c.get("archived", False)
+                            ch_obj = Channel.from_dict(c)
+                            return not ch_obj.enabled or ch_obj.archived or ch_obj.target_achieved
                     return False
 
                 try:
@@ -308,6 +311,20 @@ class AutomationWorker:
                 if task.channel:
                     raw_channels = self.config_mgr.get_channels()
                     channel_objs = [Channel.from_dict(c) for c in raw_channels]
+                    matching_ch = [c for c in channel_objs if c.name.lower() == task.channel.lower()]
+                    target_hit = False
+                    if matching_ch:
+                        ch_obj = matching_ch[0]
+                        if (hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_obj.name)) or ch_obj.target_achieved:
+                            target_hit = True
+                    if target_hit:
+                        emit(
+                            self.log_queue,
+                            f"Skipping task '{task.title or task.keywords or task.url}': channel '{task.channel}' achieved target watch time ({matching_ch[0].watch_seconds/3600:.1f}/{matching_ch[0].target_watch_hours:.1f}h).",
+                        )
+                        if self.dispatcher is not None:
+                            self.dispatcher.release_task(task)
+                        continue
                     if not is_video_task_runnable(task, channel_objs, self.stats_store):
                         emit(
                             self.log_queue,

@@ -449,15 +449,24 @@ class WatchingWorker:
         return enabled, config
 
     def get_target_channels(self) -> List[Channel]:
-        """Get fresh enabled target channels list from settings.json. Only returns channels that are checked/enabled and not archived."""
+        """Get fresh enabled target channels list from settings.json. Only returns channels that are checked/enabled, not archived, and haven't achieved target watch time."""
+        def _is_active(c: Channel) -> bool:
+            if not (c.name and c.enabled and not c.archived):
+                return False
+            if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(c.name):
+                return False
+            if c.target_achieved:
+                return False
+            return True
+
         try:
             stored_dicts = self.config_mgr.get_channels()
             if stored_dicts:
                 stored_objs = [Channel.from_dict(c) for c in stored_dicts]
-                return [c for c in stored_objs if c.name and c.enabled and not c.archived]
+                return [c for c in stored_objs if _is_active(c)]
         except Exception:
             pass
-        return [c for c in self.channels if c.name and c.enabled and not c.archived]
+        return [c for c in self.channels if _is_active(c)]
 
     def _watchtime_duration_seconds(self) -> Optional[int]:
         """Read watch duration budget from settings. Returns None for Full Video."""
@@ -1109,6 +1118,8 @@ class WatchingWorker:
         def _should_stop(ch_name=channel_display) -> bool:
             if not ch_name:
                 return False
+            if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_name):
+                return True
             active_names = {c.name.lower() for c in self.get_target_channels()}
             return ch_name.lower() not in active_names
 
