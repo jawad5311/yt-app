@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
-from ...models.watch_stats import format_totals_line, format_watch_line, totals_for
+from ...models.watch_stats import format_totals_line, format_watch_line, format_watch_multiplier, totals_for
 from ...utils.helpers import clean_youtube_url
 
 
@@ -369,6 +369,8 @@ class QueueView(ctk.CTkFrame):
                 channel="" if channel_option.get() == NO_CHANNEL_VALUE else channel_option.get(),
                 enabled=target_task.enabled,
                 max_runs=max_runs_val,
+                duration_seconds=target_task.duration_seconds,
+                duration_text=target_task.duration_text,
             )
 
             if is_editing:
@@ -724,6 +726,9 @@ class QueueView(ctk.CTkFrame):
         current_runs = record.runs if record is not None else 0
         is_limit_reached = task.max_runs > 0 and current_runs >= task.max_runs
 
+        effective_duration = float(record.video_duration if record and record.video_duration > 0 else getattr(task, "duration_seconds", 0.0))
+        mult_str = format_watch_multiplier(record.watch_seconds if record else 0.0, effective_duration)
+
         t_text = task.title or task.url
         if len(t_text) > 55:
             t_text = t_text[:52] + "..."
@@ -744,7 +749,8 @@ class QueueView(ctk.CTkFrame):
             status_prefix = "[LIMIT REACHED] "
 
         limit_suffix = f" | Limit: {task.max_runs} full runs" if task.max_runs > 0 else ""
-        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{limit_suffix}"
+        mult_suffix = f" | Multiplier: {mult_str}" if mult_str else ""
+        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{limit_suffix}{mult_suffix}"
         lbl = ctk.CTkLabel(
             card,
             text=info_text,
@@ -757,7 +763,7 @@ class QueueView(ctk.CTkFrame):
 
         stats_lbl = ctk.CTkLabel(
             card,
-            text=format_watch_line(record, max_runs=task.max_runs, use_hours=True),
+            text=format_watch_line(record, max_runs=task.max_runs, use_hours=True, task_duration=effective_duration),
             justify="left",
             font=ctk.CTkFont(size=12),
             anchor="w",

@@ -295,12 +295,34 @@ def format_duration(seconds: float) -> str:
     return f"{total // 3600}h {(total % 3600) // 60:02d}m"
 
 
+def format_watch_multiplier(watch_seconds: float, duration_seconds: float) -> str:
+    """Format watch time generated relative to video length into 1x, 2x, 1.5x format.
+
+    Examples:
+    - 1 hour video watched for 1 hour -> '1x'
+    - 1 hour video watched for 2 hours -> '2x'
+    - 1 hour video watched for 1h 30m -> '1.5x'
+    - 1 hour video watched for 45m -> '0.8x'
+    - 0s watch time -> '0x'
+    - unknown duration (<= 0) -> ''
+    """
+    if duration_seconds <= 0:
+        return ""
+    if watch_seconds <= 0:
+        return "0x"
+    ratio = round(watch_seconds / duration_seconds, 1)
+    if ratio.is_integer():
+        return f"{int(ratio)}x"
+    return f"{ratio:.1f}x"
+
+
 def format_watch_line(
     record: Optional[StatRecord],
     max_runs: int = 0,
     use_hours: bool = False,
+    task_duration: float = 0.0,
 ) -> str:
-    """Queue-card line: ``▶ 12 runs · 4.4 hours watched · last ✅`` or with limit progress."""
+    """Queue-card line: ``▶ 12 full runs · 4.4 hours watched (1.5x) · last ✅`` or with limit progress."""
     current_runs = record.runs if record is not None else 0
     if max_runs > 0:
         if current_runs >= max_runs:
@@ -317,13 +339,20 @@ def format_watch_line(
         else:
             runs_str = f"{current_runs} full runs"
 
+    eff_duration = task_duration
+    if eff_duration <= 0 and record is not None and record.video_duration > 0:
+        eff_duration = record.video_duration
+
+    mult = format_watch_multiplier(record.watch_seconds if record else 0.0, eff_duration) if eff_duration > 0 else ""
+
     if record is None or current_runs == 0:
         if max_runs > 0:
-            return f"▶ {runs_str}"
-        return "▶ Not run yet"
+            return f"▶ {runs_str} ({mult})" if mult else f"▶ {runs_str}"
+        return f"▶ Not run yet ({mult})" if mult else "▶ Not run yet"
 
     time_str = format_hours(record.watch_seconds) if use_hours else format_duration(record.watch_seconds)
-    line = f"▶ {runs_str} · {time_str} watched"
+    mult_suffix = f" ({mult})" if mult else ""
+    line = f"▶ {runs_str} · {time_str} watched{mult_suffix}"
     if record is not None and record.last_result:
         icon = RESULT_ICONS.get(record.last_result)
         if icon:
@@ -363,6 +392,7 @@ __all__ = [
     "format_hours",
     "format_totals_line",
     "format_watch_line",
+    "format_watch_multiplier",
     "group_records_by_channel",
     "resolve_video_id",
     "resolve_video_key",

@@ -13,7 +13,7 @@ from ...models.channel import (
     clean_channel_url,
 )
 from ...models.video_task import VideoTask
-from ...models.watch_stats import format_duration, format_hours, format_totals_line
+from ...models.watch_stats import format_duration, format_hours, format_totals_line, format_watch_multiplier
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
     extract_fallback_channel_name,
@@ -850,7 +850,10 @@ class ChannelsView(ctk.CTkFrame):
                 store = getattr(self.app_controller, "stats_store", None)
                 rec = store.find_for_task(task) if store else None
                 v_watch_sec = float(rec.watch_seconds) if rec else 0.0
-                label_parts.append(f"Total Watch Time: {format_hours(v_watch_sec)}")
+                eff_dur = float(rec.video_duration if rec and rec.video_duration > 0 else getattr(task, "duration_seconds", 0.0))
+                mult = format_watch_multiplier(v_watch_sec, eff_dur)
+                mult_info = f" ({mult})" if mult else ""
+                label_parts.append(f"Total Watch Time: {format_hours(v_watch_sec)}{mult_info}")
 
                 ctk.CTkLabel(
                     card,

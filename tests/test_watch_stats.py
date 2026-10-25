@@ -247,3 +247,44 @@ def test_format_watch_line_shows_runs_time_and_last_result():
 def test_format_totals_line():
     assert format_totals_line(Totals(runs=1, watch_seconds=58)) == "1 full run · 58s watched"
     assert format_totals_line(Totals(runs=27, watch_seconds=43440)) == "27 full runs · 12h 04m watched"
+
+
+def test_format_watch_multiplier():
+    from src.models.watch_stats import format_watch_multiplier
+
+    # 1 hour video watched for 1 hour -> 1x
+    assert format_watch_multiplier(watch_seconds=3600.0, duration_seconds=3600.0) == "1x"
+
+    # 1 hour video watched for 2 hours -> 2x
+    assert format_watch_multiplier(watch_seconds=7200.0, duration_seconds=3600.0) == "2x"
+
+    # 1 hour video watched for 1h 30m -> 1.5x
+    assert format_watch_multiplier(watch_seconds=5400.0, duration_seconds=3600.0) == "1.5x"
+
+    # 1 hour video watched for 45m -> 0.8x
+    assert format_watch_multiplier(watch_seconds=2700.0, duration_seconds=3600.0) == "0.8x"
+
+    # 10 minute video watched for 25 minutes -> 2.5x
+    assert format_watch_multiplier(watch_seconds=1500.0, duration_seconds=600.0) == "2.5x"
+
+    # 0s watch time -> 0x
+    assert format_watch_multiplier(watch_seconds=0.0, duration_seconds=3600.0) == "0x"
+
+    # Duration unknown -> ""
+    assert format_watch_multiplier(watch_seconds=1200.0, duration_seconds=0.0) == ""
+    assert format_watch_multiplier(watch_seconds=1200.0, duration_seconds=-10.0) == ""
+
+
+def test_format_watch_line_with_multiplier():
+    from src.models.watch_stats import StatRecord, format_watch_line
+
+    # Video with 1 hour duration, watched for 1.5 hours
+    rec = StatRecord(runs=1, watch_seconds=5400.0, video_duration=3600.0, last_result="success")
+    line = format_watch_line(rec, use_hours=True)
+    assert "1.5 hours watched (1.5x)" in line
+    assert "last ✅" in line
+
+    # Video with 1 hour duration, watched for 2 hours
+    rec2 = StatRecord(runs=2, watch_seconds=7200.0, video_duration=3600.0)
+    line2 = format_watch_line(rec2, use_hours=True)
+    assert "2.0 hours watched (2x)" in line2
