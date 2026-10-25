@@ -873,13 +873,14 @@ class WatchingWorker:
                     return False, existing_task, f"channel '{existing_task.channel}' is disabled or not active"
 
             eff_dur = video_duration if video_duration > 0 else getattr(existing_task, "duration_seconds", 0.0)
+            limit_disp = existing_task.max_runs if existing_task.max_runs > 0 else 3
             if existing_task.is_target_reached(current_runs, watch_seconds, eff_dur):
-                reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and watch_seconds / eff_dur >= existing_task.target_multiplier) else f"max views limit reached ({current_runs}/{existing_task.max_runs})"
-                return False, existing_task, f"already reached target/limit: {reason}"
+                reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and watch_seconds / eff_dur >= existing_task.target_multiplier) else f"run limit ({current_runs}/{limit_disp} runs completed)"
+                return False, existing_task, f"already reached {reason}"
 
             limit_desc = f"max_views={existing_task.max_runs}" if existing_task.max_runs > 0 else "unlimited views"
             mult_desc = f"target={existing_task.target_multiplier:.1f}x" if existing_task.target_multiplier > 0 else "unlimited target"
-            return True, existing_task, f"eligible ({current_runs} runs completed, {limit_desc}, {mult_desc})"
+            return True, existing_task, f"eligible ({current_runs}/{limit_disp} runs completed)"
 
         # 3. Not in queue, but check if stats_store has already recorded >= 3 runs
         if current_runs >= 3:
@@ -969,9 +970,11 @@ class WatchingWorker:
         candidates: List[Dict[str, Any]],
         current_url: str,
         session_watched_keys: Set[str],
+        exclude_target_channels: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        """Find a random video from the suggested list (excluding currently playing video and shorts)."""
+        """Find a random video from the suggested list (excluding currently playing video, shorts, and optionally target channels)."""
         cur_vid_id = extract_video_id(current_url) or ""
+        target_channels = self.get_target_channels() if exclude_target_channels else []
         valid_candidates = []
         for item in candidates:
             href = item.get("href", "")
@@ -985,6 +988,13 @@ class WatchingWorker:
                 continue
             if "/shorts/" in clean_href:
                 continue
+
+            if exclude_target_channels and target_channels:
+                ch_name = item.get("channel_name") or ""
+                ch_url = item.get("channel_url") or ""
+                if match_channel(ch_name, ch_url, target_channels):
+                    continue
+
             valid_candidates.append(item)
 
         if not valid_candidates:
@@ -993,6 +1003,74 @@ class WatchingWorker:
         fresh = [c for c in valid_candidates if (extract_video_id(c.get("href", "")) or "") not in session_watched_keys]
         pool = fresh if fresh else valid_candidates
         return random.choice(pool)
+
+    def _watch_interleaving_buffer_video(self, session_watched_keys: Set[str]) -> bool:
+        """Watch a random video that is NOT from any target channel for 30-90s (Option 5)."""
+        if self.stop_event.is_set():
+            return False
+
+        emit(
+            self.log_queue,
+            "\n=== [Option 5] Watching random non-target buffer video (30–90s) before next target channel video ===",
+        )
+
+        rec_candidates = self.fetch_recommended_videos()
+        random_card = self._find_random_suggested_video(
+            rec_candidates,
+            getattr(self.driver, "current_url", "") or "",
+            session_watched_keys,
+            exclude_target_channels=True,
+        )
+
+        if not random_card:
+            current_url = getattr(self.driver, "current_url", "") or ""
+            if not is_clean_youtube_home_url(current_url):
+                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                human_like_delay(2.0, 3.5)
+                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+            home_candidates = self.fetch_home_videos(target_count=20)
+            random_card = self._find_random_suggested_video(
+                home_candidates,
+                getattr(self.driver, "current_url", "") or "",
+                session_watched_keys,
+                exclude_target_channels=True,
+            )
+
+        if not random_card:
+            emit(self.log_queue, "Could not find a non-target video for 30-90s buffer. Proceeding directly.", logging.WARNING)
+            return False
+
+        random_dur = round(random.uniform(30.0, 90.0), 1)
+        random_title = random_card.get("title") or "Non-Target Video"
+        emit(
+            self.log_queue,
+            f"Playing non-target buffer video '{random_title}' for {random_dur:.0f}s (No likes, No comments)...",
+        )
+
+        watched_ok = self._watch_random_video(random_card, random_dur, session_watched_keys)
+        if watched_ok:
+            emit(
+                self.log_queue,
+                f"Finished 30–90s non-target buffer video. Now searching for next target channel video...",
+            )
+        return watched_ok
+
+    def _after_target_video_watched(
+        self,
+        session_watched_keys: Set[str],
+        watched_count: int,
+    ) -> bool:
+        """Execute Option 5: watch a non-target suggested video (30-90s) before seeking the next target video."""
+        if self.stop_event.is_set():
+            return False
+        if self.total_loops > 1 and watched_count >= self.total_loops:
+            return False
+
+        active_channels = self.get_target_channels()
+        if not active_channels or all(c.target_achieved for c in active_channels):
+            return False
+
+        return self._watch_interleaving_buffer_video(session_watched_keys)
 
     def _watch_random_video(
         self,
@@ -1179,19 +1257,22 @@ class WatchingWorker:
         if target_vid_id:
             session_watched_keys.add(target_vid_id)
 
+        actual_watched = float(watch_res.watched_seconds or 0.0)
+        actual_ad = float(watch_res.ad_seconds or 0.0)
+        actual_dur = float(watch_res.video_duration or 0.0)
         self._record_watch(
             title=title,
             channel_name=channel_display,
-            watch_seconds=watch_res.watched_seconds,
-            ad_seconds=watch_res.ad_seconds,
-            duration=watch_res.video_duration,
+            watch_seconds=actual_watched,
+            ad_seconds=actual_ad,
+            duration=actual_dur,
             completed=watch_res.completed,
             task=registered_task,
         )
-        self._update_task_duration(registered_task, watch_res.video_duration)
+        self._update_task_duration(registered_task, actual_dur)
         emit(
             self.log_queue,
-            f"Updated video time for '{title}': watched {watch_res.watched_seconds:.1f}s (duration: {watch_res.video_duration:.1f}s, completed={watch_res.completed}).",
+            f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}).",
         )
         return watch_res
 
@@ -1321,6 +1402,10 @@ class WatchingWorker:
                     emit(self.log_queue, "No active target channels found in settings. Aborting watching session.", logging.WARNING)
                     break
 
+                if all(c.target_achieved for c in target_channels):
+                    emit(self.log_queue, "All active target channels have achieved their target watch time! Watching session complete.")
+                    break
+
                 current_url = getattr(self.driver, "current_url", "") or ""
 
                 # -------------------------------------------------------------
@@ -1349,6 +1434,13 @@ class WatchingWorker:
                             if watch_res.interrupted and not self.stop_event.is_set():
                                 emit(self.log_queue, f"Channel '{ch_display}' was disabled. Stopped video playback.")
                             break
+
+                        # Option 5: Interleave a 30-90s non-target video before next target video
+                        self._after_target_video_watched(session_watched_keys, watched_count)
+                        break
+
+                        # Option 5: Interleave a 30-90s non-target video before next target video
+                        self._after_target_video_watched(session_watched_keys, watched_count)
                         continue
 
                     # If no target video found in suggestions:
@@ -1420,6 +1512,10 @@ class WatchingWorker:
                             if self.stop_event.is_set() or watch_res.interrupted:
                                 if watch_res.interrupted and not self.stop_event.is_set():
                                     emit(self.log_queue, f"Channel '{ch_display}' was disabled. Stopped video playback.")
+                                break
+
+                            # Option 5: Interleave a 30-90s non-target video before next target video
+                            self._after_target_video_watched(session_watched_keys, watched_count)
                             break
                         else:
                             emit(
@@ -1487,7 +1583,7 @@ class WatchingWorker:
                         )
                     except Exception:
                         pass
-                    time.sleep(1.5)
+                    human_like_delay(1.0, 1.5)
 
                     emit(self.log_queue, f"Scanning YouTube Home feed for target channel (attempt {home_attempt}/3)...")
                     matched_home_item: Optional[Tuple[Dict[str, Any], Channel, str, str, str]] = None
@@ -1524,12 +1620,7 @@ class WatchingWorker:
                         except Exception:
                             self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
 
-                        sleep_time = random.uniform(1.3, 2.2)
-                        end_t = time.time() + sleep_time
-                        while time.time() < end_t:
-                            if self.stop_event.is_set():
-                                break
-                            time.sleep(0.1)
+                        human_like_delay(1.3, 2.2)
 
                     if self.stop_event.is_set():
                         break

@@ -683,23 +683,24 @@ class TestWatchingWorker:
             watched_durations.append(kwargs.get("duration_seconds"))
             if len(watched_interactivity) >= 3:
                 worker.stop_event.set()
-            return WatchResult(completed=True, watched_seconds=kwargs.get("duration_seconds", 60.0), playback_finished=True)
+            dur = float(kwargs.get("duration_seconds") or 60.0)
+            return WatchResult(completed=True, watched_seconds=dur, video_duration=180.0, playback_finished=True)
 
         mock_watch.side_effect = watch_side_effect
         worker.open_videos = True
         worker.run()
 
-        # 1. First video (Channel A): interactivity enabled, 60s
+        # 1. First video (Channel A): interactivity enabled, full video (duration_seconds is None) or 60
         assert watched_interactivity[0] is True
-        assert watched_durations[0] == 60
+        assert watched_durations[0] is None or watched_durations[0] == 60
 
         # 2. Random video: interactivity DISABLED, duration between 30 and 90s
         assert watched_interactivity[1] is False
         assert 30 <= watched_durations[1] <= 90
 
-        # 3. Third video (Channel B): interactivity enabled, 60s
+        # 3. Third video (Channel B): interactivity enabled, full video (duration_seconds is None) or 60
         assert watched_interactivity[2] is True
-        assert watched_durations[2] == 60
+        assert watched_durations[2] is None or watched_durations[2] == 60
 
     @patch("src.automation.watching_worker.human_like_delay")
     @patch("src.automation.watching_worker.setup_driver")
@@ -744,6 +745,64 @@ class TestWatchingWorker:
         assert is_clean_youtube_home_url("https://www.youtube.com/watch?v=123") is False
         assert is_clean_youtube_home_url("https://www.youtube.com/?bp=123") is False
         assert is_clean_youtube_home_url("") is False
+
+    def test_find_random_suggested_video_excludes_target_channels(self, worker):
+        ch_a = Channel(name="Target Channel A", url="https://youtube.com/@targetA")
+        ch_b = Channel(name="Target Channel B", url="https://youtube.com/@targetB")
+        worker.channels = [ch_a, ch_b]
+        worker.config_mgr.set_channels([ch_a.to_dict(), ch_b.to_dict()])
+
+        candidates = [
+            {"index": 0, "title": "Vid 1", "href": "/watch?v=target11111", "channel_name": "Target Channel A", "channel_url": ""},
+            {"index": 1, "title": "Vid 2", "href": "/watch?v=target22222", "channel_name": "Target Channel B", "channel_url": "https://youtube.com/@targetB"},
+            {"index": 2, "title": "Vid 3", "href": "/shorts/short111111", "channel_name": "Random Creator", "channel_url": ""},
+            {"index": 3, "title": "Vid 4", "href": "/watch?v=nonTarget11", "channel_name": "Random Channel", "channel_url": ""},
+        ]
+
+        # Pick random suggested video with exclude_target_channels=True
+        chosen = worker._find_random_suggested_video(
+            candidates,
+            current_url="https://www.youtube.com/watch?v=currently111",
+            session_watched_keys=set(),
+            exclude_target_channels=True,
+        )
+
+        assert chosen is not None
+        assert chosen["title"] == "Vid 4"
+        assert chosen["channel_name"] == "Random Channel"
+
+    @patch("src.automation.watching_worker.human_like_delay")
+    @patch("src.automation.watching_worker.watch_video")
+    def test_watch_interleaving_buffer_video_passive(self, mock_watch, mock_delay, worker):
+        worker.channels = [Channel(name="Target Channel")]
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://www.youtube.com/watch?v=currVid1234"
+        worker.driver = mock_driver
+
+        non_target_candidates = [
+            {"index": 0, "title": "Cooking Tutorial", "href": "/watch?v=cook1234567", "channel_name": "Chef Channel"},
+        ]
+        worker.fetch_recommended_videos = MagicMock(return_value=non_target_candidates)
+
+        def click_rec_mock(card):
+            mock_driver.current_url = f"https://www.youtube.com{card.get('href')}"
+            return True
+
+        worker.click_recommended_video = MagicMock(side_effect=click_rec_mock)
+        mock_watch.return_value = WatchResult(completed=True, watched_seconds=45.0)
+
+        session_keys = set()
+        watched_ok = worker._watch_interleaving_buffer_video(session_keys)
+
+        assert watched_ok is True
+        assert "cook1234567" in session_keys
+        # Interactivity was disabled (no likes, no comments, no sub)
+        _, kwargs = mock_watch.call_args
+        assert kwargs.get("enable_interactivity") is False
+        assert 30.0 <= kwargs.get("duration_seconds") <= 90.0
+        # Active channel was reset to None so no minutes credited to target channel
+        assert worker.channel_tracker.active_channel_name is None
+
 
 class TestDashboardButtonsAndState:
     def test_dashboard_view_buttons(self, tmp_path):
