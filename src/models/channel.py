@@ -164,10 +164,12 @@ def is_video_task_runnable(
     """
     if not task.enabled:
         return False
-    if stats_store is not None and task.max_runs > 0:
+    if stats_store is not None:
         record = stats_store.find_for_task(task)
         current_runs = record.runs if record is not None else 0
-        if current_runs >= task.max_runs:
+        watch_sec = record.watch_seconds if record is not None else 0.0
+        v_dur = record.video_duration if record is not None else 0.0
+        if task.is_target_reached(current_runs, watch_sec, v_dur):
             return False
     if task.channel:
         for ch in channels:

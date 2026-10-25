@@ -38,8 +38,11 @@ class VideoTask:
     channel: str = ""
     # Whether this video task is enabled for automation.
     enabled: bool = True
-    # Maximum lifetime automation runs allowed for this video (0 = unlimited).
+    # Maximum lifetime automation runs/views allowed for this video (0 = unlimited).
     max_runs: int = 0
+    # Target watch multiplier (e.g. 1.0, 1.5, 2.0; 0.0 = unlimited).
+    # When cumulative watch time reaches (target_multiplier * duration), viewing stops.
+    target_multiplier: float = 0.0
     # Length of the video in seconds (as reported by YouTube).
     duration_seconds: int = 0
     # Formatted length string (e.g., "14:25").
@@ -75,6 +78,7 @@ class VideoTask:
             "channel": self.channel,
             "enabled": self.enabled,
             "max_runs": self.max_runs,
+            "target_multiplier": round(self.target_multiplier, 2) if self.target_multiplier > 0 else 0.0,
             "duration_seconds": self.duration_seconds,
             "duration_text": self.duration_text,
         }
@@ -131,6 +135,12 @@ class VideoTask:
         except (TypeError, ValueError):
             max_runs_val = 0
 
+        raw_mult = data.get("target_multiplier", 0.0)
+        try:
+            target_multiplier_val = max(0.0, float(raw_mult))
+        except (TypeError, ValueError):
+            target_multiplier_val = 0.0
+
         return cls(
             url=data.get("url", ""),
             title=raw_t1,
@@ -143,6 +153,7 @@ class VideoTask:
             channel=data.get("channel") or "",
             enabled=bool(enabled_val),
             max_runs=max_runs_val,
+            target_multiplier=target_multiplier_val,
             duration_seconds=duration_seconds_val,
             duration_text=duration_text_val,
         )
@@ -150,6 +161,24 @@ class VideoTask:
     def is_run_limit_reached(self, current_runs: int) -> bool:
         """Return True if positive max_runs limit is reached or exceeded."""
         return self.max_runs > 0 and current_runs >= self.max_runs
+
+    def is_target_reached(
+        self,
+        current_runs: int = 0,
+        watch_seconds: float = 0.0,
+        video_duration: float = 0.0,
+    ) -> bool:
+        """Check if this task has achieved either its target multiplier or maximum views cap."""
+        # 1. Check max views / runs cap
+        if self.max_runs > 0 and current_runs >= self.max_runs:
+            return True
+        # 2. Check target multiplier
+        eff_dur = float(video_duration if video_duration > 0 else self.duration_seconds)
+        if self.target_multiplier > 0.0 and eff_dur > 0.0:
+            current_mult = round(watch_seconds / eff_dur, 1)
+            if current_mult >= self.target_multiplier:
+                return True
+        return False
 
     def remaining_runs(self, current_runs: int) -> Optional[int]:
         """Return remaining runs until max_runs is reached, or None if unlimited."""
