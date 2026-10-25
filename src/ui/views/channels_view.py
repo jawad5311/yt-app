@@ -849,8 +849,28 @@ class ChannelsView(ctk.CTkFrame):
             row.grid_columnconfigure(2, weight=0)
 
             def _toggle_channel(ch=channel):
-                ch.enabled = bool(chk.get())
+                new_enabled = bool(chk.get())
+                ch.enabled = new_enabled
+                if not new_enabled:
+                    # Move unchecked channel to the bottom of the list
+                    if ch in self.channels:
+                        self.channels.remove(ch)
+                        self.channels.append(ch)
+                    queue = self._queue_view()
+                    if queue is not None:
+                        ch_name = ch.name.lower()
+                        non_ch = [t for t in queue.video_tasks if (t.channel or "").strip().lower() != ch_name]
+                        ch_vids = [t for t in queue.video_tasks if (t.channel or "").strip().lower() == ch_name]
+                        queue.video_tasks = non_ch + ch_vids
+                        queue.save_queue()
+                    else:
+                        ch_name = ch.name.lower()
+                        raw_queue = self.app_controller.config_mgr.get_video_queue()
+                        non_ch = [t for t in raw_queue if (t.get("channel") or "").strip().lower() != ch_name]
+                        ch_vids = [t for t in raw_queue if (t.get("channel") or "").strip().lower() == ch_name]
+                        self.app_controller.config_mgr.set_video_queue(non_ch + ch_vids)
                 self.save_channels()
+                self.refresh_list()
                 queue = self._queue_view()
                 if queue is not None:
                     queue.refresh_list()

@@ -842,6 +842,10 @@ class WatchingWorker:
             # If manually disabled in queue
             if not existing_task.enabled:
                 return False, existing_task, "disabled in video queue"
+            if existing_task.channel:
+                matching_ch = [c for c in self.channels if c.name.lower() == existing_task.channel.lower()]
+                if not matching_ch or not matching_ch[0].enabled or matching_ch[0].archived:
+                    return False, existing_task, f"channel '{existing_task.channel}' is disabled or not active"
 
             limit = existing_task.max_runs if existing_task.max_runs > 0 else 3
             if current_runs >= limit:

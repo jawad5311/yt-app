@@ -406,6 +406,20 @@ class QueueView(ctk.CTkFrame):
                 for ch in channels:
                     if ch.name.lower() == group.channel.name.lower():
                         ch.enabled = new_state
+                if not new_state:
+                    # Move channel to the bottom of the channels list
+                    matching = [c for c in channels if c.name.lower() == group.channel.name.lower()]
+                    if matching:
+                        ch_obj = matching[0]
+                        channels.remove(ch_obj)
+                        channels.append(ch_obj)
+                    # Also move all videos belonging to this channel to the bottom of self.video_tasks
+                    ch_name = group.channel.name.lower()
+                    non_ch_tasks = [t for t in self.video_tasks if (t.channel or "").strip().lower() != ch_name]
+                    ch_tasks = [t for t in self.video_tasks if (t.channel or "").strip().lower() == ch_name]
+                    self.video_tasks = non_ch_tasks + ch_tasks
+                    self.save_queue()
+
                 self.app_controller.config_mgr.set_channels([c.to_dict() for c in channels])
                 self.refresh_list()
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
@@ -576,7 +590,20 @@ class QueueView(ctk.CTkFrame):
         card.grid_columnconfigure(2, weight=0)
 
         def _toggle_task():
-            task.enabled = bool(task_chk.get())
+            new_state = bool(task_chk.get())
+            task.enabled = new_state
+            if not new_state:
+                # Move this unchecked video to the bottom of the group list
+                try:
+                    curr_real = self.video_tasks.index(task)
+                    last_task = group.videos[-1][1]
+                    last_real = self.video_tasks.index(last_task)
+                    if curr_real != last_real:
+                        t = self.video_tasks.pop(curr_real)
+                        last_real = self.video_tasks.index(last_task)
+                        self.video_tasks.insert(last_real + 1, t)
+                except (ValueError, IndexError):
+                    pass
             self.save_queue()
             self.refresh_list()
 
@@ -586,15 +613,11 @@ class QueueView(ctk.CTkFrame):
             width=24,
             command=_toggle_task,
         )
-        if not channel_enabled:
-            task_chk.deselect()
-            task_chk.configure(state="disabled")
+        task_chk.configure(state="normal")
+        if task.enabled:
+            task_chk.select()
         else:
-            task_chk.configure(state="normal")
-            if task.enabled:
-                task_chk.select()
-            else:
-                task_chk.deselect()
+            task_chk.deselect()
 
         task_chk.grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=10, sticky="w")
 
@@ -614,7 +637,9 @@ class QueueView(ctk.CTkFrame):
             title_summary = title_summary[:39] + "..."
 
         status_prefix = ""
-        if not channel_enabled:
+        if not channel_enabled and not task.enabled:
+            status_prefix = "[CHANNEL & VIDEO DISABLED] "
+        elif not channel_enabled:
             status_prefix = "[CHANNEL DISABLED] "
         elif not task.enabled:
             status_prefix = "[DISABLED] "
