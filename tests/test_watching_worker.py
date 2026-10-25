@@ -492,9 +492,14 @@ class TestWatchingWorker:
     def test_run_chained_continuous_watching_loop(
         self, mock_close, mock_safe_get, mock_watch, mock_login, mock_setup, mock_delay, worker
     ):
-        """Verify back-to-back loop: Home -> Watch -> Recommended (skip ineligible, play eligible) -> Watch."""
+        """Verify back-to-back loop: Home (Channel A) -> Recommended (Channel B) alternates cleanly."""
         from src.models.video_task import VideoTask
         from src.models.watch_stats import TaskOutcome
+
+        ch_a = Channel(name="Channel A", url="https://youtube.com/@channelA")
+        ch_b = Channel(name="Channel B", url="https://youtube.com/@channelB")
+        worker.channels = [ch_a, ch_b]
+        worker.config_mgr.set_channels([ch_a.to_dict(), ch_b.to_dict()])
 
         mock_driver = MagicMock()
         mock_driver.current_url = "https://www.youtube.com/"
@@ -506,12 +511,12 @@ class TestWatchingWorker:
         done_vid = "done1234567"
         rec_vid = "rec12345678"
 
-        # Pre-store done_vid with 3/3 runs in stats
+        # Pre-store done_vid with 3/3 runs in stats for Channel B
         worker.stats_store.record(TaskOutcome(
             video_key=done_vid,
             task_key=done_vid,
             label="Ineligible Rec Video",
-            channel="Test Channel",
+            channel="Channel B",
             attempts=1,
             success=True,
             watched_seconds=120.0,
@@ -522,7 +527,7 @@ class TestWatchingWorker:
             video_key=done_vid,
             task_key=done_vid,
             label="Ineligible Rec Video",
-            channel="Test Channel",
+            channel="Channel B",
             attempts=1,
             success=True,
             watched_seconds=120.0,
@@ -533,7 +538,7 @@ class TestWatchingWorker:
             video_key=done_vid,
             task_key=done_vid,
             label="Ineligible Rec Video",
-            channel="Test Channel",
+            channel="Channel B",
             attempts=1,
             success=True,
             watched_seconds=120.0,
@@ -541,14 +546,14 @@ class TestWatchingWorker:
             playback_finished=True,
         ))
 
-        # 1. Home feed has home_vid
+        # 1. Home feed has home_vid for Channel A
         home_videos = [
-            {"index": 0, "title": "Home Video", "href": f"/watch?v={home_vid}", "channel_name": "Test Channel", "channel_url": ""},
+            {"index": 0, "title": "Home Video", "href": f"/watch?v={home_vid}", "channel_name": "Channel A", "channel_url": ""},
         ]
-        # 2. Watch page recommendations has done_vid (ineligible) then rec_vid (eligible)
+        # 2. Watch page recommendations has done_vid (ineligible Channel B) then rec_vid (eligible Channel B)
         rec_videos = [
-            {"index": 0, "title": "Ineligible Rec Video", "href": f"/watch?v={done_vid}", "channel_name": "Test Channel", "channel_url": ""},
-            {"index": 1, "title": "Eligible Rec Video", "href": f"/watch?v={rec_vid}", "channel_name": "Test Channel", "channel_url": ""},
+            {"index": 0, "title": "Ineligible Rec Video", "href": f"/watch?v={done_vid}", "channel_name": "Channel B", "channel_url": ""},
+            {"index": 1, "title": "Eligible Rec Video", "href": f"/watch?v={rec_vid}", "channel_name": "Channel B", "channel_url": ""},
         ]
 
         def exec_script_side_effect(script, *args):
@@ -608,9 +613,126 @@ class TestWatchingWorker:
         while not worker.log_queue.empty():
             logged.append(worker.log_queue.get_nowait())
         log_str = "\n".join(logged)
-        assert "Skipping suggested video 'Ineligible Rec Video' from channel 'Test Channel': already reached run limit" in log_str
+        assert "Skipping video 'Ineligible Rec Video' from channel 'Channel B': already reached run limit" in log_str
         assert "Eligible Rec Video" in log_str
         assert "Updated video time for 'Eligible Rec Video': watched 60.0s" in log_str
+
+    @patch("src.automation.watching_worker.human_like_delay")
+    @patch("src.automation.watching_worker.setup_driver")
+    @patch("src.automation.watching_worker.perform_google_login")
+    @patch("src.automation.watching_worker.watch_video")
+    @patch("src.automation.watching_worker.safe_get")
+    @patch("src.automation.watching_worker.close_driver")
+    def test_random_suggested_video_fallback_when_target_not_in_recs(
+        self, mock_close, mock_safe_get, mock_watch, mock_login, mock_setup, mock_delay, worker
+    ):
+        """When Channel A is watched and suggestions have no Channel B, watch random video without interactivity, then find Channel B."""
+        ch_a = Channel(name="Channel A", url="https://youtube.com/@channelA")
+        ch_b = Channel(name="Channel B", url="https://youtube.com/@channelB")
+        worker.channels = [ch_a, ch_b]
+        worker.config_mgr.set_channels([ch_a.to_dict(), ch_b.to_dict()])
+
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://www.youtube.com/"
+        mock_driver.find_elements.return_value = [MagicMock()]
+        mock_setup.return_value = mock_driver
+        mock_login.return_value = True
+
+        home_vid = "home_a"
+        random_vid = "random_unrelated"
+        target_b_vid = "target_b"
+
+        # On Home: video of Channel A
+        home_videos = [
+            {"index": 0, "title": "Channel A Video", "href": f"/watch?v={home_vid}", "channel_name": "Channel A", "channel_url": ""},
+        ]
+        # On Channel A watch page: suggestions only have unrelated random video
+        initial_recs = [
+            {"index": 0, "title": "Random Video 123", "href": f"/watch?v={random_vid}", "channel_name": "Unrelated Channel", "channel_url": ""},
+        ]
+        # On Random Video watch page: suggestions now have Channel B video!
+        second_recs = [
+            {"index": 0, "title": "Channel B Target Video", "href": f"/watch?v={target_b_vid}", "channel_name": "Channel B", "channel_url": ""},
+        ]
+
+        def exec_script_side_effect(script, *args):
+            if "HOME_VIDEOS_JS" in script or "ytd-rich-item-renderer" in script:
+                return home_videos
+            if "v.duration" in script:
+                return 180.0
+            return []
+
+        mock_driver.execute_script.side_effect = exec_script_side_effect
+
+        def click_home_side_effect(card_info):
+            mock_driver.current_url = f"https://www.youtube.com{card_info.get('href')}"
+            return True
+
+        def click_rec_side_effect(card_info):
+            mock_driver.current_url = f"https://www.youtube.com{card_info.get('href')}"
+            return True
+
+        worker.click_home_video = MagicMock(side_effect=click_home_side_effect)
+        worker.click_recommended_video = MagicMock(side_effect=click_rec_side_effect)
+        worker.fetch_recommended_videos = MagicMock(side_effect=[initial_recs, second_recs])
+
+        watched_interactivity = []
+        watched_durations = []
+        def watch_side_effect(*args, **kwargs):
+            watched_interactivity.append(kwargs.get("enable_interactivity"))
+            watched_durations.append(kwargs.get("duration_seconds"))
+            if len(watched_interactivity) >= 3:
+                worker.stop_event.set()
+            return WatchResult(completed=True, watched_seconds=kwargs.get("duration_seconds", 60.0), playback_finished=True)
+
+        mock_watch.side_effect = watch_side_effect
+        worker.open_videos = True
+        worker.run()
+
+        # 1. First video (Channel A): interactivity enabled, 60s
+        assert watched_interactivity[0] is True
+        assert watched_durations[0] == 60
+
+        # 2. Random video: interactivity DISABLED, duration between 30 and 90s
+        assert watched_interactivity[1] is False
+        assert 30 <= watched_durations[1] <= 90
+
+        # 3. Third video (Channel B): interactivity enabled, 60s
+        assert watched_interactivity[2] is True
+        assert watched_durations[2] == 60
+
+    @patch("src.automation.watching_worker.human_like_delay")
+    @patch("src.automation.watching_worker.setup_driver")
+    @patch("src.automation.watching_worker.perform_google_login")
+    @patch("src.automation.watching_worker.safe_get")
+    @patch("src.automation.watching_worker.close_driver")
+    def test_home_page_3_refresh_attempts_and_stops(
+        self, mock_close, mock_safe_get, mock_login, mock_setup, mock_delay, worker
+    ):
+        """When no target channel video is found on Home feed, refreshes 3 times and stops with log."""
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://www.youtube.com/"
+        mock_driver.find_elements.return_value = [MagicMock()]
+        mock_setup.return_value = mock_driver
+        mock_login.return_value = True
+
+        # Home feed has no matching videos
+        unrelated_videos = [
+            {"index": 0, "title": "Other Video", "href": "/watch?v=other", "channel_name": "Unrelated", "channel_url": ""},
+        ]
+        mock_driver.execute_script.return_value = unrelated_videos
+
+        worker.open_videos = True
+        worker.run()
+
+        # Should attempt 3 times on home page and stop
+        assert worker.stop_event.is_set()
+
+        logged = []
+        while not worker.log_queue.empty():
+            logged.append(worker.log_queue.get_nowait())
+        log_str = "\n".join(logged)
+        assert "No video of targeted channel found on YouTube Home after 3 refresh attempts. Stopping watching session." in log_str
 
 
     def test_is_clean_youtube_home_url(self):
