@@ -282,6 +282,14 @@ class LogsView(ctk.CTkFrame):
                 self.log_textbox.insert("end", line + "\n", "default")
 
         self.log_textbox.insert("end", "\n")
+        # Cap total lines to 3,000 to prevent Tkinter Text widget slowdowns during long sessions
+        try:
+            line_count = int(self.log_textbox.index("end-1c").split(".")[0])
+            if line_count > 3000:
+                self.log_textbox.delete("1.0", f"{line_count - 2500}.0")
+        except Exception:
+            pass
+
         # Auto-scroll only when user is at the bottom of the log; if scrolled up, leave view undisturbed
         if should_autoscroll:
             try:

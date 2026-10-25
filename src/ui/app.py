@@ -50,9 +50,12 @@ class YTBotApp(ctk.CTk):
         self.pause_event = threading.Event()
         self.is_running = False
         self.current_mode = "idle"
+        self.current_view_name = "dashboard"
+        self._queue_needs_refresh = False
+        self._channels_needs_refresh = False
 
         self._build_ui()
-        self.after(100, self._poll_log_queue)
+        self.after(50, self._poll_log_queue)
 
         # Pre-load accounts fallback if saved list is empty and accounts.txt exists
         if not self.loaded_accounts:
@@ -145,13 +148,20 @@ class YTBotApp(ctk.CTk):
             )
 
     def refresh_watch_stats(self) -> None:
-        """Re-render everything that shows watch statistics (main thread only)."""
+        """Re-render everything that shows watch statistics (main thread only, without rebuilding hidden tabs)."""
         if not hasattr(self, "views"):
             return
+        cur_view = getattr(self, "current_view_name", "dashboard")
         for name in ("queue", "channels"):
             view = self.views.get(name)
             if view is not None and hasattr(view, "refresh_list"):
-                view.refresh_list()
+                if cur_view == name:
+                    view.refresh_list()
+                else:
+                    if name == "queue":
+                        self._queue_needs_refresh = True
+                    elif name == "channels":
+                        self._channels_needs_refresh = True
         dashboard = self.views.get("dashboard")
         if dashboard is not None:
             totals = self.stats_store.lifetime_totals()
@@ -159,10 +169,18 @@ class YTBotApp(ctk.CTk):
             self.update_dashboard_stats()
 
     def show_view(self, name: str):
+        self.current_view_name = name
         for view_name, view_widget in self.views.items():
             if view_name == name:
                 view_widget.tkraise()
                 self.nav_buttons[view_name].configure(fg_color=("gray75", "gray25"))
+                # If switching to a view that has pending updates, refresh it smoothly
+                if name == "queue" and getattr(self, "_queue_needs_refresh", False):
+                    view_widget.refresh_list()
+                    self._queue_needs_refresh = False
+                elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
+                    view_widget.refresh_list()
+                    self._channels_needs_refresh = False
             else:
                 self.nav_buttons[view_name].configure(fg_color="transparent")
 
@@ -395,6 +413,14 @@ class YTBotApp(ctk.CTk):
             return
         mode_label = "browsing" if getattr(self, "current_mode", "automation") == "watching" else "automation"
         emit(self.log_queue, f"Stopping {mode_label} session... Please wait for workers to cleanup.")
+        dashboard = self.views.get("dashboard")
+        if dashboard is not None:
+            dashboard.set_status("Stopping session... Cleaning up.", "warning")
+            if hasattr(dashboard, "stop_btn"):
+                try:
+                    dashboard.stop_btn.configure(state="disabled", text="Stopping...")
+                except Exception:
+                    pass
         self.pause_event.clear()
         self.stop_event.set()
 
@@ -430,7 +456,11 @@ class YTBotApp(ctk.CTk):
                     new_t = VideoTask.from_dict(task_dict)
                     queue_view.video_tasks.append(new_t)
                 queue_view.save_queue()
-                queue_view.refresh_list()
+                if getattr(self, "current_view_name", "") == "queue":
+                    queue_view.refresh_list()
+                else:
+                    self._queue_needs_refresh = True
+                self.queued_video_tasks = queue_view.video_tasks
             self.refresh_watch_stats()
         elif kind == "update_video_duration" and len(event) == 3:
             task_dict, dur_sec = event[1], event[2]
@@ -445,7 +475,10 @@ class YTBotApp(ctk.CTk):
                         t.duration_text = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
                         break
                 queue_view.save_queue()
-                queue_view.refresh_list()
+                if getattr(self, "current_view_name", "") == "queue":
+                    queue_view.refresh_list()
+                else:
+                    self._queue_needs_refresh = True
             self.refresh_watch_stats()
         elif kind == "status" and len(event) == 3:
             _, message, level = event
@@ -455,17 +488,24 @@ class YTBotApp(ctk.CTk):
             self.refresh_watch_stats()
 
     def _poll_log_queue(self):
+        # 1. Batch up to 25 log messages per tick to prevent UI lockup
+        log_batch = []
         try:
-            while True:
-                msg = self.log_queue.get_nowait()
-                self.views["logs"].append_log(msg)
+            for _ in range(25):
+                log_batch.append(self.log_queue.get_nowait())
         except queue.Empty:
             pass
 
+        if log_batch:
+            logs_view = self.views.get("logs")
+            if logs_view is not None:
+                logs_view.append_log("\n".join(log_batch))
+
+        # 2. Process up to 10 worker events per tick
         try:
-            while True:
+            for _ in range(10):
                 self._handle_worker_event(self.event_queue.get_nowait())
         except queue.Empty:
             pass
 
-        self.after(100, self._poll_log_queue)
+        self.after(50, self._poll_log_queue)
