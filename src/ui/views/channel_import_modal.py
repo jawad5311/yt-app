@@ -1,11 +1,11 @@
 """Selection Preview Modal for importing videos fetched from a YouTube channel."""
 
-from typing import Callable, Dict, List, Set
+from typing import Callable, Dict, List, Optional, Set
 
 import customtkinter as ctk
 
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
-from ...utils.channel_fetcher import FetchedVideo
+from ...utils.channel_fetcher import FetchedVideo, ChannelFetchResult
 
 
 class ChannelImportModal(ctk.CTkToplevel):
@@ -19,6 +19,7 @@ class ChannelImportModal(ctk.CTkToplevel):
         fetched_videos: List[FetchedVideo],
         existing_video_ids: Set[str],
         on_import: Callable[[List[VideoTask]], None],
+        fetch_result: Optional[ChannelFetchResult] = None,
     ):
         super().__init__(parent)
         self.channel_name = channel_name
@@ -26,6 +27,7 @@ class ChannelImportModal(ctk.CTkToplevel):
         self.fetched_videos = fetched_videos
         self.existing_video_ids = existing_video_ids
         self.on_import = on_import
+        self.fetch_result = fetch_result
 
         self.title(f"Import Channel Videos — {channel_name}")
         self.geometry("780x620")
@@ -57,12 +59,28 @@ class ChannelImportModal(ctk.CTkToplevel):
             f"Found {len(self.fetched_videos)} videos · "
             f"{new_count} new, {existing_count} already in queue"
         )
+        if self.fetch_result:
+            if self.fetch_result.status == "initial_page_only":
+                status_text += " (Initial page only)"
+            elif self.fetch_result.status == "partial":
+                status_text += " (Partial result)"
+
         ctk.CTkLabel(
             header,
             text=status_text,
             font=ctk.CTkFont(size=12),
             text_color=("gray40", "gray60"),
         ).pack(anchor="w", pady=(2, 0))
+
+        if self.fetch_result and self.fetch_result.warning:
+            ctk.CTkLabel(
+                header,
+                text=f"ℹ️ {self.fetch_result.warning}",
+                font=ctk.CTkFont(size=11),
+                text_color=("#B7791F", "#F6E05E"),
+                wraplength=700,
+                justify="left",
+            ).pack(anchor="w", pady=(3, 0))
 
         # 2. Action Toolbar (Filters & Bulk Selection)
         toolbar = ctk.CTkFrame(self, fg_color="transparent")

@@ -6,11 +6,14 @@ and standard HTML metadata.
 """
 
 import json
+import os
 import re
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 @dataclass
@@ -32,6 +35,12 @@ class ChannelFetchResult:
     channel_url: str = ""
     videos: List[FetchedVideo] = field(default_factory=list)
     error: Optional[str] = None
+    requested_count: int = 0
+    fetched_count: int = 0
+    status: str = "complete"  # complete, limited, initial_page_only, partial, interrupted, error
+    provider: str = "initial_page_scraper"
+    warning: Optional[str] = None
+    is_truncated: bool = False
 
 
 def extract_fallback_channel_name(url_or_handle: str) -> str:
@@ -374,15 +383,201 @@ def extract_videos_from_data(
     return results
 
 
+def sanitize_api_url(url: str) -> str:
+    """Sanitize URLs to strip API keys from logs and error messages."""
+    return re.sub(r"key=[^&]+", "key=REDACTED", url)
+
+
+def get_configured_youtube_api_key(config_mgr: Optional[Any] = None) -> Optional[str]:
+    """Retrieve YouTube Data API key from environment or local configuration without exposing it."""
+    env_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    if config_mgr is not None and hasattr(config_mgr, "get_setting"):
+        cfg_key = str(config_mgr.get_setting("YouTubeApiKey", "") or "").strip()
+        if cfg_key:
+            return cfg_key
+    return None
+
+
+def fetch_channel_videos_api(
+    channel_input: str,
+    api_key: str,
+    max_results: int = 50,
+    timeout: int = 15,
+    cancel_event: Optional[threading.Event] = None,
+) -> ChannelFetchResult:
+    """Fetch paginated video metadata from YouTube Data API v3 with deduplication and loop detection."""
+    clean_input = (channel_input or "").strip()
+    norm_url = normalize_channel_url(clean_input)
+
+    # 1. Resolve channel to obtain channel title and uploads playlist ID
+    channel_req_url = ""
+    if "/channel/" in clean_input:
+        cid = clean_input.split("/channel/")[-1].split("/")[0].split("?")[0]
+        channel_req_url = f"https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&id={cid}&key={api_key}"
+    elif clean_input.startswith("UC") and len(clean_input) >= 20:
+        channel_req_url = f"https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&id={clean_input}&key={api_key}"
+    else:
+        handle = ""
+        if "@" in clean_input:
+            handle = "@" + clean_input.split("@")[-1].split("/")[0].split("?")[0]
+        else:
+            handle = "@" + clean_input.lstrip("/").split("/")[0].split("?")[0]
+        channel_req_url = f"https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&forHandle={urllib.parse.quote(handle)}&key={api_key}"
+
+    req = urllib.request.Request(channel_req_url, headers={"User-Agent": "yt-tool/2.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            meta_json = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        return ChannelFetchResult(
+            channel_url=norm_url,
+            error=f"YouTube API channel lookup failed: {sanitize_api_url(str(exc))}",
+            status="error",
+            provider="youtube_api_v3",
+        )
+
+    items = meta_json.get("items", [])
+    if not items:
+        return ChannelFetchResult(
+            channel_url=norm_url,
+            error=f"Channel not found for '{clean_input}' via YouTube API.",
+            status="error",
+            provider="youtube_api_v3",
+        )
+
+    channel_title = items[0].get("snippet", {}).get("title", "")
+    uploads_playlist_id = (
+        items[0].get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads")
+    )
+    if not uploads_playlist_id:
+        return ChannelFetchResult(
+            channel_title=channel_title,
+            channel_url=norm_url,
+            error="Could not locate uploads playlist for channel.",
+            status="error",
+            provider="youtube_api_v3",
+        )
+
+    # 2. Paginate playlistItems
+    videos: List[FetchedVideo] = []
+    seen_ids: Set[str] = set()
+    seen_tokens: Set[str] = set()
+    next_page_token: Optional[str] = None
+    status = "complete"
+    warning = None
+    is_truncated = False
+
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            status = "interrupted"
+            warning = "Channel video fetch interrupted by user."
+            is_truncated = True
+            break
+
+        if max_results > 0 and len(videos) >= max_results:
+            status = "limited"
+            is_truncated = True
+            break
+
+        fetch_size = min(50, max_results - len(videos)) if max_results > 0 else 50
+        p_url = (
+            f"https://www.googleapis.com/youtube/v3/playlistItems"
+            f"?part=snippet,contentDetails&playlistId={uploads_playlist_id}&maxResults={fetch_size}&key={api_key}"
+        )
+        if next_page_token:
+            p_url += f"&pageToken={urllib.parse.quote(next_page_token)}"
+
+        req = urllib.request.Request(p_url, headers={"User-Agent": "yt-tool/2.1"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                page_data = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            if videos:
+                # Retain earlier results and mark as partial
+                status = "partial"
+                warning = f"Pagination interrupted by network error on later page: {sanitize_api_url(str(exc))}"
+                is_truncated = True
+                break
+            else:
+                return ChannelFetchResult(
+                    channel_title=channel_title,
+                    channel_url=norm_url,
+                    error=f"YouTube API playlist items fetch failed: {sanitize_api_url(str(exc))}",
+                    status="error",
+                    provider="youtube_api_v3",
+                )
+
+        page_items = page_data.get("items", [])
+        for item in page_items:
+            vid = (
+                item.get("contentDetails", {}).get("videoId")
+                or item.get("snippet", {}).get("resourceId", {}).get("videoId")
+            )
+            title = item.get("snippet", {}).get("title", "")
+            if vid and title and vid not in seen_ids:
+                seen_ids.add(vid)
+                videos.append(
+                    FetchedVideo(
+                        video_id=str(vid),
+                        url=f"https://www.youtube.com/watch?v={vid}",
+                        title=str(title).strip(),
+                    )
+                )
+                if max_results > 0 and len(videos) >= max_results:
+                    status = "limited"
+                    is_truncated = True
+                    break
+
+        next_token = page_data.get("nextPageToken")
+        if not next_token:
+            status = "complete" if (max_results == 0 or len(videos) < max_results) else "limited"
+            is_truncated = False if max_results == 0 else (len(videos) >= max_results)
+            break
+
+        if next_token in seen_tokens:
+            # Token loop detected: terminate safely
+            warning = "Repeated page token detected; terminating pagination safely."
+            is_truncated = True
+            break
+
+        seen_tokens.add(next_token)
+        next_page_token = next_token
+
+    return ChannelFetchResult(
+        channel_title=channel_title,
+        channel_url=norm_url,
+        videos=videos,
+        requested_count=max_results,
+        fetched_count=len(videos),
+        status=status,
+        provider="youtube_api_v3",
+        warning=warning,
+        is_truncated=is_truncated,
+    )
+
 def fetch_channel_videos(
     channel_input: str,
     max_results: int = 50,
     timeout: int = 15,
+    config_mgr: Optional[Any] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> ChannelFetchResult:
-    """Fetch video metadata from a channel URL or handle."""
+    """Fetch video metadata from a channel URL or handle with supported pagination."""
+    api_key = get_configured_youtube_api_key(config_mgr)
+    if api_key:
+        return fetch_channel_videos_api(
+            channel_input=channel_input,
+            api_key=api_key,
+            max_results=max_results,
+            timeout=timeout,
+            cancel_event=cancel_event,
+        )
+
     url = normalize_channel_url(channel_input)
     if not url:
-        return ChannelFetchResult(error="Channel URL or handle is required.")
+        return ChannelFetchResult(error="Channel URL or handle is required.", status="error")
 
     req = urllib.request.Request(
         url,
@@ -431,10 +626,30 @@ def fetch_channel_videos(
             error="Could not parse YouTube page response (bot verification or changed page structure).",
         )
 
-    videos = extract_videos_from_data(data, max_results=max_results) if data else []
+    videos = extract_videos_from_data(data, max_results=max_results if max_results > 0 else 50) if data else []
+
+    status = "complete"
+    warning = None
+    is_truncated = False
+    if max_results == 0 or max_results > len(videos):
+        status = "initial_page_only"
+        is_truncated = True
+        warning = (
+            "Fetched initial page only (no YouTube Data API key configured). "
+            "Configure a YouTube API key in settings or YOUTUBE_API_KEY environment variable for full pagination."
+        )
+    elif max_results > 0 and len(videos) >= max_results:
+        status = "limited"
+        is_truncated = False
 
     return ChannelFetchResult(
         channel_title=channel_title,
         channel_url=url,
         videos=videos,
+        requested_count=max_results,
+        fetched_count=len(videos),
+        status=status,
+        provider="initial_page_scraper",
+        warning=warning,
+        is_truncated=is_truncated,
     )

@@ -638,11 +638,12 @@ class ChannelsView(ctk.CTkFrame):
                 fetched_videos=res.videos,
                 existing_video_ids=existing_ids,
                 on_import=_handle_import,
+                fetch_result=res,
             )
 
         name, url = channel.name, channel.url
         self._submit_channel_job(
-            loading, prog, lambda report: fetch_channel_videos(url, max_results=max_results),
+            loading, prog, lambda report: fetch_channel_videos(url, max_results=max_results, config_mgr=getattr(self.app_controller, "config_mgr", None)),
             _on_fetch_done, current=lambda: self._channel_is_current(channel, name, url),
         )
 
@@ -681,7 +682,7 @@ class ChannelsView(ctk.CTkFrame):
         prog.start()
 
         def _bg_fetch(report):
-            res = fetch_channel_videos(raw_url, max_results=max_fetch)
+            res = fetch_channel_videos(raw_url, max_results=max_fetch, config_mgr=getattr(self.app_controller, "config_mgr", None))
             if not res.error and not (res.channel_title or "").strip():
                 res.channel_title = fetch_channel_title_online(raw_url) or extract_fallback_channel_name(raw_url)
             return res
