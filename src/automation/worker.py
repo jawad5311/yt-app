@@ -10,6 +10,7 @@ from ..models.account import Account
 from ..models.channel import Channel, is_video_task_runnable
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
+from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .dispatcher import TaskDispatcher
 from .driver import close_driver, setup_driver
@@ -37,12 +38,14 @@ class AutomationWorker:
         worker_id: int = 0,
         stats_store: Optional[StatsStore] = None,
         dispatcher: Optional[TaskDispatcher] = None,
+        pause_event: Optional[threading.Event] = None,
     ):
         self.account = account
         self.video_tasks = video_tasks
         self.config_mgr = config_mgr
         self.log_queue = log_queue
         self.stop_event = stop_event or threading.Event()
+        self.pause_event = pause_event or threading.Event()
         self.event_queue = event_queue
         self.worker_id = worker_id
         self.stats_store = stats_store
@@ -122,6 +125,36 @@ class AutomationWorker:
         """
         label = task.title or task.keywords or task.url
         task_key = resolve_video_key(task)
+        task_url = (task.url or "").strip()
+        task_vid_id = extract_video_id(task_url) if task_url else ""
+        task_label = (task.title or task.keywords or "").strip()
+
+        raw_queue = self.config_mgr.get_video_queue() if self.config_mgr else []
+        initial_in_queue = False
+        for item in raw_queue:
+            if not isinstance(item, dict):
+                continue
+            item_url = (item.get("url") or "").strip()
+            if task_vid_id:
+                if extract_video_id(item_url) == task_vid_id:
+                    initial_in_queue = True
+                    break
+            elif task_url:
+                if item_url == task_url:
+                    initial_in_queue = True
+                    break
+            else:
+                t_temp = VideoTask.from_dict(item)
+                if resolve_video_key(t_temp) == task_key:
+                    initial_in_queue = True
+                    break
+                t_label = (t_temp.title or t_temp.keywords or "").strip()
+                if task_label and t_label.lower() == task_label.lower():
+                    initial_in_queue = True
+                    break
+        if not initial_in_queue and bool(self.video_tasks):
+            initial_in_queue = True
+
         outcome = TaskOutcome(
             video_key=task_key,
             task_key=task_key,
@@ -187,26 +220,113 @@ class AutomationWorker:
                     resolved_url = ""
                 outcome.video_key = resolve_video_key(task, resolved_url)
 
-                def _is_task_channel_disabled() -> bool:
-                    ch_name = (task.channel or "").strip().lower()
+                def _is_task_channel_disabled() -> Optional[str]:
+                    # 1. Read latest video queue if task belongs to queue
+                    latest_task: Optional[VideoTask] = None
+                    if initial_in_queue and self.config_mgr is not None:
+                        try:
+                            current_queue = self.config_mgr.get_video_queue()
+                        except Exception as exc:
+                            emit(self.log_queue, f"Control state read error (video queue): {exc}", logging.ERROR)
+                            return "control_read_failed"
+
+                        matched_item = None
+                        for item in current_queue:
+                            if not isinstance(item, dict):
+                                continue
+                            item_url = (item.get("url") or "").strip()
+                            if task_vid_id:
+                                if extract_video_id(item_url) == task_vid_id:
+                                    matched_item = item
+                                    break
+                            elif task_url:
+                                if item_url == task_url:
+                                    matched_item = item
+                                    break
+                            else:
+                                t_temp = VideoTask.from_dict(item)
+                                if resolve_video_key(t_temp) == task_key:
+                                    matched_item = item
+                                    break
+                                t_label = (t_temp.title or t_temp.keywords or "").strip()
+                                if task_label and t_label.lower() == task_label.lower():
+                                    matched_item = item
+                                    break
+
+                        if matched_item is None:
+                            emit(self.log_queue, f"Video '{task_label or task_url}' was removed or replaced. Stopping playback.")
+                            return "task_removed"
+
+                        latest_task = VideoTask.from_dict(matched_item)
+                        if not latest_task.enabled:
+                            emit(self.log_queue, f"Video '{latest_task.title or task_label}' was unchecked/disabled. Stopping playback.")
+                            return "task_disabled"
+
+                        latest_max_runs = latest_task.max_runs
+                        latest_multiplier = latest_task.target_multiplier
+
+                        if self.stats_store is not None:
+                            rec = self.stats_store.find_for_task(latest_task)
+                            if rec is None and task is not None:
+                                rec = self.stats_store.find_for_task(task)
+                            current_runs = rec.runs if rec is not None else 0
+                            prev_watched = rec.watch_seconds if rec else 0.0
+                            curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
+                            total_watched = prev_watched + curr_watch
+                            eff_dur = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(latest_task, "duration_seconds", 0.0)
+
+                            if latest_max_runs > 0 and current_runs >= latest_max_runs:
+                                emit(self.log_queue, f"Video '{latest_task.title or task_label}' reached max runs limit ({current_runs}/{latest_max_runs}). Stopping playback.")
+                                return "task_limit_reached"
+
+                            if latest_multiplier > 0.0 and eff_dur > 0.0:
+                                if total_watched >= latest_multiplier * eff_dur:
+                                    emit(self.log_queue, f"Video '{latest_task.title or task_label}' reached target multiplier ({latest_multiplier:.2f}x). Stopping video playback.")
+                                    return "task_target_reached"
+                    else:
+                        latest_task = task
+                        if latest_task and latest_task.target_multiplier > 0.0 and self.stats_store is not None:
+                            rec = self.stats_store.find_for_task(latest_task)
+                            prev_watched = rec.watch_seconds if rec else 0.0
+                            curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
+                            total_watched = prev_watched + curr_watch
+                            eff_dur = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(latest_task, "duration_seconds", 0.0)
+                            if eff_dur > 0.0 and total_watched >= latest_task.target_multiplier * eff_dur:
+                                return "task_target_reached"
+
+                    # 2. Check channel status
+                    ch_name = (latest_task.channel if latest_task else task.channel) or ""
+                    ch_name = ch_name.strip()
                     if ch_name:
                         if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_name):
-                            return True
-                        for c in self.config_mgr.get_channels():
-                            if (c.get("name") or "").strip().lower() == ch_name:
-                                ch_obj = Channel.from_dict(c)
-                                if not ch_obj.enabled or ch_obj.archived or ch_obj.target_achieved:
-                                    return True
-                    if getattr(task, "target_multiplier", 0.0) > 0 and self.stats_store is not None:
-                        rec = self.stats_store.find_for_task(task)
-                        prev_watched = rec.watch_seconds if rec else 0.0
-                        curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
-                        total_w = prev_watched + curr_watch
-                        eff_d = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(task, "duration_seconds", 0.0)
-                        if eff_d > 0 and (total_w / eff_d) >= task.target_multiplier:
-                            emit(self.log_queue, f"Video '{task.title}' reached target multiplier ({task.target_multiplier:.2f}x). Stopping video playback.")
-                            return True
-                    return False
+                            return "channel_target_achieved"
+                        if self.config_mgr is not None:
+                            try:
+                                raw_channels = self.config_mgr.get_channels()
+                            except Exception as exc:
+                                emit(self.log_queue, f"Control state read error (channels): {exc}", logging.ERROR)
+                                return "control_read_failed"
+
+                            clean_name = ch_name.lower().lstrip("@")
+                            found_ch = None
+                            for c in raw_channels:
+                                if not isinstance(c, dict):
+                                    continue
+                                if (c.get("name") or "").strip().lower().lstrip("@") == clean_name:
+                                    found_ch = Channel.from_dict(c)
+                                    break
+
+                            if found_ch is None:
+                                emit(self.log_queue, f"Channel '{ch_name}' not found or removed. Stopping playback.")
+                                return "channel_disabled"
+                            if not found_ch.enabled or found_ch.archived:
+                                emit(self.log_queue, f"Channel '{ch_name}' is disabled or archived. Stopping playback.")
+                                return "channel_disabled"
+                            if found_ch.target_achieved:
+                                emit(self.log_queue, f"Channel '{ch_name}' target watch time achieved. Stopping playback.")
+                                return "channel_target_achieved"
+
+                    return None
 
                 try:
                     enable_interactivity, interactivity_cfg = self._interactivity_settings()
@@ -223,6 +343,7 @@ class AutomationWorker:
                         end_buffer_seconds=self._end_buffer_seconds(),
                         enable_interactivity=enable_interactivity,
                         interactivity_config=interactivity_cfg,
+                        pause_event=self.pause_event,
                         should_stop_callback=_is_task_channel_disabled,
                         on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
                     )
@@ -233,11 +354,11 @@ class AutomationWorker:
                         outcome.video_duration = result.video_duration
                     if result.playback_finished:
                         outcome.playback_finished = True
-                    if result:
-                        outcome.success = True
-                        return outcome
                     if result.interrupted:
                         outcome.interrupted = True
+                        return outcome
+                    if result:
+                        outcome.success = True
                         return outcome
                 except Exception as exc:
                     emit(self.log_queue, f"Watch error: {exc}", logging.ERROR)
