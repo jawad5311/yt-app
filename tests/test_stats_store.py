@@ -289,7 +289,7 @@ def test_update_task_metadata_updates_label_and_channel(tmp_path):
     assert rec.channel == "Gaming"
 
 
-def test_handle_task_edited_url_change_removes_old_record(tmp_path):
+def test_handle_task_edited_url_change_preserves_old_record(tmp_path):
     store = make_store(tmp_path)
     store.record(outcome(video_key=VIDEO_ID))
 
@@ -297,7 +297,9 @@ def test_handle_task_edited_url_change_removes_old_record(tmp_path):
     new_task = VideoTask(url="https://www.youtube.com/watch?v=newVideo1234", title="New Video")
 
     store.handle_task_edited(old_task, new_task)
-    assert store.get(VIDEO_ID) is None
+    assert store.get(VIDEO_ID).watch_seconds == 60
+    assert store.find_for_task(new_task) is None
+    assert make_store(tmp_path).get(VIDEO_ID).watch_seconds == 60
 
 
 def test_handle_task_edited_metadata_change_updates_existing_record(tmp_path):

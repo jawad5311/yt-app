@@ -235,13 +235,12 @@ class StatsStore:
             return False
 
     def handle_task_edited(self, old_task: VideoTask, new_task: VideoTask) -> None:
-        """Sync stats on task edit:
-        - If URL/video identity changed: clear old video stats.
-        - If metadata (title/channel) changed: update the existing stat record.
+        """Refresh metadata for the same identity, preserving lifetime history.
+
+        Replacing a queue entry with another video must not erase either
+        video's record or transfer counters between the two identities.
         """
         old_key = resolve_video_key(old_task)
         new_key = resolve_video_key(new_task)
-        if old_key != new_key:
-            self.remove_for_task(old_task)
-        else:
+        if old_key == new_key:
             self.update_task_metadata(new_task)

@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
-from ...models.watch_stats import format_totals_line, format_watch_line, format_watch_multiplier, totals_for
+from ...models.watch_stats import format_totals_line, format_watch_line, format_watch_multiplier, resolve_video_key
 from ...utils.helpers import clean_youtube_url
 
 
@@ -134,12 +134,10 @@ class QueueView(ctk.CTkFrame):
     def _group_totals_line(self, group: VideoGroup) -> str:
         """``27 full runs · 12h 04m watched`` for one channel section."""
         store = self._stats()
-        if store is None or not group.videos:
+        if store is None:
             return ""
-        records = [store.find_for_task(task) for _, task in group.videos]
-        active_records = [r for r in records if r is not None]
-        totals = totals_for(active_records)
-        return format_totals_line(totals) if totals.runs else ""
+        totals = store.channel_totals(group.channel.name)
+        return format_totals_line(totals) if totals.runs or totals.watch_seconds else ""
 
     @staticmethod
     def _restore_video_modal_grab(modal):
@@ -398,11 +396,7 @@ class QueueView(ctk.CTkFrame):
             )
 
             if is_editing:
-                old_task = self.video_tasks[index]
-                store = self._stats()
-                if store is not None:
-                    store.handle_task_edited(old_task, updated_task)
-                self.video_tasks[index] = updated_task
+                self._apply_task_edit(index, updated_task)
             else:
                 self.video_tasks.append(updated_task)
 
@@ -418,12 +412,19 @@ class QueueView(ctk.CTkFrame):
 
         ctk.CTkButton(modal, text=btn_text, fg_color=btn_color, hover_color=btn_hover, command=on_submit).pack(pady=10)
 
+    def _apply_task_edit(self, index: int, updated_task: VideoTask) -> None:
+        old_task = self.video_tasks[index]
+        if resolve_video_key(old_task) != resolve_video_key(updated_task):
+            # Duration belongs to the old identity, just like its history.
+            updated_task.duration_seconds = 0
+            updated_task.duration_text = ""
+        store = self._stats()
+        if store is not None:
+            store.handle_task_edited(old_task, updated_task)
+        self.video_tasks[index] = updated_task
+
     def remove_task(self, index: int):
         if 0 <= index < len(self.video_tasks):
-            removed_task = self.video_tasks[index]
-            store = self._stats()
-            if store is not None:
-                store.remove_for_task(removed_task)
             del self.video_tasks[index]
             self.save_queue()
             self.refresh_list()
