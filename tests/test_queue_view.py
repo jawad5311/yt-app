@@ -122,3 +122,71 @@ def test_reorder_buttons_outside_card_frame():
         assert up_btn_kwargs.get("height") <= 14
         assert down_btn_kwargs.get("width") <= 18
         assert down_btn_kwargs.get("height") <= 14
+
+
+def test_queue_card_title_and_stats_lines_display():
+    view = QueueView.__new__(QueueView)
+    view.app_controller = MagicMock()
+    view.save_queue = MagicMock()
+    view.refresh_list = MagicMock()
+    view._stats = MagicMock(return_value=None)
+
+    # 1. Single title test
+    task_single = VideoTask(
+        title="Stop Wasting Money on Meta Ads! Try This Strategy",
+        url="https://youtube.com/watch?v=123",
+        duration_seconds=480,
+    )
+
+    with patch("customtkinter.CTkCheckBox"), \
+         patch("customtkinter.CTkLabel") as mock_label_cls, \
+         patch("customtkinter.CTkFrame"), \
+         patch("customtkinter.CTkButton"), \
+         patch("customtkinter.CTkProgressBar"), \
+         patch("customtkinter.CTkFont"), \
+         patch("customtkinter.CTkEntry"):
+
+        mock_parent = MagicMock()
+        view._build_task_card(mock_parent, index=0, position=1, task=task_single, channel_enabled=True)
+
+        # First label created is lbl (line 1 & line 2)
+        lbl_call = mock_label_cls.call_args_list[0]
+        text_arg = lbl_call[1].get("text")
+        lines = text_arg.split("\n")
+        assert len(lines) == 2
+        # Line 1: Single title, no separator
+        assert lines[0] == "#1. Stop Wasting Money on Meta Ads! Try This Strategy"
+        # Line 2: Stats only, no "Titles:" prefix
+        assert "Titles:" not in lines[1]
+        assert "Watchtime:" in lines[1]
+        assert "Length: 8 min" in lines[1]
+
+    # 2. Multiple titles test
+    task_multi = VideoTask(
+        title="Strategy A",
+        title_2="Strategy B",
+        title_3="Strategy C",
+        url="https://youtube.com/watch?v=456",
+        duration_seconds=300,
+    )
+
+    with patch("customtkinter.CTkCheckBox"), \
+         patch("customtkinter.CTkLabel") as mock_label_cls, \
+         patch("customtkinter.CTkFrame"), \
+         patch("customtkinter.CTkButton"), \
+         patch("customtkinter.CTkProgressBar"), \
+         patch("customtkinter.CTkFont"), \
+         patch("customtkinter.CTkEntry"):
+
+        mock_parent = MagicMock()
+        view._build_task_card(mock_parent, index=1, position=2, task=task_multi, channel_enabled=True)
+
+        lbl_call = mock_label_cls.call_args_list[0]
+        text_arg = lbl_call[1].get("text")
+        lines = text_arg.split("\n")
+        assert len(lines) == 2
+        # Line 1: All titles joined with " | "
+        assert lines[0] == "#2. Strategy A | Strategy B | Strategy C"
+        # Line 2: Stats only, no "Titles:" prefix
+        assert "Titles:" not in lines[1]
+        assert "Watchtime:" in lines[1]

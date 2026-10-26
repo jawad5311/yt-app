@@ -765,14 +765,10 @@ class QueueView(ctk.CTkFrame):
             video_duration=effective_duration,
         )
 
-        t_text = task.title or task.url
-        if len(t_text) > 55:
-            t_text = t_text[:52] + "..."
-
-        titles = [t for t in [task.title, task.title_2, task.title_3] if t]
-        title_summary = " | ".join(titles) if titles else "N/A"
-        if len(title_summary) > 42:
-            title_summary = title_summary[:39] + "..."
+        titles = [t.strip() for t in [task.title, task.title_2, task.title_3] if t and t.strip()]
+        title_text = " | ".join(titles) if titles else (task.url or "Untitled Video")
+        if len(title_text) > 85:
+            title_text = title_text[:82] + "..."
 
         status_prefix = ""
         if not channel_enabled and not task.enabled:
@@ -795,7 +791,9 @@ class QueueView(ctk.CTkFrame):
         limit_suffix = f" | Max Views: {task.max_runs}" if task.max_runs > 0 else ""
         mult_suffix = f" | Multiplier: {mult_str}" if mult_str else ""
         length_suffix = f" | Length: {max(1, int(round(effective_duration / 60.0)))} min" if effective_duration > 0 else ""
-        info_text = f"#{position}. {status_prefix}{t_text}\nTitles: {title_summary} | Watchtime: {task.watchtime_duration}{length_suffix}{target_suffix}{limit_suffix}{mult_suffix}"
+        watchtime_val = task.watchtime_duration or "Full"
+        stats_second_line = f"Watchtime: {watchtime_val}{length_suffix}{target_suffix}{limit_suffix}{mult_suffix}"
+        info_text = f"#{position}. {status_prefix}{title_text}\n{stats_second_line}"
         lbl = ctk.CTkLabel(
             card,
             text=info_text,
