@@ -158,6 +158,7 @@ class TestWatchingWorker:
             ad_seconds=15.0,
             duration=300.0,
             completed=True,
+            playback_finished=True,
         )
 
         records = worker.stats_store.records
@@ -165,6 +166,24 @@ class TestWatchingWorker:
         rec = next(iter(records.values()))
         assert rec.watch_seconds == 120.0
         assert rec.runs == 1
+
+    @pytest.mark.parametrize("completed,finished,interrupted,result", [
+        (True, False, False, "success"),
+        (False, False, False, "failed"),
+        (False, False, True, "interrupted"),
+    ])
+    def test_record_watch_keeps_partial_and_interrupted_outcomes(self, worker, completed, finished, interrupted, result):
+        worker.driver = MagicMock(current_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        worker._record_watch(
+            title="Partial", channel_name="Test Channel", watch_seconds=12.5,
+            duration=300, completed=completed,
+            playback_finished=finished, interrupted=interrupted,
+        )
+        record = worker.stats_store.get("dQw4w9WgXcQ")
+        assert record.runs == 0
+        assert record.watch_seconds == 12.5
+        assert record.last_result == result
+        assert record.failures == (1 if result == "failed" else 0)
 
     @patch("src.automation.watching_worker.setup_driver")
     @patch("src.automation.watching_worker.perform_google_login")
@@ -975,6 +994,7 @@ class TestDashboardButtonsAndState:
             ad_seconds=5.0,
             duration=120.0,
             completed=True,
+            playback_finished=True,
             task=task,
         )
 

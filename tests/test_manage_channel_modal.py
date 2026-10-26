@@ -3,6 +3,7 @@ import pytest
 from src.models.channel import Channel, is_video_task_runnable
 from src.models.video_task import VideoTask
 from src.automation.session_tracker import SessionChannelTracker
+from src.config.manager import ConfigManager
 from src.ui.views.manage_channel_modal import ManageChannelModal
 
 
@@ -134,10 +135,10 @@ def test_manage_channel_modal_validation():
     assert "cannot be negative" in modal.err_lbl.configure.call_args[1]["text"]
 
 
-def test_session_tracker_detects_target_achieved():
-    mock_config = MagicMock()
+def test_session_tracker_detects_target_achieved(tmp_path):
+    mock_config = ConfigManager(tmp_path / "settings.json")
     ch = Channel(name="TargetChan", watch_seconds=3500.0, target_watch_seconds=3600.0)
-    mock_config.get_channels.return_value = [ch.to_dict()]
+    mock_config.set_channels([ch.to_dict()])
 
     events = []
     tracker = SessionChannelTracker(

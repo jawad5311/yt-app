@@ -104,3 +104,16 @@ def test_video_duration_metadata_storage():
     assert restored.duration_text == "8:20"
     assert restored == task
 
+
+@pytest.mark.parametrize("target,length", [(1.0, 1000), (1.04, 1000), (2.5, 600)])
+def test_multiplier_target_uses_exact_watch_seconds(target, length):
+    task = VideoTask(target_multiplier=target, duration_seconds=length)
+    required = target * length
+    assert not task.is_target_reached(watch_seconds=required - 0.001)
+    assert task.is_target_reached(watch_seconds=required)
+    assert task.is_target_reached(watch_seconds=required + 0.001)
+
+
+def test_rounded_display_does_not_satisfy_one_times_target():
+    task = VideoTask(target_multiplier=1.0, duration_seconds=1000)
+    assert not task.is_target_reached(watch_seconds=951)

@@ -33,6 +33,7 @@ def outcome(**kwargs: Any) -> TaskOutcome:
         channel="Cooking",
         attempts=1,
         success=True,
+        playback_finished=True,
         watched_seconds=60.0,
     )
     base.update(kwargs)
@@ -99,12 +100,27 @@ def test_merge_counts_a_successful_run():
 def test_merge_counts_failures_but_not_interruptions():
     record = StatRecord()
     record.merge(outcome(success=False), "t1")
-    assert record.runs == 1 and record.failures == 1 and record.last_result == "failed"
+    assert record.runs == 0 and record.failures == 1 and record.last_result == "failed"
 
     record.merge(outcome(success=False, interrupted=True), "t2")
-    assert record.runs == 2
+    assert record.runs == 0
     assert record.failures == 1  # pressing Stop is not a failure
     assert record.last_result == "interrupted"
+
+
+@pytest.mark.parametrize("success,interrupted,finished", [
+    (True, False, False), (False, False, False),
+    (False, True, False), (False, False, True), (True, True, True),
+])
+def test_partial_failed_or_interrupted_attempts_never_add_full_runs(success, interrupted, finished):
+    record = StatRecord()
+    record.merge(TaskOutcome(
+        success=success, interrupted=interrupted, playback_finished=finished,
+        attempts=1, watched_seconds=12.5,
+    ), "2026-10-26T10:00:00")
+    assert record.runs == 0
+    assert record.watch_seconds == 12.5
+    assert record.attempts == 1
 
 
 def test_merge_snapshots_the_channel_of_the_latest_run():

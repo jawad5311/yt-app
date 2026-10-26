@@ -9,12 +9,12 @@ from src.models.channel import Channel
 from src.models.watch_stats import TaskOutcome
 
 
-def test_session_tracker_increments_by_minute_only_for_active_channel():
-    mock_config = MagicMock()
-    mock_config.get_channels.return_value = [
+def test_session_tracker_increments_by_minute_only_for_active_channel(tmp_path):
+    mock_config = ConfigManager(tmp_path / "settings.json")
+    mock_config.set_channels([
         {"name": "@ChannelA", "enabled": True, "watch_seconds": 0.0},
         {"name": "@ChannelB", "enabled": True, "watch_seconds": 0.0},
-    ]
+    ])
 
     ch_a = Channel(name="@ChannelA", watch_seconds=0.0)
     ch_b = Channel(name="@ChannelB", watch_seconds=0.0)
@@ -57,11 +57,11 @@ def test_session_tracker_increments_by_minute_only_for_active_channel():
     assert tracker.get_counter_minutes("@ChannelA") == 1
 
 
-def test_session_tracker_converts_to_hours_at_60_minutes():
-    mock_config = MagicMock()
-    mock_config.get_channels.return_value = [
+def test_session_tracker_checkpoints_before_and_after_60_minutes(tmp_path):
+    mock_config = ConfigManager(tmp_path / "settings.json")
+    mock_config.set_channels([
         {"name": "@ChannelA", "enabled": True, "watch_seconds": 0.0},
-    ]
+    ])
     ch_a = Channel(name="@ChannelA", watch_seconds=0.0)
 
     events = []
@@ -75,11 +75,11 @@ def test_session_tracker_converts_to_hours_at_60_minutes():
     # Add 59 minutes (3540 seconds)
     tracker.add_watch_delta("@ChannelA", 59 * 60.0)
     assert tracker.get_counter_minutes("@ChannelA") == 59
-    assert ch_a.watch_seconds == 0.0  # Not converted yet
+    assert ch_a.watch_seconds == 3540.0  # Already checkpointed.
 
     # Add 1 more minute (60 seconds) -> reaches 60 minutes!
     tracker.add_watch_delta("@ChannelA", 60.0)
-    # Immediately converted into 1.0 hour (3600 seconds)
+    # All 3600 seconds have been checkpointed exactly once.
     assert ch_a.watch_seconds == 3600.0
     # Minute counter rolled over to 0
     assert tracker.get_counter_minutes("@ChannelA") == 0
@@ -87,11 +87,11 @@ def test_session_tracker_converts_to_hours_at_60_minutes():
     assert any(ev[0] == "channel_watch_time_updated" for ev in events)
 
 
-def test_session_tracker_converts_remaining_minutes_on_stop():
-    mock_config = MagicMock()
-    mock_config.get_channels.return_value = [
+def test_session_tracker_stop_does_not_recount_checkpointed_minutes(tmp_path):
+    mock_config = ConfigManager(tmp_path / "settings.json")
+    mock_config.set_channels([
         {"name": "@ChannelA", "enabled": True, "watch_seconds": 3600.0},
-    ]
+    ])
     ch_a = Channel(name="@ChannelA", watch_seconds=3600.0)  # already has 1.0 hour
 
     events = []
@@ -105,19 +105,19 @@ def test_session_tracker_converts_remaining_minutes_on_stop():
     # Watch 25 minutes
     tracker.add_watch_delta("@ChannelA", 25 * 60.0)
     assert tracker.get_counter_minutes("@ChannelA") == 25
-    assert ch_a.watch_seconds == 3600.0  # Still at 1 hour
+    assert ch_a.watch_seconds == 5100.0  # Already persisted before Stop.
 
     # Script stopped!
     tracker.on_stop()
 
     # Counter reset
     assert tracker.get_counter_minutes("@ChannelA") == 0
-    # 25 minutes converted to 25 * 60 = 1500 seconds -> total 5100 seconds (1.4 hours)
+    # Stop keeps the already checkpointed total at 5100 seconds (1.4 hours).
     assert ch_a.watch_seconds == 3600.0 + 1500.0
     assert any(ev[0] == "channel_watch_time_updated" for ev in events)
 
 
-@pytest.mark.parametrize("watch_seconds", [120.0, 3600.0, 3720.0])
+@pytest.mark.parametrize("watch_seconds", [0.125, 59.5, 119.75, 120.0, 3600.0, 3720.125])
 def test_session_and_video_record_count_watch_time_once(tmp_path, watch_seconds):
     config = ConfigManager(tmp_path / "settings.json")
     channel = Channel(name="Cooking")
@@ -127,7 +127,7 @@ def test_session_and_video_record_count_watch_time_once(tmp_path, watch_seconds)
     tracker.set_active_channel(channel.name)
     tracker.add_watch_delta(channel.name, watch_seconds)
 
-    # Hourly session commits must not create a second StatsStore entry.
+    # Session checkpoints must not create a second StatsStore entry.
     assert store.all() == {}
     store.record(TaskOutcome(
         video_key="dQw4w9WgXcQ", channel=channel.name, attempts=1,
@@ -145,3 +145,83 @@ def test_session_and_video_record_count_watch_time_once(tmp_path, watch_seconds)
     reloaded = StatsStore(tmp_path / "stats.json")
     assert reloaded.channel_totals(channel.name).watch_seconds == watch_seconds
     assert reloaded.lifetime_totals().watch_seconds == watch_seconds
+
+
+def test_channel_checkpoint_survives_restart_without_stop(tmp_path):
+    path = tmp_path / "settings.json"
+    config = ConfigManager(path)
+    config.set_channels([Channel(name="Cooking").to_dict()])
+    tracker = SessionChannelTracker(config_mgr=config, channels=[Channel(name="Cooking")])
+    tracker.set_active_channel("Cooking")
+    tracker.add_watch_delta("Cooking", 119.75)
+
+    # Simulate an abrupt process exit: no on_stop call on the old tracker.
+    reloaded = ConfigManager(path)
+    channel = Channel.from_dict(reloaded.get_channels()[0])
+    assert channel.watch_seconds == 119.75
+    restarted = SessionChannelTracker(config_mgr=reloaded, channels=[channel])
+    restarted.set_active_channel("Cooking")
+    restarted.add_watch_delta("Cooking", 0.25)
+    restarted.on_stop()
+    restarted.on_stop()
+    assert ConfigManager(path).get_channels()[0]["watch_seconds"] == 120.0
+
+
+def test_checkpointed_time_is_not_added_to_session_time_again(tmp_path):
+    config = ConfigManager(tmp_path / "settings.json")
+    channel = Channel(name="Cooking", target_watch_seconds=120)
+    config.set_channels([channel.to_dict()])
+    tracker = SessionChannelTracker(config_mgr=config, channels=[channel])
+    tracker.set_active_channel(channel.name)
+    tracker.add_watch_delta(channel.name, 119.75)
+    assert tracker.get_current_total_watch_seconds(channel.name) == 119.75
+    assert not tracker.is_channel_target_achieved(channel.name)
+    tracker.add_watch_delta(channel.name, 0.25)
+    assert tracker.get_current_total_watch_seconds(channel.name) == 120
+    assert tracker.is_channel_target_achieved(channel.name)
+
+
+def test_failed_checkpoint_is_retried_without_recounting(tmp_path, monkeypatch):
+    config = ConfigManager(tmp_path / "settings.json")
+    channel = Channel(name="Cooking")
+    config.set_channels([channel.to_dict()])
+    tracker = SessionChannelTracker(config_mgr=config, channels=[channel])
+    tracker.set_active_channel(channel.name)
+    save = config._save_unlocked
+    monkeypatch.setattr(config, "_save_unlocked", MagicMock(side_effect=OSError("disk unavailable")))
+    tracker.add_watch_delta(channel.name, 1.25)
+    assert channel.watch_seconds == 1.25
+    assert config.get_channels()[0].get("watch_seconds", 0) == 0
+    assert tracker.get_current_total_watch_seconds(channel.name) == 1.25
+
+    monkeypatch.setattr(config, "_save_unlocked", save)
+    tracker.on_stop()
+    tracker.on_stop()
+    assert config.get_channels()[0]["watch_seconds"] == 1.25
+    assert channel.watch_seconds == 1.25
+
+
+def test_parallel_channel_checkpoints_accumulate_atomically(tmp_path):
+    import threading
+
+    config = ConfigManager(tmp_path / "settings.json")
+    config.set_channels([Channel(name="Cooking").to_dict()])
+    trackers = [SessionChannelTracker(config_mgr=config, channels=[Channel(name="Cooking")]) for _ in range(2)]
+    errors = []
+
+    def record(tracker):
+        try:
+            tracker.set_active_channel("Cooking")
+            for _ in range(10):
+                tracker.add_watch_delta("Cooking", 0.125)
+            tracker.on_stop()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=record, args=(tracker,)) for tracker in trackers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert config.get_channels()[0]["watch_seconds"] == 2.5

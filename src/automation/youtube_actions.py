@@ -12,6 +12,7 @@ from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .ads import PLAYER_STATE_JS, AdWatchState
 from .interactivity import HumanInteractivitySimulator
+from .playback_meter import PlaybackMeter
 
 # Abort the watch loop when no <video> element is present for this many seconds.
 VIDEO_MISSING_LIMIT_SECONDS = 60
@@ -577,6 +578,7 @@ def watch_video(
     watched_seconds = 0.0
     last_known_duration = 0.0
     last_known_current_time = 0.0
+    playback_meter = PlaybackMeter()
 
     # Ensure playback starts initially if paused or displaying center play button
     try:
@@ -590,11 +592,10 @@ def watch_video(
         interrupted: bool = False,
         playback_finished: bool = False,
     ) -> WatchResult:
-        final_watched = max(watched_seconds, last_known_current_time)
         return WatchResult(
             completed=completed,
             interrupted=interrupted,
-            watched_seconds=final_watched,
+            watched_seconds=watched_seconds,
             ad_seconds=ad_state.total_ad_seconds,
             reason=reason,
             video_duration=last_known_duration,
@@ -613,6 +614,7 @@ def watch_video(
 
         # User-requested pause
         if pause_event is not None and pause_event.is_set():
+            playback_meter.reset()
             emit(log_queue, "Playback paused by user.")
             pause_start = time.time()
             try:
@@ -645,6 +647,8 @@ def watch_video(
             video_state = driver.execute_script(PLAYER_STATE_JS)
         except Exception:
             video_state = {"found": False}
+
+        measured_seconds = playback_meter.sample(video_state, time.monotonic())
 
         if not video_state.get("found"):
             if video_missing_since is None:
@@ -689,11 +693,11 @@ def watch_video(
         ad_state.tick(is_ad, delta)
 
         paused = bool(video_state.get("paused", False))
-        if not is_ad and not paused:
-            watched_seconds += delta
+        if measured_seconds > 0:
+            watched_seconds += measured_seconds
             if on_watch_tick is not None:
                 try:
-                    on_watch_tick(delta)
+                    on_watch_tick(measured_seconds)
                 except Exception:
                     pass
 
@@ -741,7 +745,7 @@ def watch_video(
                     f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.",
                     logging.WARNING,
                 )
-                return _result(True, "full_timeout")
+                return _result(False, "full_timeout")
 
             time.sleep(3)
             continue
@@ -784,8 +788,10 @@ def watch_video(
         else:
             threshold_time = min(video_duration - 1.0, max(video_duration * 0.95, raw_cutoff))
 
-        if video_duration > 0 and (ended or curr_time >= threshold_time):
+        if ended:
             return _result(True, "ended", playback_finished=True)
+        if video_duration > 0 and curr_time >= threshold_time:
+            return _result(True, "completion_cutoff")
 
         # Check watch progress: if video progress is still zero, loop and tap play button
         if not is_ad and not ended and curr_time <= 0.1:
@@ -824,14 +830,14 @@ def watch_video(
                     f"Full video safety timeout reached ({int(effective_timeout)}s). Stopping watch.",
                     logging.WARNING,
                 )
-                return _result(True, "full_timeout")
+                return _result(False, "full_timeout")
 
         # Fixed-duration budget
         if not is_full_mode and duration_seconds is not None:
             # Measure actual video playback seconds so pause duration does not prematurely end playback
             if watched_seconds >= duration_seconds:
                 emit(log_queue, f"Reached watch duration limit ({duration_seconds}s). Finding next video directly without pausing.")
-                return _result(True, "duration_reached", playback_finished=True)
+                return _result(True, "duration_reached")
 
         # Natural human interactivity simulation
         interactive_event = simulator.on_playback_tick(

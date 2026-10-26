@@ -240,3 +240,20 @@ class ConfigManager:
         with self._lock:
             self.data["channels"] = self._sanitize_channels(channel_list)
             self._save_unlocked()
+
+    def increment_channel_watch_seconds(self, channel_name: str, seconds: float) -> Optional[float]:
+        """Checkpoint a playback delta under one lock; never recreate a deleted channel."""
+        key = (channel_name or "").strip().lower().lstrip("@")
+        with self._lock:
+            for channel in self.data.get("channels", []):
+                if (channel.get("name") or "").strip().lower().lstrip("@") == key:
+                    previous = float(channel.get("watch_seconds", 0.0) or 0.0)
+                    total = round(previous + seconds, 3)
+                    channel["watch_seconds"] = total
+                    try:
+                        self._save_unlocked()
+                    except Exception:
+                        channel["watch_seconds"] = previous
+                        raise
+                    return total
+        return None

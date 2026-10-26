@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.automation.youtube_actions import (
     calculate_end_buffer,
     disable_player_autoplay,
@@ -47,7 +49,7 @@ def test_disable_player_autoplay():
     assert disable_player_autoplay(driver) is False
 
 
-def test_watch_video_stops_early_before_autoplay():
+def test_watch_video_cutoff_is_not_a_full_run():
     """Verify that watch_video exits when reaching duration - buffer without waiting for 0s left."""
     driver = MagicMock()
     driver.current_url = "https://www.youtube.com/watch?v=testvid1234"
@@ -68,11 +70,13 @@ def test_watch_video_stops_early_before_autoplay():
         driver,
         duration_seconds=None,
         end_buffer_seconds=10.0,
+        completion_ratio=0.9,
+        enable_interactivity=False,
     )
 
     assert result.completed is True
-    assert result.playback_finished is True
-    assert result.reason == "ended"
+    assert result.playback_finished is False
+    assert result.reason == "completion_cutoff"
 
 
 def test_watch_video_detects_autoplay_transition():
@@ -247,8 +251,8 @@ def test_watch_video_random_cutoff_between_95_and_100_percent():
     )
 
     assert result.completed is True
-    assert result.playback_finished is True
-    assert result.reason == "ended"
+    assert result.playback_finished is False
+    assert result.reason == "completion_cutoff"
 
     # Check logs for 95% milestone notification and final random cutoff
     logs = []
@@ -258,3 +262,98 @@ def test_watch_video_random_cutoff_between_95_and_100_percent():
 
     assert "Video viewed for 95%" in log_text
     assert "Closing randomly between 95%–100%" in log_text
+
+
+def run_scripted_watch(monkeypatch, states, **kwargs):
+    """Exercise the real watch loop with a deterministic clock and player."""
+    import threading
+    from types import SimpleNamespace
+
+    from src.automation import youtube_actions as module
+
+    clock = [100.0]
+    stop = threading.Event()
+    samples = iter(states)
+    driver = MagicMock()
+    driver.current_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+    def execute(script, *args):
+        if script == module.PLAYER_STATE_JS:
+            try:
+                return next(samples)
+            except StopIteration:
+                stop.set()
+                return {"found": False}
+        return None
+
+    driver.execute_script.side_effect = execute
+    monkeypatch.setattr(module, "ensure_video_playing", lambda *a, **k: True)
+    monkeypatch.setattr(module, "disable_player_autoplay", lambda *a, **k: True)
+    monkeypatch.setattr(module, "find_skip_button", lambda *a, **k: None)
+    monkeypatch.setattr(module, "time", SimpleNamespace(
+        time=lambda: clock[0], monotonic=lambda: clock[0],
+        sleep=lambda duration: clock.__setitem__(0, clock[0] + duration),
+    ))
+    ticks = []
+    result = module.watch_video(
+        driver, stop_event=stop, enable_interactivity=False,
+        on_watch_tick=ticks.append, **kwargs,
+    )
+    return result, ticks
+
+
+def playback_state(position, **kwargs):
+    values = dict(found=True, currentTime=position, duration=1000.0, paused=False, isAd=False)
+    values.update(kwargs)
+    return values
+
+
+def test_watch_meter_excludes_resumed_position_seek_and_stall(monkeypatch):
+    result, ticks = run_scripted_watch(monkeypatch, [
+        playback_state(600), playback_state(600), playback_state(603),
+        playback_state(900, seekCount=1), playback_state(903, seekCount=1),
+    ], duration_seconds=6)
+    assert result.watched_seconds == 6
+    assert sum(ticks) == 6
+    assert result.completed
+    assert result.reason == "duration_reached"
+    assert not result.playback_finished
+
+
+def test_watch_meter_does_not_mix_ad_and_main_timelines(monkeypatch):
+    result, ticks = run_scripted_watch(monkeypatch, [
+        playback_state(0), playback_state(3),
+        playback_state(100, isAd=True), playback_state(9), playback_state(12),
+    ], duration_seconds=6, skip_ads=False, max_ad_seconds=0)
+    assert result.watched_seconds == 6
+    assert sum(ticks) == 6
+    assert result.ad_seconds == 3
+
+
+def test_actual_player_end_is_a_full_run(monkeypatch):
+    result, _ = run_scripted_watch(monkeypatch, [
+        playback_state(0, duration=6), playback_state(3, duration=6),
+        playback_state(6, duration=6, ended=True, paused=True),
+    ], duration_seconds=None)
+    assert result.reason == "ended"
+    assert result.playback_finished
+    assert result.watched_seconds == 6
+
+
+@pytest.mark.parametrize("is_ad", [False, True])
+def test_timeout_is_failure_not_full_completion(monkeypatch, is_ad):
+    result, _ = run_scripted_watch(monkeypatch, [
+        playback_state(0, duration=10, isAd=is_ad) for _ in range(46)
+    ], duration_seconds=None, full_timeout_seconds=1, skip_ads=False, max_ad_seconds=0)
+    assert not result.completed
+    assert not result.playback_finished
+    assert result.reason == "full_timeout"
+
+
+def test_cutoff_is_successful_partial_watch(monkeypatch):
+    result, _ = run_scripted_watch(monkeypatch, [playback_state(960)],
+        duration_seconds=None, completion_ratio=0.95)
+    assert result.completed
+    assert result.reason == "completion_cutoff"
+    assert not result.playback_finished
+    assert result.watched_seconds == 0

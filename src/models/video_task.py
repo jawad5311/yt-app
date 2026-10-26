@@ -175,8 +175,7 @@ class VideoTask:
         # 2. Check target multiplier
         eff_dur = float(video_duration if video_duration > 0 else self.duration_seconds)
         if self.target_multiplier > 0.0 and eff_dur > 0.0:
-            current_mult = round(watch_seconds / eff_dur, 1)
-            if current_mult >= self.target_multiplier:
+            if watch_seconds >= self.target_multiplier * eff_dur:
                 return True
         return False
 

@@ -30,6 +30,11 @@ if (!v) { for (var j = 0; j < vids.length; j++) { if (vids[j].readyState > 0) { 
 if (!v && vids.length) { v = vids[0]; }
 if (!v) return { found: false };
 
+if (v.__ytToolSeekCount === undefined) {
+    v.__ytToolSeekCount = 0;
+    v.addEventListener('seeking', function() { v.__ytToolSeekCount += 1; });
+}
+
 var player = document.querySelector('.html5-video-player');
 var showingAd = !!(player && (player.classList.contains('ytp-showing-ad')
                               || player.classList.contains('ad-showing')));
@@ -45,6 +50,10 @@ return {
     ended: v.ended,
     currentTime: v.currentTime || 0,
     duration: v.duration || 0,
+    readyState: v.readyState,
+    seeking: v.seeking,
+    seekCount: v.__ytToolSeekCount,
+    playbackRate: v.playbackRate,
     isAd: showingAd || podActive || adContainer || srcIsAd
 };
 """

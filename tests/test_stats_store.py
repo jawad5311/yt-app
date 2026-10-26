@@ -25,6 +25,7 @@ def outcome(**kwargs: Any) -> TaskOutcome:
         channel="Cooking",
         attempts=1,
         success=True,
+        playback_finished=True,
         watched_seconds=60.0,
     )
     base.update(kwargs)
@@ -65,12 +66,12 @@ def test_repeated_records_accumulate(tmp_path):
     assert record.ad_seconds == 15.0
 
 
-def test_interrupted_run_counts_as_a_run_but_not_a_failure(tmp_path):
+def test_interrupted_attempt_counts_as_neither_a_full_run_nor_a_failure(tmp_path):
     store = make_store(tmp_path)
     store.record(outcome(success=False, interrupted=True))
 
     record = store.get(VIDEO_ID)
-    assert record.runs == 1
+    assert record.runs == 0
     assert record.failures == 0
     assert record.last_result == "interrupted"
 

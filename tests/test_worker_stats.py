@@ -52,7 +52,7 @@ def test_successful_task_records_the_resolved_video(tmp_path, monkeypatch):
 
     record = store.find_for_task(task)
     assert record is not None
-    assert record.runs == 1
+    assert record.runs == 0  # The duration budget finished, not the whole video.
     assert record.successes == 1
     assert store.get("task:timer") is None
 
@@ -105,7 +105,7 @@ def test_failed_task_records_a_single_failure(tmp_path, monkeypatch):
     assert outcome.watched_seconds == 24.0  # all 3 attempts contributed
 
     record = store.find_for_task(task)
-    assert record.runs == 1
+    assert record.runs == 0
     assert record.failures == 1
     assert record.last_result == "failed"
 
@@ -129,7 +129,7 @@ def test_stop_during_watch_records_an_interrupted_run(tmp_path, monkeypatch):
     assert outcome.watched_seconds == 9.0
 
     record = store.find_for_task(task)
-    assert record.runs == 1
+    assert record.runs == 0
     assert record.failures == 0  # pressing Stop is not a failure
     assert record.last_result == "interrupted"
 

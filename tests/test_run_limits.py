@@ -95,6 +95,7 @@ def test_is_video_task_runnable_respects_run_limit(tmp_path):
                 task_key=v_key,
                 watched_seconds=30,
                 success=True,
+                playback_finished=True,
                 attempts=1,
             )
         )
@@ -107,6 +108,7 @@ def test_is_video_task_runnable_respects_run_limit(tmp_path):
             task_key=v_key,
             watched_seconds=30,
             success=True,
+            playback_finished=True,
             attempts=1,
         )
     )
@@ -131,7 +133,7 @@ def test_task_dispatcher_filters_out_tasks_at_run_limit(tmp_path):
 
     # Pre-record 2 runs for task1 (limit reached)
     for _ in range(2):
-        store.record(TaskOutcome(video_key=k1, task_key=k1, attempts=1, success=True))
+        store.record(TaskOutcome(video_key=k1, task_key=k1, attempts=1, success=True, playback_finished=True))
 
     dispatcher = TaskDispatcher(tasks=[t1, t2], randomize=False, stats_store=store)
     dispatcher.register_worker(0)

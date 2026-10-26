@@ -1005,6 +1005,8 @@ class WatchingWorker:
         duration: float = 0.0,
         completed: bool = False,
         task: Optional[VideoTask] = None,
+        playback_finished: bool = False,
+        interrupted: bool = False,
     ) -> None:
         if not self.stats_store:
             return
@@ -1026,10 +1028,11 @@ class WatchingWorker:
                 channel=rec_channel,
                 attempts=1,
                 success=completed,
+                interrupted=interrupted,
                 watched_seconds=watch_seconds,
                 ad_seconds=ad_seconds,
                 video_duration=duration,
-                playback_finished=completed,
+                playback_finished=playback_finished,
             )
             self.stats_store.record(outcome)
         except Exception as exc:
@@ -1542,6 +1545,8 @@ class WatchingWorker:
             ad_seconds=actual_ad,
             duration=actual_dur,
             completed=watch_res.completed,
+            playback_finished=watch_res.playback_finished,
+            interrupted=watch_res.interrupted,
             task=registered_task,
         )
         self._update_task_duration(registered_task, actual_dur)

@@ -28,6 +28,9 @@ class WatchResult:
 
     ``__bool__`` maps to ``completed`` so legacy ``if watch_video(...)`` call
     sites keep behaving exactly like the old ``bool`` return value.
+
+    ``completed`` means the task's budget or cutoff was met. Only an actual
+    player end sets ``playback_finished``; partial tasks are not full runs.
     """
 
     completed: bool = False
@@ -130,7 +133,7 @@ def is_within_cooldown(
 
 @dataclass
 class StatRecord:
-    """Aggregated lifetime counters for one video."""
+    """Lifetime counters; runs count successful player-end events, not attempts."""
 
     label: str = ""
     channel: str = ""
@@ -226,9 +229,7 @@ class StatRecord:
         if outcome.video_duration > 0:
             self.video_duration = outcome.video_duration
 
-        if outcome.playback_finished:
-            self.runs += 1
-        elif self.video_duration == 0:
+        if outcome.playback_finished and outcome.success and not outcome.interrupted:
             self.runs += 1
 
         if outcome.success:

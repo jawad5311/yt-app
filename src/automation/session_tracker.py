@@ -4,8 +4,8 @@ Tracks per-channel video watch time for each session run:
 - Maintains a separate counter for each channel.
 - Only increments the counter for the channel whose video is currently playing.
 - Increments by each minute of video watch time.
-- As soon as the counter reaches 60 minutes, converts to hours and updates channel watch time in the app.
-- When the script is stopped, converts all accumulated minutes in the counter to hours and updates the channel total watch time in the app.
+- Checkpoints each measured playback delta, including fractional seconds.
+- Session minute counters are display-only and are never added to totals again.
 """
 
 import logging
@@ -14,12 +14,11 @@ import threading
 from typing import Any, Callable, Dict, List, Optional
 
 from ..models.channel import Channel
-from ..models.watch_stats import format_hours
 from ..utils.logger import emit
 
 
 class SessionChannelTracker:
-    """Manages per-channel minute counters and hourly conversion for an automation session."""
+    """Checkpoint channel time while retaining session minute counters for display."""
 
     def __init__(
         self,
@@ -44,6 +43,7 @@ class SessionChannelTracker:
         # Channel whose video is currently playing
         self.active_channel_name: Optional[str] = None
         self._active_watch_delta: float = 0.0
+        self._pending_seconds: Dict[str, float] = {}
         self._lock = threading.RLock()
 
         # Cache known channel names
@@ -86,6 +86,8 @@ class SessionChannelTracker:
             mins = int(sec // 60.0)
             self.second_accumulators[key] = sec % 60.0
 
+            self._commit_seconds(channel_name, delta_seconds, notify=mins > 0)
+
             if mins > 0:
                 current_mins = self.minute_counters.get(key, 0) + mins
                 self.minute_counters[key] = current_mins
@@ -96,19 +98,13 @@ class SessionChannelTracker:
                         f"Session watch counter: Channel '{channel_name}' +{mins}m (session counter: {current_mins}m).",
                     )
 
-                # As soon as the counter reaches 60 min, convert to hours and update
+                # Keep the session display within the current hour. The time
+                # itself was already checkpointed, so do not commit it again.
                 if current_mins >= 60:
-                    hours_to_commit = current_mins // 60
                     self.minute_counters[key] = current_mins % 60
-                    self._commit_hours(channel_name, float(hours_to_commit))
 
             # Check if this channel has achieved its target watch time
             if self.is_channel_target_achieved(channel_name):
-                # When target is reached, commit uncommitted minutes immediately to settings
-                uncommitted = self.minute_counters.get(key, 0)
-                if uncommitted > 0:
-                    self._commit_seconds(channel_name, uncommitted * 60.0)
-                    self.minute_counters[key] = 0
                 if self.log_queue:
                     total_h = self.get_current_total_watch_seconds(channel_name) / 3600.0
                     emit(
@@ -117,23 +113,19 @@ class SessionChannelTracker:
                     )
 
     def get_current_total_watch_seconds(self, channel_name: str) -> float:
-        """Calculate total watch seconds for a channel (persisted watch_seconds + active session delta)."""
+        """Return checkpointed time plus any delta awaiting a successful write."""
         if not channel_name:
             return 0.0
         key = self._canon_name(channel_name)
-        base = 0.0
-        for ch in self.channels:
-            if self._canon_name(ch.name) == key:
-                base = getattr(ch, "watch_seconds", 0.0)
-                break
-        if base <= 0.0 and self.config_mgr:
-            for ch_dict in self.config_mgr.get_channels():
-                if self._canon_name(ch_dict.get("name", "")) == key:
-                    base = float(ch_dict.get("watch_seconds", 0.0) or 0.0)
-                    break
         with self._lock:
-            session_sec = self.minute_counters.get(key, 0) * 60.0 + self.second_accumulators.get(key, 0.0)
-        return base + session_sec
+            if self.config_mgr:
+                for ch_dict in self.config_mgr.get_channels():
+                    if self._canon_name(ch_dict.get("name", "")) == key:
+                        return float(ch_dict.get("watch_seconds", 0.0) or 0.0) + self._pending_seconds.get(key, 0.0)
+            for ch in self.channels:
+                if self._canon_name(ch.name) == key:
+                    return getattr(ch, "watch_seconds", 0.0)
+        return 0.0
 
     def is_channel_target_achieved(self, channel_name: str) -> bool:
         """Check if channel has reached its configured target watch time (target_watch_seconds)."""
@@ -155,18 +147,11 @@ class SessionChannelTracker:
         return self.get_current_total_watch_seconds(channel_name) >= target_sec
 
     def on_stop(self) -> None:
-        """Called when script is stopped: converts all remaining minutes to hours and updates channel total watch time."""
+        """Retry pending checkpoints without adding already saved session time."""
         with self._lock:
-            for key, mins in list(self.minute_counters.items()):
-                if mins > 0:
-                    hours = mins / 60.0
-                    channel_name = self.original_names.get(key, key)
-                    self._commit_seconds(channel_name, mins * 60.0)
-                    if self.log_queue:
-                        emit(
-                            self.log_queue,
-                            f"Script stopped: converted {mins}m in session counter for Channel '{channel_name}' to {hours:.1f} hours and updated total watch time.",
-                        )
+            keys = set(self.minute_counters) | set(self.second_accumulators) | set(self._pending_seconds)
+            for key in keys:
+                self._commit_seconds(self.original_names.get(key, key), 0.0, notify=True)
                 self.minute_counters[key] = 0
                 self.second_accumulators[key] = 0.0
             self.active_channel_name = None
@@ -176,19 +161,8 @@ class SessionChannelTracker:
         with self._lock:
             return self.minute_counters.get(self._canon_name(channel_name), 0)
 
-    def _commit_hours(self, channel_name: str, hours: float) -> None:
-        if hours <= 0:
-            return
-        seconds = hours * 3600.0
-        self._commit_seconds(channel_name, seconds)
-        if self.log_queue:
-            emit(
-                self.log_queue,
-                f"Channel '{channel_name}' reached 60m session watch time! Converted to {hours:.1f} hour(s) and updated total watch time in app.",
-            )
-
-    def _commit_seconds(self, channel_name: str, seconds: float) -> None:
-        if seconds <= 0:
+    def _commit_seconds(self, channel_name: str, seconds: float, notify: bool = False) -> None:
+        if seconds < 0:
             return
         key = self._canon_name(channel_name)
 
@@ -197,19 +171,19 @@ class SessionChannelTracker:
             if self._canon_name(ch.name) == key:
                 ch.watch_seconds = getattr(ch, "watch_seconds", 0.0) + seconds
 
-        # 2. Update settings.json via config_mgr
+        # 2. Checkpoint settings atomically. Keep failed writes pending so
+        # another tick or Stop can retry without double-counting local time.
         if self.config_mgr:
+            pending = self._pending_seconds.get(key, 0.0) + seconds
+            self._pending_seconds[key] = pending
             try:
-                ch_list = self.config_mgr.get_channels()
-                updated = False
-                for ch_dict in ch_list:
-                    if self._canon_name(ch_dict.get("name", "")) == key:
-                        curr = float(ch_dict.get("watch_seconds", 0.0) or 0.0)
-                        ch_dict["watch_seconds"] = round(curr + seconds, 3)
-                        updated = True
-                        break
-                if updated:
-                    self.config_mgr.set_channels(ch_list)
+                if pending > 0:
+                    total = self.config_mgr.increment_channel_watch_seconds(channel_name, pending)
+                    if total is not None:
+                        for ch in self.channels:
+                            if self._canon_name(ch.name) == key:
+                                ch.watch_seconds = total
+                self._pending_seconds.pop(key, None)
             except Exception as e:
                 logging.debug(f"Failed updating channel in config_mgr: {e}")
 
@@ -217,7 +191,7 @@ class SessionChannelTracker:
         # these same seconds there as a channel record would count them twice.
 
         # 3. Notify app UI to refresh watch stats
-        if self.emit_event:
+        if notify and self.emit_event:
             try:
                 self.emit_event(("channel_watch_time_updated", channel_name, seconds))
             except Exception as e:
