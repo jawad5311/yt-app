@@ -43,10 +43,10 @@ class TestChannelMatching:
 
     def test_fuzzy_match_user_typo(self):
         # User entered "MR Whose The Bose" in channels, YouTube has "Mrwhosetheboss"
+        # Issue 15: Similar names do not match through fuzzy similarity; assert rejection instead.
         channels = [Channel(name="MR Whose The Bose", url="")]
         match = match_channel("Mrwhosetheboss", "", channels)
-        assert match is not None
-        assert match.name == "MR Whose The Bose"
+        assert match is None
 
     def test_canonical_url_match(self):
         channels = [Channel(name="TechChannel", url="https://www.youtube.com/@mkbhd/videos")]

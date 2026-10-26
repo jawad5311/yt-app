@@ -25,7 +25,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
-from ..models.channel import Channel, canonical_channel_url
+from ..models.channel import Channel, canonical_channel_url, parse_channel_identity
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, WatchResult, resolve_video_key
 from ..utils.helpers import extract_video_id, human_like_delay
@@ -425,8 +425,13 @@ def is_clean_youtube_home_url(url: str) -> bool:
 
 
 def normalize_channel_text(text: str) -> str:
-    """Normalize text for channel matching (lowercase, alphanumeric only)."""
-    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+    """Normalize text for channel matching (lowercase, unicode alphanumeric characters).
+    Preserves unicode word characters so non-Latin names are never collapsed to empty strings.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    return re.sub(r"[^\w]", "", raw.lower())
 
 
 def match_channel(
@@ -437,56 +442,73 @@ def match_channel(
 ) -> Optional[Channel]:
     """Check if scanned video's channel matches any channel stored in the app.
 
-    Supports:
-    - Exact case-insensitive matching.
-    - Normalized alphanumeric matching.
-    - Substring / handle containment.
-    - Canonical URL & handle matching.
-    - Fuzzy similarity matching for minor misspellings/badges.
+    Enforces strict, unambiguous identity matching:
+    1. Rejects disabled and archived channels.
+    2. Verified explicit channel identity (channel ID, handle, custom, user) takes precedence.
+    3. Compares complete identities: no substring or fuzzy matching.
+    4. When comparable identities conflict, returns None even if display names match.
+    5. Different identity forms (handle vs channel ID) remain unmatched without verified equivalence.
+    6. If usable identity is unavailable, permits only conservative, unambiguous exact-name fallback.
+    7. Ambiguous display-name matches (>1 stored channel matching) return None.
     """
     clean_scanned_name = (scanned_name or "").strip()
     norm_scanned_name = normalize_channel_text(clean_scanned_name)
-    canon_scanned_url = canonical_channel_url(scanned_url)
+    scanned_type, scanned_val = parse_channel_identity(scanned_url)
 
-    for ch in channels:
-        if ch.archived or not ch.enabled:
-            continue
+    eligible = [
+        ch for ch in channels
+        if ch.enabled and not ch.archived and ((ch.name and ch.name.strip()) or (ch.url and ch.url.strip()))
+    ]
+    if not eligible:
+        return None
 
-        clean_ch_name = (ch.name or "").strip()
-        if not clean_ch_name and not ch.url:
-            continue
+    # Step 1: If scanned has a parsed identity, look for explicit identity match
+    if scanned_type and scanned_val:
+        identity_matches = []
+        for ch in eligible:
+            ch_type, ch_val = parse_channel_identity(ch.url)
+            if ch_type and ch_val:
+                if ch_type == scanned_type:
+                    # Comparable identities: exact complete match required
+                    if ch_type == "id":
+                        matched = (ch_val == scanned_val)
+                    else:
+                        matched = (ch_val.lower() == scanned_val.lower())
+                    if matched:
+                        identity_matches.append(ch)
+        if identity_matches:
+            return identity_matches[0]
 
-        # 1. Exact case-insensitive match
-        if clean_scanned_name and clean_ch_name:
-            if clean_scanned_name.lower() == clean_ch_name.lower():
-                return ch
+        # Scanned video has a specific identity, but none of the stored channels matched that identity.
+        # Requirement 5: Conflicting comparable identities CANNOT match by name.
+        # Requirement 6: Unverified different identity forms (e.g. handle vs ID) CANNOT match by name.
+        # Only stored channels with NO URL (usable identity unavailable) can qualify for name fallback:
+        if norm_scanned_name:
+            name_candidates = []
+            for ch in eligible:
+                ch_type, ch_val = parse_channel_identity(ch.url)
+                if not ch_type and not ch_val:
+                    norm_ch = normalize_channel_text(ch.name)
+                    if norm_ch and norm_ch == norm_scanned_name:
+                        name_candidates.append(ch)
+            if len(name_candidates) == 1:
+                return name_candidates[0]
+        return None
 
-        # 2. Canonical URL / handle match
-        if canon_scanned_url and ch.url:
-            canon_ch_url = canonical_channel_url(ch.url)
-            if canon_ch_url and (
-                canon_ch_url == canon_scanned_url
-                or canon_ch_url in canon_scanned_url
-                or canon_scanned_url in canon_ch_url
-            ):
-                return ch
+    # Step 2: Scanned video has NO usable identity (scanned_url has no parsed identity).
+    # Conservative, unambiguous exact display-name fallback.
+    if not norm_scanned_name:
+        return None
 
-        # 3. Normalized alphanumeric match
-        norm_ch_name = normalize_channel_text(clean_ch_name)
-        if norm_scanned_name and norm_ch_name:
-            if norm_scanned_name == norm_ch_name:
-                return ch
-            # If one is entirely contained in the other and has meaningful length (>= 4 chars)
-            if len(norm_ch_name) >= 4 and norm_ch_name in norm_scanned_name:
-                return ch
-            if len(norm_scanned_name) >= 4 and norm_scanned_name in norm_ch_name:
-                return ch
+    name_matches = []
+    for ch in eligible:
+        norm_ch = normalize_channel_text(ch.name)
+        if norm_ch and norm_ch == norm_scanned_name:
+            name_matches.append(ch)
 
-            # 4. Fuzzy similarity matching
-            if len(norm_scanned_name) >= 4 and len(norm_ch_name) >= 4:
-                ratio = difflib.SequenceMatcher(None, norm_scanned_name, norm_ch_name).ratio()
-                if ratio >= fuzzy_threshold:
-                    return ch
+    # Requirement 11: If more than one stored channel could match a name-only candidate, return no match.
+    if len(name_matches) == 1:
+        return name_matches[0]
 
     return None
 

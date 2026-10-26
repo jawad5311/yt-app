@@ -67,6 +67,68 @@ def canonical_channel_url(url: str) -> str:
     return clean.rstrip("/")
 
 
+def parse_channel_identity(url_or_handle: str) -> Tuple[Optional[str], Optional[str]]:
+    """Parse a channel URL or handle into an explicit identity form: (type, value).
+
+    Supported identity forms:
+    - ('handle', '@canonicalhandle'): YouTube handle, case-folded.
+    - ('id', 'UC...'): YouTube channel ID, preserving original identifier case.
+    - ('custom', 'canonicalname'): /c/customname, case-folded.
+    - ('user', 'canonicalname'): /user/username, case-folded.
+
+    Returns (None, None) if no usable identity is detected.
+    """
+    raw = (url_or_handle or "").strip()
+    if not raw:
+        return None, None
+
+    # Strip query parameters and fragments
+    raw = raw.split("?")[0].split("#")[0].strip()
+
+    # 1. Handle match (@handle)
+    handle_match = re.search(r"@([a-zA-Z0-9_\-\.]+)", raw)
+    if handle_match:
+        handle_val = handle_match.group(1).rstrip("/").split("/")[0]
+        if handle_val:
+            return "handle", f"@{handle_val.casefold()}"
+
+    # Strip scheme and hostname
+    path = raw
+    if "://" in path:
+        path = path.split("://", 1)[1]
+    if path.startswith("www."):
+        path = path[4:]
+    if path.startswith("m.youtube.com/"):
+        path = path[14:]
+    elif path.startswith("youtube.com/"):
+        path = path[12:]
+
+    path = "/" + path.lstrip("/")
+
+    # 2. Channel ID: /channel/UC... (preserve identifier case)
+    channel_id_match = re.search(r"^/channel/([a-zA-Z0-9_\-]+)", path)
+    if channel_id_match:
+        cid = channel_id_match.group(1).split("/")[0]
+        if cid:
+            return "id", cid
+
+    # 3. Custom: /c/name
+    custom_match = re.search(r"^/c/([a-zA-Z0-9_\-\.]+)", path)
+    if custom_match:
+        cname = custom_match.group(1).split("/")[0]
+        if cname:
+            return "custom", cname.casefold()
+
+    # 4. User: /user/name
+    user_match = re.search(r"^/user/([a-zA-Z0-9_\-\.]+)", path)
+    if user_match:
+        uname = user_match.group(1).split("/")[0]
+        if uname:
+            return "user", uname.casefold()
+
+    return None, None
+
+
 @dataclass
 class Channel:
     """A YouTube channel (name + URL) that queued videos can be attached to."""
