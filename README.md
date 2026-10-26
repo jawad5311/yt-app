@@ -11,18 +11,19 @@ A modular desktop tool for controlled YouTube playback testing through organic s
 - **Stealth Browser Engine**: Powered by `undetected-chromedriver` and `selenium`, with the installed Chrome major version auto-detected from the Windows registry and a separate Chrome profile preserved per account under `runtime/chrome_profiles/`.
 - **Multi-Account & Multi-Threaded Execution**: Supports loading multiple accounts (`email:password`) and running 1–10 parallel browser sessions.
 - **Persistent Account Profiles**: Each account uses its own profile directory under `runtime/chrome_profiles`, preserving cookies, sessions, and browser settings between runs.
-- **Playback-Only Automation**: Automated likes and comments are intentionally disabled.
-- **Ad Handling**: The *Skip Ads* switch (default **on**) installs uBlock Origin Lite (pinned MV3 build, SHA-256 verified) into every session so most ads never render, then clicks through anything that still plays after a randomized **30–35 s** (past the monetisation window). With the switch **off**, ads are watched up to a cumulative *Max Ad Watch* cap before an escape-skip fires.
-- **Configurable Watch Durations**: Presets from 30 Seconds up to 24 Hours, plus a *Full Video* mode (still under testing — see [FEATURES.md](FEATURES.md)).
-- **Reliability**: Every task gets one automatic retry, watches abort cleanly if no player is found, worker progress/status is streamed to the Dashboard, and failed sign-ins are surfaced in the UI instead of only in the logs.
-- **Watch Statistics**: Every completed task records how many times a video went through the automation and how much watch time was actually delivered (ad seconds excluded). Totals show on each queue card, on channel headers and rows, and as a lifetime **Total Watch Time** card on the Dashboard — channel totals follow renames and are never erased when a video is deleted.
-- **Quality**: 140+ unit tests (`pytest`), lint (`ruff`), type checks (`mypy`), and a GitHub Actions CI pipeline.
+- **Natural Human Interactivity**: Simulates human viewer actions (occasional video/comment likes, scrolling to comments/description, micro-pauses, bandwidth-saving quality adjustments). AI-generated commenting has been removed.
+- **Ad Handling**: The *Auto-Skip Ads* toggle (default **on**) uses script-based native detection to click YouTube's *Skip Ad* button when available (after 5–10s). Extension-based ad blockers have been removed. With the switch **off**, ads are watched up to a cumulative *Max Ad Watch* cap (default 32s, `0` = unlimited) before an escape-skip fires.
+- **Configurable Watch Durations**: Presets from 30 Seconds up to 24 Hours, plus a *Full Video* mode with early stop buffer (default 10s) and safety timeout (default 5 min).
+- **Reliability & Concurrency**: Dedicated profile naming (`profile_<safe_email>_<hash>`) protected by cross-thread and cross-process exclusive file locks. Stale lock cleanup validates running processes without terminating independent browser instances. Positive sign-in and account verification are enforced.
+- **Independent Run Controls**: Queue repetitions (**Automation Passes**, default 1) and continuous browsing limits (**Browsing Target Limit**, default 1 attempt; or explicit **Unlimited browsing**) are configured, validated, and persisted independently.
+- **Watch Statistics**: Authoritative watch statistics are calculated directly from video playback records (`stats.json`), excluding stalls, buffering, ad time, and previously resumed positions. Legacy channel summary entries are excluded to prevent double counting. Fractional seconds are retained and checkpointed without loss. (Note: Local statistics measure client-side playback elapsed time for testing and do not guarantee official YouTube analytics or monetization acceptance).
+- **Quality**: 580+ unit tests across 47 test modules (`pytest`), lint (`ruff`), type checks (`mypy`), and a GitHub Actions CI pipeline.
 - **Decoupled Architecture**: Clean separation of UI (`CustomTkinter`), automation engine, data models, and thread-safe configuration management.
 
 ## Project Architecture
 
 ```text
-G:\Projects\yt-tool\
+yt-tool/
 ├── settings.json               # App settings, video queue & channels (git-ignored — created on first run)
 ├── stats.json                  # Lifetime watch statistics per video (git-ignored — created on first recorded run)
 ├── credentials.json            # Local Google account credentials (git-ignored — never commit)
@@ -38,7 +39,6 @@ G:\Projects\yt-tool\
 ├── .github/workflows/ci.yml    # CI: ruff + mypy + pytest on Windows
 ├── logs/                       # Generated: automation.log (*.log git-ignored)
 ├── runtime/                    # Generated: per-account Chrome profiles, cached chromedriver (git-ignored)
-├── extensions/                 # Generated: uBlock Origin Lite, provisioned on first use (git-ignored)
 └── src/                        # Source Package
     ├── ai/                     # Retired AI commenting support (stub kept for history)
     ├── automation/             # Chrome driver setup, Google login, organic navigation & YouTube actions
@@ -175,7 +175,7 @@ Restart the app after editing the file. Use accounts you control, and do not com
 The first time an account runs, Google may require a normal sign-in or a manual CAPTCHA/2-Step Verification check. After that, the account’s cookies and session data are retained in its dedicated profile directory:
 
 ```text
-runtime/chrome_profiles/profile_<account-name>/
+runtime/chrome_profiles/profile_<safe_email>_<hash>/
 ```
 
 On later runs, the app reuses that profile and normally does not need to sign in again. Google can still expire a session or request verification, so a repeat login may occasionally be necessary.
@@ -220,13 +220,19 @@ Open the **Settings** screen:
 
 | Control | Default | Notes |
 | --- | --- | --- |
-| Enable Direct Link Fallback | on | When organic search finds no match, navigate straight to the task URL |
+| Enable Direct Link Fallback | off (`false`) | When organic search finds no match, navigate straight to the task URL |
 | Parallel Browsers Count | 1 | Accounts launched simultaneously; clamped to **1–10** |
-| Default Watch Duration | 5 Minutes | Duration pre-selected when adding a new queue task |
-| Full Video Timeout (minutes) | 360 | Safety net for *Full Video* mode; `0` = unlimited |
-| Skip Ads | on | uBlock Origin Lite is installed each session; surviving ads are clicked after 30–35 s |
-| Max Ad Watch (seconds) | 32 | Cumulative ad budget while *Skip Ads* is **off**; `0` = unlimited |
-| Appearance Mode | Dark | `Dark` / `Light` / `System`, applied immediately |
+| Default Watch Duration | Full Video | Duration pre-selected when adding a new queue task |
+| Full Video Timeout (minutes) | 5 | Safety timeout for *Full Video* mode; clamped 0–1440, `0` = unlimited / disabled guard |
+| Auto-Skip Ads | on (`true`) | Script-based native skip clicks *Skip Ad* after 5–10s; off = watch ads up to cap |
+| Max Ad Watch (seconds) | 32 | Cumulative ad watch budget while *Auto-Skip Ads* is **off**; clamped 0–3600, `0` = unlimited |
+| Full Video Stop Buffer (seconds) | 10 | Early stop buffer before video ends to avoid autoplay; `0` = randomized 7–12s |
+| Default Automation Loops | 1 | Repetitions for queue automation mode (1–1000) |
+| Default Browsing Target Limit | 1 | Target channel video attempts per browsing session (1–1000) |
+| Default Browsing Unlimited | off (`false`) | Explicit option for continuous browsing until stopped or targets achieved |
+| Video Rewatch Cooldown (hours) | 12 | Cooldown between rewatches; supports fractionals (e.g. 1.5h), `0` = no cooldown |
+| Simulate Natural Human Interactivity | on (`true`) | Master switch for human viewer simulation behaviors |
+| Appearance Mode | Dark | `Dark` / `Light` / `System`, applied and persisted atomically |
 
 Click **💾 Save Settings** to apply. Settings are persisted in `settings.json`.
 
@@ -243,14 +249,14 @@ Click **💾 Save Settings** to apply. Settings are persisted in `settings.json`
 In addition to static queue execution, you can launch continuous recommendation watching:
 
 1. Add at least one channel in the **📺 Channels** tab with a valid channel URL (`https://youtube.com/@handle` or `/channel/...`).
-2. On the **Dashboard**, click **▶ Start Browsing** (runs in parallel to or instead of queue automation).
-3. The worker signs in (or uses existing session cookies) and navigates to `https://www.youtube.com/`.
-4. It pauses **5 seconds** for complete page layout hydration, then progressively scrolls the feed to inspect and extract ~100 video cards one-by-one.
-5. Scanned channel URLs and handles are matched against your stored channels. When a match is found, the card is clicked organically.
-6. The video is watched with normal human interactivity, ad handling, and watch-time statistics.
-7. When playback approaches completion, **the browser window does not close** — it inspects the sidebar's **Recommended / Up Next** feed for any matching stored channel URLs.
-8. If a match is found, it clicks into that recommendation; if no match is found, it navigates back to the YouTube Homepage, waits 5s, re-scans ~100 videos, and repeats.
-9. Click **⏹ Stop Watching** at any time to halt the loop and close the browser session.
+2. Configure your desired **Browsing Target Limit** (default: 1 attempt; limit of 1 means at most 1 target video attempt) or check **Unlimited browsing**.
+3. On the **Dashboard**, click **▶ Start Browsing**.
+4. The worker verifies positive sign-in for the assigned account and opens `https://www.youtube.com/`.
+5. It inspects feed video cards matching your active target channels. When a match is found, the card is opened and played.
+6. Target video playback attempts are counted at scheduling time (failed or interrupted attempts consume the cap).
+7. If the configured target attempt cap is reached, browsing stops cleanly without starting an unnecessary buffer video.
+8. If more target attempts remain, the worker interleaves a 30–90s non-target buffer video, then checks watch-page recommendations and homepage feeds for the next target video.
+9. Click **⏹ Stop Browsing** at any time to halt the loop cleanly.
 
 ## Project Layout Notes
 

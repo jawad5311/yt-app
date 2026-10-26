@@ -48,7 +48,7 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 - **Auto-play on entry**: playback is only kicked off if the video is actually paused (JS first, real play button as fallback).
 - **Ad-aware**: ad playback never counts toward completion; ad time is excluded from the finish check.
 - **Random micro-scrolls** (~20% chance per cycle) for a more human session footprint.
-- **Playback-only**: likes and comments are intentionally never automated.
+- **Natural Human Interactivity**: Simulates human viewer actions (occasional video/comment likes, scrolling to comments/description, micro-pauses, bandwidth-saving quality adjustments). AI-generated commenting has been removed.
 
 ### Natural Human Interactivity Simulation
 
@@ -68,12 +68,9 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 ### Ad Handling
 
 - **Detection** (`src/automation/ads.py`): strict signals only — `ytp-showing-ad` class, a non-empty `.video-ads` container, `.ytp-ad-player-container`, or `adformat=` in the player source. The up-next countdown does **not** false-positive as an ad.
-- **`SkipAds` ON (default)** — two layers:
-  1. **Adblocker**: uBlock Origin Lite (pinned MV3 release, SHA-256 verified, provisioned into `extensions/`) is installed into the running session via the browser's DevTools socket (`Extensions.loadUnpacked`) — branded Chrome 137+ ignores `--load-extension`, and ChromeDriver cannot reach the browser-level `Extensions` domain, so the raw WebSocket path in `src/automation/adblock.py` is used. Verified end-to-end: tracker requests are redirected to the extension's no-op resources (CDP Network events show `chrome-extension://…/web_accessible_resources/…` responses).
-  2. **Click fallback**: any ad that still plays is clicked after a randomized **30–35 s** (`SKIP_AFTER_MIN`/`SKIP_AFTER_MAX`) so the monetisation window is respected, including the up-next/countdown hand-off to the next video.
-- **`SkipAds` OFF**: ads are watched normally; when cumulative ad time reaches `MaxAdWatchSeconds` (default 32, `0` = unlimited) an escape-skip fires as the safety net.
-- **Ad time never counts** toward fixed-duration budgets or completion (`watched_elapsed = elapsed - total_ad_seconds`).
-- **Graceful degradation**: if the blocker cannot be downloaded, verified, or loaded, the session runs blocker-free and relies on the click fallback alone.
+- **`Auto-Skip Ads` ON (default)**: Uses script-based native detection to click YouTube's *Skip Ad* button when available (after 5–10s). Extension-based ad blockers have been removed.
+- **`Auto-Skip Ads` OFF**: ads are watched normally; when cumulative ad time reaches `MaxAdWatchSeconds` (default 32, clamped 0–3600, `0` = unlimited) an escape-skip fires as the safety net.
+- **Ad time never counts** toward watch-time budgets or completion (`watched_elapsed = elapsed - total_ad_seconds`).
 
 ### Multi-Account Execution
 
@@ -87,7 +84,9 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 - **One automatic retry per task** — navigation failures and watch errors are retried once before the task is skipped (`MAX_ATTEMPTS_PER_TASK`).
 - **Per-task success/failure reporting** — each session ends with a summary line such as `Session completed for <account>: 3/4 tasks watched, 1 failed`.
 - **Watch abort guard** — if no `<video>` element is found for 60s the watch fails cleanly instead of hanging, and the task becomes retryable.
-- **Full Video safety timeout** — full-length watching is capped by `FullVideoTimeoutMinutes` (default 6h, `0` = unlimited) so a player that never reaches `ended` cannot pin a worker forever.
+- **Full Video early stop buffer & safety timeout** — full-length watching stops before the video ends via `FullVideoStopBufferSeconds` (default 10s, `0` = randomized 7–12s) to prevent autoplay transitions. Safety timeout is capped by `FullVideoTimeoutMinutes` (default 5 min, clamped 0–1440, `0` = unlimited).
+- **Dedicated profile locks & positive sign-in** — profile directories (`profile_<safe_email>_<hash>`) are locked using cross-thread and cross-process exclusive lockfiles (`.app_profile.lock`). Stale locks are verified against active process PIDs without killing unrelated Chrome processes. Positive sign-in and account identity verification are confirmed before tasks begin.
+- **Independent Queue & Browsing Limits** — queue repetitions (`AutomationLoops`, default 1) and continuous browsing limits (`BrowsingTargetLimit`, default 1 attempt; or `BrowsingUnlimited`) operate independently.
 - **Sign-in failure surfaced in the UI** — a failed login/CAPTCHA shows up on the Dashboard status line (red) rather than only in the log file.
 - **Thread-safe UI event queue** — workers stream `progress` / `status` / `finished` events; all Tk updates happen on the main thread.
 - **Atomic config writes** — settings and credentials are written to a temp file and swapped into place.
@@ -105,8 +104,9 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 
 - **Channels view** (sidebar → 📺 Channels): create / edit / delete named channels, each with a name and a channel URL.
 - **Automated Video Fetching** (`src/utils/channel_fetcher.py`):
-  - Fetches video metadata directly from any YouTube channel handle (`@handle`) or URL (`/channel/UC...`, `/c/...`) without third-party dependencies.
-  - Automatically parses `ytInitialData` to extract 11-char Video IDs, clean Titles, and video lengths (duration seconds and formatted text).
+  - Fetches video metadata directly from any YouTube channel handle (`@handle`) or URL (`/channel/UC...`, `/c/...`) using YouTube Data API v3 and ytInitialData fallback.
+  - Supports paginated channel uploads with page token deduplication, loop termination, and partial result preservation on errors.
+  - Extracts 11-char Video IDs, clean Titles, and video lengths (duration seconds and formatted text).
   - Auto-extracts channel name and vanity URL when available.
 - **Interactive Selection Preview Modal** (`src/ui/views/channel_import_modal.py`):
   - Displays fetched videos with individual selection checkboxes, duration badges (`⏱ 8:20`), and `NEW` vs `ALREADY IN QUEUE` status detection.
@@ -123,32 +123,40 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 
 ### Watch Statistics
 
-- **What is tracked** (`src/models/watch_stats.py` + `src/config/stats_store.py`): per-video `runs`, `successes`, `failures`, `attempts`, `watch_seconds`, `ad_seconds`, `last_run` and `last_result`; a channel's totals are the sum of its videos' records.
-- **Measured, not configured**: `watch_video()` now returns a `WatchResult` (`completed`, `interrupted`, `watched_seconds`, `ad_seconds`, `reason`) and only accumulates seconds while the main video is actually playing — ad time and paused gaps are excluded, so "watch all ads" mode can never inflate the number.
-- **One record per task**: `_run_task()` returns a `TaskOutcome` and its automatic retry folds into the same record (`attempts` counts the tries, watch time accumulates across them). A run stopped with **⏹** is recorded as `interrupted`: it counts as a run but never as a failure.
-- **Identity**: records are keyed by the resolved video ID (`driver.current_url` after navigation, falling back to the task URL) with the task-derived key kept as an alias — keyword-only tasks show their card, and an early failed run folds into the later resolved one instead of duplicating.
+- **What is tracked** (`src/models/watch_stats.py` + `src/config/stats_store.py`): per-video `runs`, `successes`, `failures`, `attempts`, `watch_seconds`, `ad_seconds`, `last_run` and `last_result`; video records are the authoritative source of totals (legacy channel summary records are excluded to prevent double counting).
+- **Measured, not configured**: `watch_video()` returns a `WatchResult` and accumulates seconds only while the main video is actually playing — stalls, buffering, ad time, and previously resumed playback are excluded. Fractional seconds are preserved and checkpointed without loss.
+- **One record per task**: `_run_task()` returns a `TaskOutcome` and its automatic retry folds into the same record (`attempts` counts tries, watch time accumulates). A run stopped with **⏹** is recorded as `interrupted` (a run, never a failure). Full runs require legitimate completion; timeouts and partial watches do not count as full runs.
+- **Target Comparisons & Cooldown**: Watch target comparisons do not round multipliers prematurely. Rewatch cooldowns (default 12 hours) are checked against the last completed watch time.
+- **Identity**: records are keyed by the resolved video ID (`driver.current_url` after navigation, falling back to the task URL) with the task-derived key kept as an alias.
 - **Channel attribution is a snapshot**: the channel name is stored on the record when the run happens. Renaming a channel cascades into the stats, deleting a channel moves its records to *Uncategorized*, and deleting a video never erases watch time already delivered.
 - **Where it shows**: queue card line `▶ 12 runs · 4h 32m watched · last ✅` (`⏸` = stopped, `❌` = failed); channel section header and Channels row `27 runs · 12h 04m watched`; Dashboard **Total Watch Time** card (lifetime).
 - **Storage**: `stats.json` next to `settings.json` — versioned schema (`version: 1`), atomic tmp+replace write, one small write per completed task, lock-guarded for parallel workers, corrupt files quarantined to `stats.json.bak`, git-ignored from the start. Reset with **🗑 Reset Stats** in the queue header.
+- **Disclaimer**: Local statistics measure client-side playback elapsed time for testing and debugging. They do not represent or guarantee officially accepted YouTube analytics, watch hours, or monetization eligibility. Browser automation is not undetectable.
 
 ### Settings
 
 | Setting | Control | Default | Notes |
 | --- | --- | --- | --- |
-| Direct Link Fallback | Switch | `true` | Toggle organic-search fallback to the direct URL |
-| Parallel Browsers Count | Entry | `1` | Clamped to 1–10 on save |
-| WatchtimeDuration | Dropdown | `5 Minutes` | Default duration pre-selected for **new** queue tasks |
-| FullVideoTimeoutMinutes | Entry | `360` | Full Video safety cap in minutes; clamped 0–1440, `0` disables it |
-| SkipAds | Switch | `true` | Adblocker + 30–35s click fallback; off = watch all ads |
-| MaxAdWatchSeconds | Entry | `32` | Cumulative ad budget while `SkipAds` is off; `0` = unlimited |
-| Appearance Mode | Dropdown | `Dark` | `Dark` / `Light` / `System`, applied immediately and persisted |
+| Enable Direct Link Fallback | Switch | `false` | When organic search finds no match, navigate straight to the task URL |
+| Parallel Browsers Count | Entry | `1` | Accounts launched simultaneously; clamped to 1–10 on save |
+| Default Watch Duration | Dropdown | `Full Video` | Default duration pre-selected for **new** queue tasks |
+| Full Video Timeout (minutes) | Entry | `5` | Safety timeout for *Full Video* mode; clamped 0–1440, `0` = unlimited / disabled guard |
+| Auto-Skip Ads | Switch | `true` | Script-based native skip clicks *Skip Ad* after 5–10s; off = watch ads up to cap |
+| Max Ad Watch (seconds) | Entry | `32` | Cumulative ad watch budget while *Auto-Skip Ads* is off; clamped 0–3600, `0` = unlimited |
+| Full Video Stop Buffer (seconds) | Entry | `10` | Early stop buffer before video ends to avoid autoplay; `0` = randomized 7–12s |
+| Default Automation Loops | Entry | `1` | Repetitions for queue automation mode (1–1000) |
+| Default Browsing Target Limit | Entry | `1` | Target channel video attempts per browsing session (1–1000) |
+| Default Browsing Unlimited | Switch | `false` | Explicit option for continuous browsing until stopped or targets achieved |
+| Video Rewatch Cooldown (hours) | Entry | `12` | Cooldown between rewatches; supports fractionals (e.g. 1.5h), `0` = no cooldown |
+| Simulate Natural Human Interactivity | Switch | `true` | Master switch for human viewer simulation behaviors |
+| Appearance Mode | Dropdown | `Dark` | `Dark` / `Light` / `System`, applied and persisted atomically |
 | Accounts File | Config only | `accounts.txt` | Fallback file auto-loaded when no accounts are saved |
 
 Retired keys (`AccessKey`, `AIProvider`, `OpenAIKey`, `GeminiKey`, `OpenRouterKey`, `CommentType`) and removed video fields (`like`, `comment_type`, `custom_comment`) are **purged from `settings.json` on load**.
 
 ### Quality & CI
 
-- **Test suite**: 146 pytest cases covering duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel serialization + queue grouping, watch-statistics models (identity keys, counter merging, formatting) and `StatsStore` (persistence, identity folding, channel cascades, multi-threaded increments), worker outcome mapping, ad-state parsing/policy, and ad-blocker provisioning (including the DevTools loader with a scripted WebSocket).
+- **Test suite**: 580+ unit tests across 47 test modules (`pytest`) covering duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel serialization + queue grouping, watch-statistics models (identity keys, counter merging, formatting) and `StatsStore` (persistence, identity folding, channel cascades, multi-threaded increments), worker outcome mapping, ad-state parsing/policy, and ad-blocker provisioning (including the DevTools loader with a scripted WebSocket).
 - **Lint**: `ruff` (`E`, `F`, `W`, `I` rules) configured in `pyproject.toml`.
 - **Type check**: `mypy` over `src/` and `tests/` with `check_untyped_defs`.
 - **CI**: `.github/workflows/ci.yml` runs ruff + mypy, and pytest on Python 3.11/3.12 (Windows).
@@ -162,8 +170,8 @@ Retired keys (`AccessKey`, `AIProvider`, `OpenAIKey`, `GeminiKey`, `OpenRouterKe
 
 ### Retired Behaviour
 
-- Automated **likes and comments removed** (`9f9bf50`); related config keys (`AIProvider`, `OpenAIKey`, `GeminiKey`, `OpenRouterKey`, `CommentType`) and per-video fields (`like`, `comment_type`, `custom_comment`) are stripped from disk on load.
-- `src/ai/` is retained only as a stub: *"AI commenting support was removed from the application."*
+- **AI commenting removed**: AI-generated commenting support was removed (`src/ai/` retained only as a historical stub). Related retired config keys (`AIProvider`, `OpenAIKey`, etc.) are purged from settings on load. Occasional organic likes are supported when human interactivity is enabled.
+- **Extension-based ad blocking removed**: Prior extension injection was replaced with robust script-based native Skip Ad detection and clicking.
 
 ---
 
@@ -179,7 +187,7 @@ Watches a queued video until playback actually finishes instead of for a fixed d
   - the non-ad video sets `ended`, or `currentTime >= duration - 1.5s`;
   - the Stop button sets the stop event;
   - no `<video>` element is found for 60s (watch fails → the task is retried once);
-  - the **Full Video safety timeout** trips (`FullVideoTimeoutMinutes`, default 360 min, `0` = unlimited).
+  - the **Full Video safety timeout** trips (`FullVideoTimeoutMinutes`, default 5 min, `0` = unlimited).
 - **Progress logging** every 30 seconds in both modes: `Watching full video progress: MM:SS / MM:SS (NN%)`, plus an explicit *"Ad is playing, waiting for main video…"* line while ads run.
 - **Completion log** with the total watched length, e.g. `Video playback finished! (Watched full length: 12:34)`.
 - **Ad handling**: ad playback never counts toward completion, and the Skip-Ad button is clicked when visible. (Skip-Ad / play-button fallback previously failed silently on a missing `By` import — fixed.)
@@ -208,7 +216,7 @@ Autonomous watching workflow triggered by the **▶ Start Browsing** button on t
 
 - **Trigger & Prerequisites**: Started from the Dashboard via **▶ Start Browsing** (adjacent to **Start Automation**). Requires at least one checked/enabled channel under the **📺 Channels** tab (dynamically refreshed each cycle).
 - **Workflow & Lifecycle**:
-  1. **Google Account Authentication**: Signs in using the account credentials and dedicated profile (`runtime/chrome_profiles/`), reusing active cookies and waiting up to 3 minutes for manual 2FA/CAPTCHA resolution.
+  1. **Google Account Authentication**: Signs in using the account credentials and dedicated profile (`runtime/chrome_profiles/profile_<safe_email>_<hash>/`), verifies positive sign-in against the expected identity, and waits up to 3 minutes for manual 2FA/CAPTCHA resolution.
   2. **Homepage Hydration**: Navigates to `https://www.youtube.com/`, dismisses any cookie consent dialogs, and waits **5 seconds** for the homepage layout and initial feeds to fully load.
   3. **Feed Inspection (~100 Videos)**: Progressively scrolls the homepage downward while executing `HOME_VIDEOS_JS` to inspect feed video cards (`ytd-rich-item-renderer`, `ytd-video-renderer`, etc.) one-by-one, extracting video URLs, titles, and channel identifiers/URLs until ~100 videos are gathered.
   4. **Channel URL & Identity Matching**: Compares the scanned channel URLs (`/@handle`, `/channel/UC...`, `/c/...`), vanity handles, and channel names against channels stored in the app's settings (`match_channel()`):
@@ -216,17 +224,17 @@ Autonomous watching workflow triggered by the **▶ Start Browsing** button on t
      - Canonical channel URL / handle equivalence
      - Normalized alphanumeric containment
      - Fuzzy sequence matching for minor badge or character variations
-  5. **Organic Click & Opening**: When a video matching a stored channel is found, smoothly scrolls the card into viewport and clicks either the title or thumbnail link element to navigate to the watch page.
-  6. **Natural Playback Simulation**: Watches the video with the full engagement suite:
-     - Ad blocking (uBlock Origin Lite) + monetization-compliant 30–35s click fallback
-     - Human interactivity: micro-pauses (2–5s), reading scrolls down to comments/description with realistic dwell times, variable playback speeds (1.25x), and bandwidth-saving quality adjustments (360p/720p)
+  5. **Target Limit Counting**: Target channel video attempts are counted at scheduling time. Configured by `BrowsingTargetLimit` (default: 1 attempt; limit of 1 means at most 1 target video attempt) or continuous `BrowsingUnlimited`. Partial, interrupted, or failed attempts consume the limit.
+  6. **Organic Click & Opening**: When a video matching a stored channel is found, smoothly scrolls the card into viewport and clicks either the title or thumbnail link element to navigate to the watch page.
+  7. **Natural Playback Simulation**: Watches the video with the full engagement suite:
+     - Auto-skip ads via script-based Skip Ad button detection (5–10s)
+     - Human interactivity: micro-pauses (2–5s), reading scrolls down to comments/description with realistic dwell times, variable playback speeds (1.25x), bandwidth-saving quality adjustments (360p/720p), and occasional video/comment likes
      - Configurable watch duration: follows the app's default duration or watches full video
      - Per-video watch statistics and lifetime watch-time updates (`stats.json`)
-  7. **In-Place Up-Next / Recommended Chaining (Window Stays Open)**: Unlike the standard queue runner where the browser closes when tasks complete, this mode **keeps the browser window open** on the watch page. Playback pauses/completes, and the worker immediately inspects the sidebar's **Recommended / Up Next** feed (`RECOMMENDED_VIDEOS_JS`) for another stored channel match.
-  8. **Continuous Fallback Loop**:
-     - If a matching recommended video is found, clicks and seamlessly watches it next.
-     - If no stored channels appear in recommendations, navigates back to `https://www.youtube.com/`, waits 5 seconds, re-scans the homepage feed for ~100 videos, and repeats.
-  9. **Graceful Cancellation**: Controlled at any moment via the **⏹ Stop Watching** button on the Dashboard.
+  8. **In-Place Up-Next / Recommended Chaining**:
+     - When the target attempt cap is reached, browsing stops cleanly without playing an unnecessary buffer video.
+     - When further target attempts remain, a non-target buffer video (30–90s) is watched to simulate natural viewing transitions (buffer videos do not consume the target limit), followed by checking sidebar recommendations (`RECOMMENDED_VIDEOS_JS`) and homepage feeds for the next target video.
+  9. **Graceful Cancellation**: Controlled at any moment via the **⏹ Stop Browsing** button on the Dashboard.
 
 **Why it is in Testing**
 - YouTube dynamic DOM variations across different browser regions and responsive layouts.

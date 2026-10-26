@@ -30,7 +30,7 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] One automatic retry per task (`MAX_ATTEMPTS_PER_TASK = 2`) before skipping.
 - [x] Per-task success/failure counting plus an end-of-session summary per account.
 - [x] Watch aborts after 60s with no `<video>` element (retryable failure) instead of hanging.
-- [x] Full Video safety timeout (`FullVideoTimeoutMinutes`, default 360, `0` = unlimited).
+- [x] Full Video safety timeout (`FullVideoTimeoutMinutes`, default 5, clamped 0–1440, `0` = unlimited) and early stop buffer (`FullVideoStopBufferSeconds`, default 10s, `0` = randomized 7–12s).
 - [x] Login/CAPTCHA failure surfaced on the Dashboard status line (red), not only in logs.
 - [x] Thread-safe worker → UI event queue (`progress` / `status` / `finished`); no cross-thread Tk calls.
 - [x] **Offline ChromeDriver cache** — the driver binary is resolved once (Google CDN → npmmirror fallback) and cached in `runtime/tools/chromedriver/`, so launches never depend on a live Chrome-for-Testing download.
@@ -38,9 +38,8 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 ### Ad handling (Skip Ads)
 
 - [x] **Strict ad detection** — `ytp-showing-ad`, non-empty `.video-ads`, `.ytp-ad-player-container`, or `adformat=` in source; the up-next countdown no longer false-positives.
-- [x] **`SkipAds` toggle (default on)** — installs uBlock Origin Lite (pinned MV3, SHA-256 verified) into the session via the browser's DevTools socket (`Extensions.loadUnpacked`), because branded Chrome 137+ ignores `--load-extension` and ChromeDriver cannot reach the browser-level `Extensions` domain. Verified end-to-end: tracker requests are redirected to the extension's no-op resources (CDP Network evidence).
-- [x] **Rebuilt click fallback** — any ad that still plays (including the up-next/countdown hand-off) is clicked after a randomized **30–35 s** so monetisation is credited.
-- [x] **`SkipAds` off** — ads are watched up to a cumulative `MaxAdWatchSeconds` cap (default 32, `0` = unlimited) before an escape-skip.
+- [x] **`Auto-Skip Ads` toggle (default on)** — uses script-based native detection to click YouTube's *Skip Ad* button when available (after 5–10s). Extension-based ad blockers have been removed.
+- [x] **`Auto-Skip Ads` off** — ads are watched up to a cumulative `MaxAdWatchSeconds` cap (default 32, clamped 0–3600, `0` = unlimited) before an escape-skip.
 - [x] Ad seconds never count toward fixed-duration budgets or completion.
 
 ### Configuration features
@@ -51,7 +50,7 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [x] **Skip Ads** toggle and **Max Ad Watch (seconds)** entry on the Settings screen, persisted to `settings.json`.
 - [x] All settings exposed and saved from the Settings screen with validation.
 
-- [x] **Autonomous "Start Browsing" Recommendation Loop** (`src/automation/watching_worker.py`) — continuous watching loop triggered by **▶ Start Browsing**: signs in, visits homepage (5s load wait), scrolls and inspects ~100 videos matching stored channel URLs, opens and watches video, inspects watch-page recommendations without closing browser window, chains matching videos, and falls back to homepage feed.
+- [x] **Autonomous "Start Browsing" Recommendation Loop** (`src/automation/watching_worker.py`) — continuous watching loop triggered by **▶ Start Browsing**: signs in, verifies account, visits homepage (5s load wait), scrolls and inspects ~100 videos matching stored channel URLs, opens and watches video, supports independent `BrowsingTargetLimit` (default 1 attempt, counted at scheduling) or `BrowsingUnlimited`, interleaves 30–90s buffer videos between targets (without running post-final buffer video), and cleanly closes driver upon completion or Stop.
 
 ### Channels (video grouping & auto-fetch)
 
@@ -78,11 +77,11 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 
 ### Quality features
 
-- [x] `tests/` pytest suite — **146 passing tests**: duration parsing, account line parsing, secret redaction, video-ID extraction, `ConfigManager` (defaults, purging, credentials migration, queue round-trips), channel model/grouping, watch-statistics models + `StatsStore` (identity, folding, cascades, concurrency), worker outcome mapping, ad-state/policy, ad-blocker provisioning (scripted-WebSocket DevTools loader).
+- [x] `tests/` pytest suite — **580+ unit tests across 47 test modules**: duration parsing, account parsing and safe normalization, secret redaction, video-ID extraction, `ConfigManager` (atomic settings updates, purging, credentials migration, queue round-trips), channel models and paginated Data API v3 fetcher, watch statistics and `StatsStore` (authoritative video totals, fractional checkpointing, concurrency), worker outcome mapping, positive sign-in verification, profile locking, and browsing target limits.
 - [x] `pyproject.toml` — pytest, ruff (`E,F,W,I`), and mypy (`check_untyped_defs`) configuration.
 - [x] `requirements-dev.txt` — pinned `pytest`, `ruff`, `mypy`.
 - [x] `.github/workflows/ci.yml` — ruff + mypy, pytest on Python 3.11/3.12 (Windows).
-- [x] `ruff check .` → clean · `mypy` → clean (41 files) · `pytest` → 146 passed.
+- [x] `ruff check .` → clean · `mypy` → clean · `pytest` → 580+ passed.
 - [x] Dead imports and unsorted import blocks cleaned up across the codebase.
 
 ## 🧪 Testing (manual / runtime)
@@ -104,7 +103,7 @@ Related docs: [README.md](README.md) (setup/usage) · [FEATURES.md](FEATURES.md)
 - [ ] Fresh-machine onboarding: `pip install -r requirements.txt` → `python main.py --diagnose-browser`.
 - [ ] Account import: `accounts.txt` with both `:` and `,` separators, plus legacy `settings.json` migration to `credentials.json`.
 - [ ] Settings screen: change appearance/default duration/timeout, save, restart, confirm they persist.
-- [ ] **Ad handling** (full checklist in [TESTING.md](TESTING.md) Stage 11): blocker loads (`Ad blocker loaded (efdmj…)`), ads blocked or skipped after 30–35 s, `SkipAds` off watches ads up to the cap, up-next countdown not treated as an ad.
+- [ ] **Ad handling** (checklist in [TESTING.md](TESTING.md) Stage 11): script-based Skip Ad detection (5–10s), `Auto-Skip Ads` off watches ads up to `MaxAdWatchSeconds` cap, up-next countdown not treated as an ad.
 - [ ] **Watch statistics** (full checklist in [TESTING.md](TESTING.md) Stage 3c): card line appears after a run, ad seconds excluded, a retried task counts as one run, **⏹ Stop** shows `last ⏸` without raising the failure count, channel rename/delete follows the totals, counters survive a restart, `git check-ignore stats.json` → ignored.
 
 ## 📄 Documentation

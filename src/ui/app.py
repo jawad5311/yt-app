@@ -577,8 +577,12 @@ class YTBotApp(ctk.CTk):
         browsing_limit: Optional[int] = 1,
         is_unlimited: bool = False,
         session_id: int = 0,
+        total_loops: Optional[int] = None,
+        **kwargs: Any,
     ):
         """Execute the continuous watching recommendation session."""
+        if total_loops is not None and (browsing_limit is None or browsing_limit == 1):
+            browsing_limit = total_loops
         session_event_queue = SessionEventQueue(self.event_queue, session_id)
         session_error: Optional[str] = None
         worker = None

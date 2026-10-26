@@ -17,13 +17,13 @@ Record results in the checklist at the bottom. Estimated full pass: ~60–90 min
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m ruff check .          # expect: All checks passed!
 python -m mypy                  # expect: Success: no issues found in 41 source files
-python -m pytest                # expect: 146 passed
+python -m pytest                # expect: 580+ passed (across 47 test modules)
 python -m compileall -q main.py src tests   # expect: silent, exit 0
 ```
 
 - [x] ruff clean
 - [x] mypy clean
-- [x] 146 tests pass
+- [x] 580+ tests pass (47 test modules)
 - [x] `python -c "import main"` succeeds
 
 ## Stage 1 — App boot & configuration 🖱 (no browser)
@@ -34,18 +34,18 @@ python -m compileall -q main.py src tests   # expect: silent, exit 0
    - [x] Dashboard cards show account/queue counts and `Idle`
    - [x] No traceback in the Logs view or console
 2. Settings screen:
-   - [x] All 7 controls present (fallback switch, Parallel Browsers, Default Watch Duration, Full Video Timeout, Skip Ads, Max Ad Watch, Appearance Mode)
+   - [x] All controls present (Direct Link Fallback, Parallel Browsers, Default Watch Duration, Full Video Timeout, Auto-Skip Ads, Max Ad Watch, Stop Buffer, Automation Loops, Browsing Target Limit, Unlimited Browsing, Video Rewatch Cooldown, Human Interactivity, Appearance Mode)
    - [x] Set Default Watch Duration → **1 Hour** → Save
    - [x] Set Appearance Mode → **Light** → **Save** → UI switches immediately
    - [x] Set Full Video Timeout → `90` → Save
    - [x] Set Max Ad Watch → `45` → Save → `settings.json` has `MaxAdWatchSeconds: 45`
-   - [x] Toggle **Skip Ads** off → Save → persists after restart
+   - [x] Toggle **Auto-Skip Ads** off → Save → persists after restart
    - [x] Enter Parallel Browsers `50` → Save → value clamps to `10`
    - [x] Enter Full Video Timeout `abc` → Save → error dialog, nothing saved
 3. Restart the app:
    - [x] Appearance is Light, default duration is `1 Hour`, timeout shows `90`
    - [x] `settings.json` contains `FullVideoTimeoutMinutes` and **no** `AccessKey`
-4. Set Appearance back to **Dark**, Default Watch Duration back to **5 Minutes**, timeout to `360`, Max Ad Watch back to `32`, and **Skip Ads** back on for the remaining stages.
+4. Set Appearance back to **Dark**, Default Watch Duration back to **Full Video**, timeout to `5`, Max Ad Watch back to `32`, and **Auto-Skip Ads** back on for the remaining stages.
 
 ## Stage 2 — Accounts 🖱 (no browser)
 
@@ -172,7 +172,7 @@ Same checklist as [FEATURES.md](FEATURES.md); condensed here:
 - [ ] **⏹ Stop** during full mode → `Watchtime interrupted by user.` within ~3s, driver closes
 - [ ] Full Video + direct-link fallback (URL only, no keywords) works
 - [ ] 30 min+ video: no false completion before the end
-- [ ] Safety timeout: set `FullVideoTimeoutMinutes` = `1`, run Full Video on a long video → after ~60s `Full video safety timeout reached (60s). Stopping watch.` (then set it back to `360`)
+- [ ] Safety timeout: set `FullVideoTimeoutMinutes` = `1`, run Full Video on a long video → after ~60s `Full video safety timeout reached (60s). Stopping watch.` (then set it back to `5`)
 
 ## Stage 8 — Reliability 🖱
 
@@ -192,7 +192,7 @@ Same checklist as [FEATURES.md](FEATURES.md); condensed here:
    - [ ] Three `Session completed for …` summaries
    - [ ] No `DRIVER_INIT_LOCK`/profile collision errors
 2. Parallel = `2` with 3 accounts → only 2 browsers launch (`loaded_accounts[:parallel_limit]`).
-3. Re-run a task and check `runtime/chrome_profiles/profile_<email>/` persists the signed-in session (second run logs `already signed in!`).
+3. Re-run a task and check `runtime/chrome_profiles/profile_<safe_email>_<hash>/` persists the signed-in session (second run logs `already signed in!`).
 
 ## Stage 10 — Settings effects 🖱
 
@@ -200,28 +200,23 @@ Same checklist as [FEATURES.md](FEATURES.md); condensed here:
 - [ ] Appearance `System` follows OS theme; persists across restart
 - [ ] Direct Link Fallback toggle affects Stage 6.2/6.3 behaviour without restart
 
-## Stage 11 — Ad handling 🖱
+## Stage 11 — Ad handling 🖱 (Manual Scenario)
 
-Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monetised video).
+Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monetized video). Note: manual browser scenarios are unverified until tested against live YouTube layouts. Local playback testing does not guarantee official monetization or analytics acceptance.
 
-**Skip Ads ON (default)**
+**Auto-Skip Ads ON (default)**
 
-- [ ] First run logs `Downloading ad blocker (uBOLite_2026.930.1227.chromium.zip, ~9 MB)...` then `Ad blocker installed: extensions/uBOLite-2026.930.1227`; second run skips the download (reuses `extensions/`)
-- [ ] Session start logs `Ad blocker loaded (efdmjfmgafbflcklekpnckemhhnjibpm).` and `Ad policy: blocker ON, fallback skips ads after the 30-35s monetisation window.`
-- [ ] Pre-roll ad: either it never renders (blocker) or a line like `Ad playing: 6s into this break (skip at ~33s).` appears and the skip fires after **30–35 s**: `Clicked Skip Ad - monetisation window reached (…s of ~…s).`
-- [ ] Ad time is excluded from the budget: a 30-second task interrupted by a 10 s ad still watches ~30 s of actual video
-- [ ] Up-next / countdown card after the video ends is **not** treated as an ad (no `Ad playing…` for it)
+- [ ] Native script-based ad detection runs without downloading external browser extensions.
+- [ ] Pre-roll ad: When YouTube presents the Skip Ad button (typically after 5–10s), the automation clicks the Skip button.
+- [ ] Ad time is excluded from watch time: a 30-second task interrupted by a 10s ad still watches ~30s of actual video playback.
+- [ ] Up-next / countdown card after the video ends is **not** treated as an ad (no `Ad playing…` for it).
 
-**Skip Ads OFF**
+**Auto-Skip Ads OFF**
 
-- [ ] Settings → Skip Ads off → run: no `Ad blocker loaded` line; instead `Ad policy: watching all ads, escape cap at 32s.` then `Ad playing: …s break / …s total (cap 32s). Watching it.`
+- [ ] Settings → Auto-Skip Ads off → run: Ads are watched normally up to `MaxAdWatchSeconds` (default 32s, `0` = unlimited).
 - [ ] Cumulative ad time reaches the cap → escape-skip fires (`Clicked Skip Ad - …`); if the ad is unskippable: `Ad cap reached but no Skip button found (unskippable ad). Waiting for it to finish.`
-- [ ] Set Max Ad Watch to `0` → ads run to completion with no escape skip
-- [ ] Turn **Skip Ads** back on for the remaining stages
-
-**Blocker verification (optional, one-off)**
-
-- [ ] `git status` shows no `extensions/` churn (git-ignored); the package hash matches the pinned SHA-256
+- [ ] Set Max Ad Watch to `0` → ads run to completion with no escape skip.
+- [ ] Turn **Auto-Skip Ads** back on for the remaining stages.
 
 ## Stage 12 — Logging & privacy 🖱
 
@@ -233,7 +228,7 @@ Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monet
 
 ## Stage 13 — Clean-clone / CI ✅
 
-- [ ] Fresh `git clone` → `python -m pip install -r requirements.txt -r requirements-dev.txt` → `python -m pytest` → 146 passed
+- [ ] Fresh `git clone` → `python -m pip install -r requirements.txt -r requirements-dev.txt` → `python -m pytest` → 580+ passed
 - [ ] Push a branch → GitHub Actions **CI** job: `lint` (ruff+mypy) and `test` (3.11, 3.12) all green
 - [ ] `git status` clean after a full run except intended changes (`settings.json`, `stats.json` and `credentials.json` are git-ignored, so queue/channel edits and watch statistics do not show up)
 

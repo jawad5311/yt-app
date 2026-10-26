@@ -273,6 +273,8 @@ class TestWatchingWorker:
         mock_watch.side_effect = watch_side_effect
 
         worker.open_videos = True
+        worker.is_unlimited = True
+        worker.target_limit = None
         worker.run()
 
         # 0. Ensured no duplicate navigation to YouTube Home when already on the page
@@ -521,6 +523,8 @@ class TestWatchingWorker:
         ch_b = Channel(name="Channel B", url="https://youtube.com/@channelB")
         worker.channels = [ch_a, ch_b]
         worker.config_mgr.set_channels([ch_a.to_dict(), ch_b.to_dict()])
+        worker.is_unlimited = True
+        worker.target_limit = None
 
         mock_driver = MagicMock()
         mock_driver.current_url = "https://www.youtube.com/"
@@ -709,6 +713,8 @@ class TestWatchingWorker:
 
         mock_watch.side_effect = watch_side_effect
         worker.open_videos = True
+        worker.is_unlimited = True
+        worker.target_limit = None
         worker.run()
 
         # 1. First video (Channel A): interactivity enabled, full video (duration_seconds is None) or 60
@@ -889,6 +895,8 @@ class TestWatchingWorker:
         mock_watch.side_effect = watch_side_effect
 
         worker.open_videos = True
+        worker.is_unlimited = True
+        worker.target_limit = None
         worker.run()
 
         # Both target videos were watched, and buffer video interleaved!
