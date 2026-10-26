@@ -559,7 +559,7 @@ def watch_video(
         pass
     autoplay_disabled = False
 
-    started_at = time.time()
+    started_at = time.monotonic()
     last_tick = started_at
     last_progress_log = 0.0
     last_ad_log = 0.0
@@ -614,7 +614,7 @@ def watch_video(
         if pause_event is not None and pause_event.is_set():
             playback_meter.reset()
             emit(log_queue, "Playback paused by user.")
-            pause_start = time.time()
+            pause_start = time.monotonic()
             try:
                 driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
             except Exception:
@@ -630,16 +630,16 @@ def watch_video(
                         emit(log_queue, f"Playback stopped while paused: {reason_str.replace('_', ' ')}.")
                         return _result(False, reason_str, interrupted=True)
                 time.sleep(0.5)
-            pause_duration = max(0.0, time.time() - pause_start)
+            pause_duration = max(0.0, time.monotonic() - pause_start)
             started_at += pause_duration
-            last_tick = time.time()
+            last_tick = time.monotonic()
             emit(log_queue, "Playback resumed by user.")
             try:
                 ensure_video_playing(driver, log_queue=log_queue)
             except Exception:
                 pass
 
-        now = time.time()
+        now = time.monotonic()
         delta = max(0.0, now - last_tick)
         last_tick = now
         elapsed = now - started_at
@@ -649,7 +649,42 @@ def watch_video(
         except Exception:
             video_state = {"found": False}
 
+        # Check identity before crediting this probe's time or metadata.
+        if video_state.get("found") and initial_video_id:
+            try:
+                curr_vid = extract_video_id(getattr(driver, "current_url", ""))
+                if curr_vid and curr_vid != initial_video_id:
+                    emit(log_queue, f"Video transition detected ({initial_video_id} -> {curr_vid}). Halting task to prevent counting next video.")
+                    try:
+                        driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
+                    except Exception:
+                        pass
+                    return _result(True, "autoplay_transition")
+            except Exception:
+                pass
+
         measured_seconds = playback_meter.sample(video_state, time.monotonic())
+
+        is_ad = bool(video_state.get("isAd"))
+        ended = bool(video_state.get("ended", False)) and not is_ad
+        if video_state.get("found"):
+            ad_state.tick(is_ad, delta)
+        if measured_seconds > 0:
+            watched_seconds += measured_seconds
+            if on_watch_tick is not None:
+                try:
+                    on_watch_tick(measured_seconds)
+                except Exception:
+                    pass
+        if video_state.get("found") and not is_ad:
+            last_known_duration = float(video_state.get("duration", 0.0)) or last_known_duration
+            last_known_current_time = float(video_state.get("currentTime", 0.0))
+
+        # One monotonic deadline covers all player states. A genuine player
+        # end observed on this probe takes precedence over timeout expiry.
+        if is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds and not ended:
+            emit(log_queue, f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.", logging.WARNING)
+            return _result(False, "full_timeout")
 
         if not video_state.get("found"):
             if video_missing_since is None:
@@ -671,36 +706,7 @@ def watch_video(
             disable_player_autoplay(driver)
             autoplay_disabled = True
 
-        # Safety net: detect if YouTube navigated away to an autoplayed next video
-        if initial_video_id:
-            try:
-                curr_url = getattr(driver, "current_url", "")
-                curr_vid = extract_video_id(curr_url)
-                if curr_vid and curr_vid != initial_video_id:
-                    emit(
-                        log_queue,
-                        f"Video transition detected ({initial_video_id} -> {curr_vid}). "
-                        "Halting task to prevent counting next video.",
-                    )
-                    try:
-                        driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
-                    except Exception:
-                        pass
-                    return _result(True, "autoplay_transition")
-            except Exception:
-                pass
-
-        is_ad = bool(video_state.get("isAd"))
-        ad_state.tick(is_ad, delta)
-
         paused = bool(video_state.get("paused", False))
-        if measured_seconds > 0:
-            watched_seconds += measured_seconds
-            if on_watch_tick is not None:
-                try:
-                    on_watch_tick(measured_seconds)
-                except Exception:
-                    pass
 
         # ------------------------------------------------------------ ads ----
         if is_ad:
@@ -739,14 +745,6 @@ def watch_video(
                         "Ad cap reached but no Skip button found (unskippable ad). Waiting for it to finish.",
                         logging.WARNING,
                     )
-
-            if is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds:
-                emit(
-                    log_queue,
-                    f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.",
-                    logging.WARNING,
-                )
-                return _result(False, "full_timeout")
 
             time.sleep(3)
             continue
@@ -817,17 +815,6 @@ def watch_video(
                     f"{_format_clock(video_duration)} ({percent}%)",
                 )
 
-        # Full Video safety timeout
-        if is_full_mode and full_timeout_seconds > 0:
-            effective_timeout = max(float(full_timeout_seconds), (video_duration + 120.0) if video_duration > 0 else float(full_timeout_seconds))
-            if elapsed >= effective_timeout:
-                emit(
-                    log_queue,
-                    f"Full video safety timeout reached ({int(effective_timeout)}s). Stopping watch.",
-                    logging.WARNING,
-                )
-                return _result(False, "full_timeout")
-
         # Fixed-duration budget
         if not is_full_mode and duration_seconds is not None:
             # Measure actual video playback seconds so pause duration does not prematurely end playback
@@ -847,7 +834,7 @@ def watch_video(
             duration_budget=duration_seconds,
         )
         if interactive_event.get("micro_paused"):
-            last_tick = time.time()
+            last_tick = time.monotonic()
 
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Watchtime interrupted by user.")

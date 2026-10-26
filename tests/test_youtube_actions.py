@@ -266,7 +266,7 @@ def test_watch_video_logs_the_configured_cutoff():
     assert "Closing randomly" not in log_text
 
 
-def run_scripted_watch(monkeypatch, states, **kwargs):
+def run_scripted_watch(monkeypatch, states, sleep_hook=None, wall_clock=None, **kwargs):
     """Exercise the real watch loop with a deterministic clock and player."""
     import threading
     from types import SimpleNamespace
@@ -292,9 +292,13 @@ def run_scripted_watch(monkeypatch, states, **kwargs):
     monkeypatch.setattr(module, "ensure_video_playing", lambda *a, **k: True)
     monkeypatch.setattr(module, "disable_player_autoplay", lambda *a, **k: True)
     monkeypatch.setattr(module, "find_skip_button", lambda *a, **k: None)
+    def sleep(duration):
+        clock[0] += duration
+        if sleep_hook:
+            sleep_hook(clock[0], duration)
+
     monkeypatch.setattr(module, "time", SimpleNamespace(
-        time=lambda: clock[0], monotonic=lambda: clock[0],
-        sleep=lambda duration: clock.__setitem__(0, clock[0] + duration),
+        time=wall_clock or (lambda: clock[0]), monotonic=lambda: clock[0], sleep=sleep,
     ))
     ticks = []
     result = module.watch_video(
@@ -413,3 +417,60 @@ def test_ad_position_does_not_satisfy_full_video_cutoff(monkeypatch):
     assert result.reason == "completion_cutoff"
     assert result.ad_seconds == 0  # First probe establishes the ad clock.
     assert result.final_current_time == 990
+
+
+@pytest.mark.parametrize("probe", [
+    playback_state(0), playback_state(0, isAd=True),
+    playback_state(0, readyState=1), {"found": False},
+])
+def test_one_deadline_covers_every_player_state(monkeypatch, probe):
+    result, _ = run_scripted_watch(monkeypatch, [probe] * 4,
+        duration_seconds=None, full_timeout_seconds=6, skip_ads=False, max_ad_seconds=0)
+    assert result.reason == "full_timeout"
+    assert not result.completed and not result.playback_finished
+
+
+def test_timeout_preserves_final_measured_interval(monkeypatch):
+    result, ticks = run_scripted_watch(monkeypatch, [playback_state(p) for p in (0, 3, 6)],
+        duration_seconds=None, full_timeout_seconds=6)
+    assert result.reason == "full_timeout"
+    assert result.watched_seconds == sum(ticks) == 6
+
+
+def test_timeout_zero_and_wall_clock_changes(monkeypatch):
+    def forbidden_wall_clock():
+        raise AssertionError("Elapsed time must use monotonic clock")
+
+    result, _ = run_scripted_watch(monkeypatch, [playback_state(0)] * 25,
+        duration_seconds=None, full_timeout_seconds=0, wall_clock=forbidden_wall_clock)
+    assert result.reason == "interrupted"
+    assert result.watched_seconds == 0
+
+
+def test_user_pause_does_not_consume_safety_timeout(monkeypatch):
+    import threading
+
+    pause = threading.Event()
+    sleeps = []
+
+    def pause_then_resume(now, duration):
+        sleeps.append(duration)
+        if len(sleeps) == 1:
+            pause.set()
+        if now >= 113:
+            pause.clear()
+
+    result, _ = run_scripted_watch(monkeypatch, [playback_state(p) for p in (0, 3, 6)],
+        duration_seconds=None, full_timeout_seconds=6, pause_event=pause,
+        sleep_hook=pause_then_resume)
+    assert result.reason == "full_timeout"
+    assert sum(sleeps) == 16  # 6 active seconds plus 10 explicitly paused.
+
+
+def test_real_end_observed_at_deadline_wins(monkeypatch):
+    result, _ = run_scripted_watch(monkeypatch, [
+        playback_state(0, duration=6), playback_state(3, duration=6),
+        playback_state(6, duration=6, ended=True),
+    ], duration_seconds=None, full_timeout_seconds=6)
+    assert result.reason == "ended"
+    assert result.completed and result.playback_finished
