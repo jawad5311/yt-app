@@ -146,6 +146,17 @@ class SessionChannelTracker:
             return False
         return self.get_current_total_watch_seconds(channel_name) >= target_sec
 
+    def reset(self) -> None:
+        """Clear all active session counters, accumulators, pending checkpoints, and zero channel watch times."""
+        with self._lock:
+            self.minute_counters.clear()
+            self.second_accumulators.clear()
+            self._pending_seconds.clear()
+            self._active_watch_delta = 0.0
+            self.active_channel_name = None
+            for ch in self.channels:
+                ch.watch_seconds = 0.0
+
     def on_stop(self) -> None:
         """Retry pending checkpoints without adding already saved session time."""
         with self._lock:

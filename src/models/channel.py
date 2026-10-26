@@ -130,6 +130,8 @@ class Channel:
         existing: Sequence["Channel"] = (),
         enabled: bool = True,
         archived: bool = False,
+        watch_seconds: float = 0.0,
+        target_watch_seconds: float = 0.0,
     ) -> "Channel":
         """Build a validated channel. Raises ValueError with a user-facing message."""
         clean_name = (name or "").strip()
@@ -148,7 +150,14 @@ class Channel:
                         f"A channel with this URL already exists ('{channel.name}')."
                     )
 
-        return cls(name=clean_name, url=clean_url, enabled=enabled, archived=archived)
+        return cls(
+            name=clean_name,
+            url=clean_url,
+            enabled=enabled,
+            archived=archived,
+            watch_seconds=watch_seconds,
+            target_watch_seconds=target_watch_seconds,
+        )
 
 
 def is_video_task_runnable(

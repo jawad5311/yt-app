@@ -435,20 +435,24 @@ class QueueView(ctk.CTkFrame):
 
     def reset_stats(self):
         """Delete every recorded watch statistic after a confirmation."""
-        store = self._stats()
-        if store is None:
-            return
         if not messagebox.askyesno(
             "Reset Statistics",
             "Delete all recorded watch statistics?\n\nThis cannot be undone.",
         ):
             return
-        store.clear_all()
-        refresh = getattr(self.app_controller, "refresh_watch_stats", None)
-        if callable(refresh):
-            refresh()
+        if hasattr(self, "app_controller") and hasattr(self.app_controller, "reset_all_watch_stats"):
+            self.app_controller.reset_all_watch_stats()
         else:
-            self.refresh_list()
+            store = self._stats()
+            if store is not None:
+                store.clear_all()
+            if hasattr(self, "app_controller") and getattr(self.app_controller, "config_mgr", None):
+                self.app_controller.config_mgr.reset_channel_watch_times()
+            refresh = getattr(self.app_controller, "refresh_watch_stats", None)
+            if callable(refresh):
+                refresh()
+            else:
+                self.refresh_list()
 
     def refresh_list(self):
         for child in self.scroll_frame.winfo_children():
@@ -660,6 +664,7 @@ class QueueView(ctk.CTkFrame):
                 can_move_down=not is_last,
                 on_move_up=_move_up,
                 on_move_down=_move_down,
+                group=group,
             )
             card.grid(row=g_idx + 1, column=0, sticky="ew", pady=(0, 5))
 
@@ -674,6 +679,7 @@ class QueueView(ctk.CTkFrame):
         can_move_down: bool = False,
         on_move_up: Optional[Callable[[], None]] = None,
         on_move_down: Optional[Callable[[], None]] = None,
+        group: Optional[VideoGroup] = None,
     ):
         """Build a single video card; ``index`` is the task's real queue index."""
         # Outer row wrapper: places reorder buttons outside the video box
@@ -684,7 +690,7 @@ class QueueView(ctk.CTkFrame):
         def _toggle_task():
             new_state = bool(task_chk.get())
             task.enabled = new_state
-            if not new_state:
+            if not new_state and group is not None and getattr(group, "videos", None):
                 # Move this unchecked video to the bottom of the group list
                 try:
                     curr_real = self.video_tasks.index(task)

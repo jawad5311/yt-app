@@ -46,6 +46,7 @@ class YTBotApp(ctk.CTk):
         self.loaded_accounts: List[Account] = []
         self.queued_video_tasks: List[VideoTask] = []
         self.active_threads: List[threading.Thread] = []
+        self.active_workers: List[Any] = []
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.is_running = False
@@ -134,6 +135,31 @@ class YTBotApp(ctk.CTk):
         )
         stats = getattr(self, "stats_store", None)
         return sum(1 for t in self.queued_video_tasks if is_video_task_runnable(t, channels, stats))
+
+    def reset_all_watch_stats(self) -> None:
+        """Completely reset all watch statistics across stats.json, settings channel counters, and running workers."""
+        if hasattr(self, "stats_store") and self.stats_store:
+            self.stats_store.clear_all()
+
+        if hasattr(self, "config_mgr") and self.config_mgr:
+            self.config_mgr.reset_channel_watch_times()
+
+        # Reset in-memory trackers of active workers
+        for worker in list(getattr(self, "active_workers", [])):
+            tracker = getattr(worker, "channel_tracker", None)
+            if tracker and hasattr(tracker, "reset"):
+                tracker.reset()
+            for ch in getattr(worker, "channels", []):
+                ch.watch_seconds = 0.0
+
+        # Reload channels view so its in-memory list has 0.0 counters
+        if hasattr(self, "views") and isinstance(self.views, dict):
+            ch_view = self.views.get("channels")
+            if ch_view and hasattr(ch_view, "load_channels"):
+                ch_view.load_channels()
+
+        self.refresh_watch_stats()
+        self.update_dashboard_stats()
 
     def update_dashboard_stats(self) -> None:
         """Refresh dashboard overview cards with live accounts, runnable queue, and status."""
@@ -296,6 +322,7 @@ class YTBotApp(ctk.CTk):
                     stats_store=self.stats_store,
                     dispatcher=dispatcher,
                 )
+                self.active_workers.append(worker)
                 thread = threading.Thread(target=worker.run, daemon=True)
                 self.active_threads.append(thread)
                 thread.start()
@@ -385,7 +412,12 @@ class YTBotApp(ctk.CTk):
             total_loops=total_loops,
             open_videos=True,
         )
-        worker.run()
+        self.active_workers.append(worker)
+        try:
+            worker.run()
+        finally:
+            if worker in self.active_workers:
+                self.active_workers.remove(worker)
 
         self.is_running = False
         self.current_mode = "idle"

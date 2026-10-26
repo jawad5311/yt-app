@@ -235,10 +235,31 @@ class ConfigManager:
         with self._lock:
             return [dict(entry) for entry in self.data.get("channels", [])]
 
-    def set_channels(self, channel_list: List[Dict[str, Any]]) -> None:
-        """Persist the channel list, sanitized of blanks and duplicate names."""
+    def set_channels(self, channel_list: List[Dict[str, Any]], preserve_counters: bool = True) -> None:
+        """Persist the channel list, sanitized of blanks and duplicate names.
+        When preserve_counters is True, preserves live watch_seconds from disk if they exceed incoming values.
+        """
         with self._lock:
+            if preserve_counters:
+                existing_map = {
+                    (c.get("name") or "").strip().lower().lstrip("@"): float(c.get("watch_seconds", 0.0) or 0.0)
+                    for c in self.data.get("channels", []) if isinstance(c, dict)
+                }
+                for incoming in channel_list:
+                    if isinstance(incoming, dict):
+                        key = (incoming.get("name") or "").strip().lower().lstrip("@")
+                        curr_sec = existing_map.get(key)
+                        if curr_sec is not None and curr_sec > float(incoming.get("watch_seconds", 0.0) or 0.0):
+                            incoming["watch_seconds"] = curr_sec
             self.data["channels"] = self._sanitize_channels(channel_list)
+            self._save_unlocked()
+
+    def reset_channel_watch_times(self) -> None:
+        """Zero out watch_seconds for all channels stored in settings."""
+        with self._lock:
+            for channel in self.data.get("channels", []):
+                if isinstance(channel, dict):
+                    channel["watch_seconds"] = 0.0
             self._save_unlocked()
 
     def increment_channel_watch_seconds(self, channel_name: str, seconds: float) -> Optional[float]:

@@ -1494,14 +1494,14 @@ class WatchingWorker:
         enable_interactivity, interactivity_cfg = self._interactivity_settings()
         self._report_status(f"Watching: {title}", "info")
 
-        def _should_stop(ch_name=channel_display) -> bool:
+        def _should_stop(ch_name=channel_display):
             if not ch_name:
                 return False
             if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(ch_name):
-                return True
+                return "channel_target_achieved"
             active_names = {c.name.lower() for c in self.get_target_channels()}
             if ch_name.lower() not in active_names:
-                return True
+                return "channel_disabled"
             if registered_task and getattr(registered_task, "target_multiplier", 0.0) > 0:
                 rec = self.stats_store.find_for_task(registered_task) if self.stats_store else None
                 prev_watched = rec.watch_seconds if rec else 0.0
@@ -1510,7 +1510,7 @@ class WatchingWorker:
                 eff_d = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(registered_task, "duration_seconds", 0.0)
                 if eff_d > 0 and (total_w / eff_d) >= registered_task.target_multiplier:
                     emit(self.log_queue, f"Video '{registered_task.title}' reached target multiplier ({registered_task.target_multiplier:.2f}x). Stopping video playback.")
-                    return True
+                    return "video_target_achieved"
             return False
 
         target_watch_duration = registered_task.parse_duration_seconds()
@@ -1710,10 +1710,17 @@ class WatchingWorker:
                         watched_count += 1
                         self._emit_event(("progress", 0, watched_count, max(watched_count, self.total_loops)))
 
-                        if self.stop_event.is_set() or watch_res.interrupted:
-                            if watch_res.interrupted and not self.stop_event.is_set():
-                                emit(self.log_queue, f"Channel '{ch_display}' was disabled. Stopped video playback.")
+                        if self.stop_event.is_set():
                             break
+
+                        if watch_res.interrupted:
+                            remaining_channels = self.get_target_channels()
+                            if not remaining_channels:
+                                emit(self.log_queue, "All target channels have reached their targets or are disabled. Stopping browsing session.")
+                                break
+                            reason_desc = "target watch time was achieved" if watch_res.reason == "channel_target_achieved" else "channel was disabled/unchecked"
+                            emit(self.log_queue, f"Channel '{ch_display}' {reason_desc}. Continuing browsing for remaining {len(remaining_channels)} target channel(s)...")
+                            continue
 
                         # Option 5: Interleave a 30-90s non-target video before next target video
                         self._after_target_video_watched(session_watched_keys, watched_count)
@@ -1785,9 +1792,16 @@ class WatchingWorker:
                             self._emit_event(("progress", 0, watched_count, max(watched_count, self.total_loops)))
                             found_target_via_random = True
 
-                            if self.stop_event.is_set() or watch_res.interrupted:
-                                if watch_res.interrupted and not self.stop_event.is_set():
-                                    emit(self.log_queue, f"Channel '{ch_display}' was disabled. Stopped video playback.")
+                            if self.stop_event.is_set():
+                                break
+
+                            if watch_res.interrupted:
+                                remaining_channels = self.get_target_channels()
+                                if not remaining_channels:
+                                    emit(self.log_queue, "All target channels have reached their targets or are disabled. Stopping browsing session.")
+                                    break
+                                reason_desc = "target watch time was achieved" if watch_res.reason == "channel_target_achieved" else "channel was disabled/unchecked"
+                                emit(self.log_queue, f"Channel '{ch_display}' {reason_desc}. Continuing browsing for remaining {len(remaining_channels)} target channel(s)...")
                                 break
 
                             # Option 5: Interleave a 30-90s non-target video before next target video
@@ -1912,10 +1926,17 @@ class WatchingWorker:
                         self._emit_event(("progress", 0, watched_count, max(watched_count, self.total_loops)))
                         found_home_target = True
 
-                        if self.stop_event.is_set() or watch_res.interrupted:
-                            if watch_res.interrupted and not self.stop_event.is_set():
-                                emit(self.log_queue, f"Channel '{ch_display}' was disabled. Stopped video playback.")
+                        if self.stop_event.is_set():
                             break
+
+                        if watch_res.interrupted:
+                            remaining_channels = self.get_target_channels()
+                            if not remaining_channels:
+                                emit(self.log_queue, "All target channels have reached their targets or are disabled. Stopping browsing session.")
+                                break
+                            reason_desc = "target watch time was achieved" if watch_res.reason == "channel_target_achieved" else "channel was disabled/unchecked"
+                            emit(self.log_queue, f"Channel '{ch_display}' {reason_desc}. Continuing browsing for remaining {len(remaining_channels)} target channel(s)...")
+                            continue
 
                         # Option 5: Interleave a 30-90s non-target video before next target video
                         self._after_target_video_watched(session_watched_keys, watched_count)

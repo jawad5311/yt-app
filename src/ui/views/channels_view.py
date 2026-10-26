@@ -172,7 +172,16 @@ class ChannelsView(ctk.CTkFrame):
         self.refresh_list()
 
     def save_channels(self) -> None:
-        self.app_controller.config_mgr.set_channels([ch.to_dict() for ch in self.channels])
+        self.app_controller.config_mgr.set_channels([ch.to_dict() for ch in self.channels], preserve_counters=True)
+        # Re-sync local watch_seconds with authoritative values from config_mgr
+        stored_counters = {
+            (c.get("name") or "").strip().lower().lstrip("@"): float(c.get("watch_seconds", 0.0) or 0.0)
+            for c in self.app_controller.config_mgr.get_channels() if isinstance(c, dict)
+        }
+        for ch in self.channels:
+            k = (ch.name or "").strip().lower().lstrip("@")
+            if k in stored_counters:
+                ch.watch_seconds = stored_counters[k]
         self.refresh_list()
         queue = self._queue_view()
         if queue is not None:
@@ -422,7 +431,13 @@ class ChannelsView(ctk.CTkFrame):
 
             try:
                 channel = Channel.parse(
-                    raw_name, raw_url, existing=candidates, enabled=target.enabled
+                    raw_name,
+                    raw_url,
+                    existing=candidates,
+                    enabled=target.enabled if is_editing else True,
+                    archived=target.archived if is_editing else False,
+                    watch_seconds=getattr(target, "watch_seconds", 0.0) if is_editing else 0.0,
+                    target_watch_seconds=getattr(target, "target_watch_seconds", 0.0) if is_editing else 0.0,
                 )
             except ValueError as exc:
                 messagebox.showerror("Error", str(exc), parent=modal)

@@ -608,9 +608,12 @@ def watch_video(
             emit(log_queue, "Watchtime interrupted by user.")
             return _result(False, "interrupted", interrupted=True)
 
-        if should_stop_callback is not None and should_stop_callback():
-            emit(log_queue, "Playback stopped: target channel was disabled/unchecked.")
-            return _result(False, "channel_disabled", interrupted=True)
+        if should_stop_callback is not None:
+            stop_reason = should_stop_callback()
+            if stop_reason:
+                reason_str = stop_reason if isinstance(stop_reason, str) else "channel_disabled"
+                emit(log_queue, f"Playback stopped: {reason_str.replace('_', ' ')}.")
+                return _result(False, reason_str, interrupted=True)
 
         # User-requested pause
         if pause_event is not None and pause_event.is_set():
@@ -625,9 +628,12 @@ def watch_video(
                 if stop_event is not None and stop_event.is_set():
                     emit(log_queue, "Watchtime interrupted by user while paused.")
                     return _result(False, "interrupted", interrupted=True)
-                if should_stop_callback is not None and should_stop_callback():
-                    emit(log_queue, "Playback stopped while paused: target channel was disabled/unchecked.")
-                    return _result(False, "channel_disabled", interrupted=True)
+                if should_stop_callback is not None:
+                    stop_reason = should_stop_callback()
+                    if stop_reason:
+                        reason_str = stop_reason if isinstance(stop_reason, str) else "channel_disabled"
+                        emit(log_queue, f"Playback stopped while paused: {reason_str.replace('_', ' ')}.")
+                        return _result(False, reason_str, interrupted=True)
                 time.sleep(0.5)
             pause_duration = max(0.0, time.time() - pause_start)
             started_at += pause_duration
