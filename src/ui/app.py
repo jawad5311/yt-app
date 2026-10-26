@@ -69,7 +69,7 @@ class YTBotApp(ctk.CTk):
         self.geometry("1100x700")
         self.minsize(950, 600)
 
-        self.apply_appearance_mode(self.config_mgr.get_setting("AppearanceMode", "Dark"))
+        self.apply_appearance_mode(self.config_mgr.get_setting("AppearanceMode", "Dark"), persist=False)
         ctk.set_default_color_theme("blue")
 
         self.log_file = init_logging()
@@ -256,12 +256,13 @@ class YTBotApp(ctk.CTk):
             else:
                 self.nav_buttons[view_name].configure(fg_color="transparent")
 
-    def apply_appearance_mode(self, mode: str) -> None:
+    def apply_appearance_mode(self, mode: str, persist: bool = True) -> None:
         """Apply and remember the appearance mode (Dark / Light / System)."""
         valid = ("Dark", "Light", "System")
-        ctk.set_appearance_mode(mode if mode in valid else "Dark")
-        if hasattr(self, "config_mgr") and self.config_mgr is not None:
-            self.config_mgr.set_setting("AppearanceMode", mode if mode in valid else "Dark")
+        selected_mode = mode if mode in valid else "Dark"
+        ctk.set_appearance_mode(selected_mode)
+        if persist and hasattr(self, "config_mgr") and self.config_mgr is not None:
+            self.config_mgr.set_setting("AppearanceMode", selected_mode)
 
     def on_accounts_changed(self, accounts: List[Account]):
         seen = set()

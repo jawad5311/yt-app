@@ -1,10 +1,13 @@
+import math
 from tkinter import messagebox
+from typing import Any, Dict
 
 import customtkinter as ctk
 
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS
 
 APPEARANCE_OPTIONS = ["Dark", "Light", "System"]
+QUALITY_OPTIONS = ["360p", "480p", "Random (360p / 480p)"]
 
 
 class SettingsView(ctk.CTkFrame):
@@ -118,7 +121,9 @@ class SettingsView(ctk.CTkFrame):
             font=ctk.CTkFont(weight="bold"),
         ).pack(anchor="w", padx=15, pady=(5, 2))
         self.cooldown_entry = ctk.CTkEntry(container, width=100)
-        self.cooldown_entry.insert(0, str(self.config_mgr.get_int("VideoCooldownHours", 12)))
+        cooldown_val = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+        cooldown_str = f"{cooldown_val:g}" if isinstance(cooldown_val, (int, float)) else str(cooldown_val)
+        self.cooldown_entry.insert(0, cooldown_str)
         self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # Natural Human Interactivity Simulation
@@ -209,70 +214,134 @@ class SettingsView(ctk.CTkFrame):
         ).pack(anchor="w", padx=15, pady=20)
 
     def save_settings(self):
-        self.config_mgr.set_setting("DirectLinkFallback", str(bool(self.fallback_switch.get())))
-        block_ads_val = str(bool(self.skip_ads_switch.get()))
-        self.config_mgr.set_setting("BlockAds", block_ads_val)
-        self.config_mgr.set_setting("SkipAds", block_ads_val)
+        validated: Dict[str, Any] = {}
 
+        # 1. Fallback switch
+        validated["DirectLinkFallback"] = bool(self.fallback_switch.get())
+
+        # 2. Skip ads / Block ads (compatibility aliases kept consistent)
+        skip_ads = bool(self.skip_ads_switch.get())
+        validated["BlockAds"] = skip_ads
+        validated["SkipAds"] = skip_ads
+
+        # 3. Parallel browsers (1 - 10)
+        raw_threads = self.threads_entry.get().strip()
         try:
-            max_ad = int(self.max_ad_entry.get().strip())
-            max_ad = max(0, min(3600, max_ad))
-            self.config_mgr.set_setting("MaxAdWatchSeconds", str(max_ad))
-        except ValueError:
-            messagebox.showerror("Error", "Max Ad Watch must be a valid integer (seconds).")
+            if not raw_threads or "." in raw_threads:
+                raise ValueError
+            threads_val = int(raw_threads)
+            if threads_val < 1 or threads_val > 10:
+                raise ValueError
+            validated["ParallelBrowsers"] = threads_val
+        except (ValueError, TypeError):
+            messagebox.showerror("Error", "Parallel Browsers count must be a valid integer between 1 and 10.")
             return
 
+        # 4. Default watch duration
+        selected_duration = self.duration_menu.get()
+        if selected_duration not in WATCHTIME_OPTIONS:
+            messagebox.showerror("Error", f"Default Watch Duration must be one of: {', '.join(WATCHTIME_OPTIONS)}.")
+            return
+        validated["WatchtimeDuration"] = selected_duration
+
+        # 5. Max ad watch (seconds, 0 - 3600, 0 = unlimited)
+        raw_max_ad = self.max_ad_entry.get().strip()
         try:
-            val = int(self.threads_entry.get().strip())
-            val = max(1, min(10, val))
-            self.config_mgr.set_setting("ParallelBrowsers", str(val))
-        except ValueError:
-            messagebox.showerror("Error", "Parallel Browsers count must be a valid integer.")
+            if not raw_max_ad or "." in raw_max_ad:
+                raise ValueError
+            max_ad_val = int(raw_max_ad)
+            if max_ad_val < 0 or max_ad_val > 3600:
+                raise ValueError
+            validated["MaxAdWatchSeconds"] = max_ad_val
+        except (ValueError, TypeError):
+            messagebox.showerror("Error", "Max Ad Watch must be a valid integer between 0 and 3600 seconds.")
             return
 
+        # 6. Full video timeout (minutes, 0 - 1440, 0 = unlimited)
+        raw_timeout = self.full_timeout_entry.get().strip()
         try:
-            timeout = int(self.full_timeout_entry.get().strip())
-            timeout = max(0, min(1440, timeout))
-            self.config_mgr.set_setting("FullVideoTimeoutMinutes", str(timeout))
-        except ValueError:
-            messagebox.showerror("Error", "Full Video timeout must be a valid integer (minutes).")
+            if not raw_timeout or "." in raw_timeout:
+                raise ValueError
+            timeout_val = int(raw_timeout)
+            if timeout_val < 0 or timeout_val > 1440:
+                raise ValueError
+            validated["FullVideoTimeoutMinutes"] = timeout_val
+        except (ValueError, TypeError):
+            messagebox.showerror("Error", "Full Video timeout must be a valid integer between 0 and 1440 minutes.")
             return
 
+        # 7. Stop buffer (seconds, 0 - 120, 0 = randomized 7-12s)
+        raw_buffer = self.stop_buffer_entry.get().strip()
         try:
-            buffer_val = int(self.stop_buffer_entry.get().strip())
-            buffer_val = max(0, min(120, buffer_val))
-            self.config_mgr.set_setting("AutoplayEndBufferSeconds", str(buffer_val))
-        except ValueError:
-            messagebox.showerror("Error", "Stop buffer must be a valid integer (seconds).")
+            if not raw_buffer or "." in raw_buffer:
+                raise ValueError
+            buffer_val = int(raw_buffer)
+            if buffer_val < 0 or buffer_val > 120:
+                raise ValueError
+            validated["AutoplayEndBufferSeconds"] = buffer_val
+        except (ValueError, TypeError):
+            messagebox.showerror("Error", "Stop buffer must be a valid integer between 0 and 120 seconds.")
             return
 
+        # 8. Video cooldown (hours, 0.0 - 8760.0, 0 = no cooldown)
+        raw_cooldown = self.cooldown_entry.get().strip()
         try:
-            cooldown_val = float(self.cooldown_entry.get().strip())
-            cooldown_val = max(0.0, min(8760.0, cooldown_val))
-            self.config_mgr.set_setting("VideoCooldownHours", str(cooldown_val))
-        except ValueError:
-            messagebox.showerror("Error", "Video Rewatch Cooldown must be a valid number (hours).")
+            if not raw_cooldown:
+                raise ValueError
+            cooldown_val = float(raw_cooldown)
+            if not math.isfinite(cooldown_val) or cooldown_val < 0.0 or cooldown_val > 8760.0:
+                raise ValueError
+            validated["VideoCooldownHours"] = int(cooldown_val) if cooldown_val.is_integer() else round(cooldown_val, 4)
+        except (ValueError, TypeError):
+            messagebox.showerror("Error", "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
             return
 
+        # 9. Automation loops (1 - 1000)
+        raw_loops = self.loop_entry.get().strip()
         try:
-            loop_val = int(self.loop_entry.get().strip())
-            loop_val = max(1, min(1000, loop_val))
-            self.config_mgr.set_setting("AutomationLoops", str(loop_val))
-        except ValueError:
-            messagebox.showerror("Error", "Automation Loops must be a valid positive integer.")
+            if not raw_loops or "." in raw_loops:
+                raise ValueError
+            loop_val = int(raw_loops)
+            if loop_val < 1 or loop_val > 1000:
+                raise ValueError
+            validated["AutomationLoops"] = loop_val
+        except (ValueError, TypeError):
+            messagebox.showerror("Error", "Automation Loops must be a valid positive integer between 1 and 1000.")
             return
 
-        self.config_mgr.set_setting("EnableHumanInteractivity", str(bool(self.interactivity_switch.get())))
-        self.config_mgr.set_setting("RandomScrolling", str(bool(self.scroll_switch.get())))
-        self.config_mgr.set_setting("VariableSpeed", "False")
-        self.config_mgr.set_setting("ToggleCaptions", str(bool(self.caption_switch.get())))
-        self.config_mgr.set_setting("AdjustQuality", str(bool(self.quality_switch.get())))
-        self.config_mgr.set_setting("QualityLevel", self.quality_menu.get())
-        self.config_mgr.set_setting("RandomMicroPauses", str(bool(self.micro_pause_switch.get())))
+        # 10. Interactivity switches
+        validated["EnableHumanInteractivity"] = bool(self.interactivity_switch.get())
+        validated["RandomScrolling"] = bool(self.scroll_switch.get())
+        validated["VariableSpeed"] = False
+        validated["ToggleCaptions"] = bool(self.caption_switch.get())
+        validated["AdjustQuality"] = bool(self.quality_switch.get())
 
-        self.config_mgr.set_setting("WatchtimeDuration", self.duration_menu.get())
-        self.config_mgr.set_setting("AppearanceMode", self.appearance_menu.get())
+        # 11. Quality level
+        valid_quality = QUALITY_OPTIONS
+        selected_quality = self.quality_menu.get()
+        if selected_quality not in valid_quality:
+            messagebox.showerror("Error", f"Target Quality must be one of: {', '.join(valid_quality)}.")
+            return
+        validated["QualityLevel"] = selected_quality
 
-        # Appearance applies immediately; other settings take effect from the next run.
-        self.app_controller.apply_appearance_mode(self.appearance_menu.get())
+        validated["RandomMicroPauses"] = bool(self.micro_pause_switch.get())
+
+        # 12. Appearance mode
+        selected_appearance = self.appearance_menu.get()
+        if selected_appearance not in APPEARANCE_OPTIONS:
+            messagebox.showerror("Error", f"Appearance Mode must be one of: {', '.join(APPEARANCE_OPTIONS)}.")
+            return
+        validated["AppearanceMode"] = selected_appearance
+
+        # Atomic commit to settings
+        try:
+            self.config_mgr.update_settings(validated)
+        except Exception as exc:
+            messagebox.showerror("Error", f"Failed to persist settings: {exc}")
+            return
+
+        # Apply appearance change only after persistence succeeds, avoiding a second hidden save
+        if hasattr(self.app_controller, "apply_appearance_mode"):
+            self.app_controller.apply_appearance_mode(selected_appearance, persist=False)
+
         messagebox.showinfo("Success", "Settings saved successfully!")

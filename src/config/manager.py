@@ -279,11 +279,11 @@ class ConfigManager:
         with self._lock:
             val = self.data.get("settings", {}).get(key, default)
             res = safe_int(val, default=default)
-            # Safety limits: timeout, parallel browsers, loops must not be <= 0
-            if key in ("FullVideoTimeoutMinutes", "ParallelBrowsers", "AutomationLoops"):
+            # Safety limits: parallel browsers and loops must not be <= 0
+            if key in ("ParallelBrowsers", "AutomationLoops"):
                 if res <= 0:
                     return default
-            elif key in ("VideoCooldownHours", "MaxAdWatchSeconds"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds"):
                 if res < 0:
                     return default
             return res
@@ -292,13 +292,31 @@ class ConfigManager:
         with self._lock:
             val = self.data.get("settings", {}).get(key, default)
             res = safe_float(val, default=default)
-            if key == "FullVideoTimeoutMinutes":
+            if key in ("ParallelBrowsers", "AutomationLoops"):
                 if res <= 0.0:
                     return default
-            elif key in ("VideoCooldownHours", "MaxAdWatchSeconds"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds"):
                 if res < 0.0:
                     return default
             return res
+
+    def update_settings(self, new_settings: Dict[str, Any]) -> None:
+        """Atomically update multiple settings in a single disk-persisted transaction.
+
+        Preserves existing queue tasks, channels, and counters without overwriting them.
+        Restores previous in-memory settings if disk persistence fails.
+        """
+        with self._lock:
+            if "settings" not in self.data or not isinstance(self.data["settings"], dict):
+                self.data["settings"] = {}
+            old_settings = dict(self.data["settings"])
+            try:
+                for k, v in new_settings.items():
+                    self.data["settings"][k] = v
+                self._save_unlocked()
+            except Exception:
+                self.data["settings"] = old_settings
+                raise
 
     def set_setting(self, key: str, value: Any) -> None:
         with self._lock:
