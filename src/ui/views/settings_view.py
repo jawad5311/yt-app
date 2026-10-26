@@ -111,6 +111,16 @@ class SettingsView(ctk.CTkFrame):
         self.loop_entry.insert(0, str(self.config_mgr.get_int("AutomationLoops", 1)))
         self.loop_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
+        # Video Rewatch Cooldown (hours)
+        ctk.CTkLabel(
+            container,
+            text="Video Rewatch Cooldown (hours, 0 = no cooldown):",
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(5, 2))
+        self.cooldown_entry = ctk.CTkEntry(container, width=100)
+        self.cooldown_entry.insert(0, str(self.config_mgr.get_int("VideoCooldownHours", 12)))
+        self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
         # Natural Human Interactivity Simulation
         ctk.CTkLabel(
             container,
@@ -234,6 +244,14 @@ class SettingsView(ctk.CTkFrame):
             self.config_mgr.set_setting("AutoplayEndBufferSeconds", str(buffer_val))
         except ValueError:
             messagebox.showerror("Error", "Stop buffer must be a valid integer (seconds).")
+            return
+
+        try:
+            cooldown_val = float(self.cooldown_entry.get().strip())
+            cooldown_val = max(0.0, min(8760.0, cooldown_val))
+            self.config_mgr.set_setting("VideoCooldownHours", str(cooldown_val))
+        except ValueError:
+            messagebox.showerror("Error", "Video Rewatch Cooldown must be a valid number (hours).")
             return
 
         try:

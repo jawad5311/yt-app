@@ -816,13 +816,15 @@ def watch_video(
                 )
 
         # Full Video safety timeout
-        if is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds:
-            emit(
-                log_queue,
-                f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.",
-                logging.WARNING,
-            )
-            return _result(True, "full_timeout")
+        if is_full_mode and full_timeout_seconds > 0:
+            effective_timeout = max(float(full_timeout_seconds), (video_duration + 120.0) if video_duration > 0 else float(full_timeout_seconds))
+            if elapsed >= effective_timeout:
+                emit(
+                    log_queue,
+                    f"Full video safety timeout reached ({int(effective_timeout)}s). Stopping watch.",
+                    logging.WARNING,
+                )
+                return _result(True, "full_timeout")
 
         # Fixed-duration budget
         if not is_full_mode and duration_seconds is not None:

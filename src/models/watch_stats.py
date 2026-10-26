@@ -6,7 +6,7 @@ a browser, a settings file or Tk.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from ..utils.helpers import extract_video_id
 from .video_task import VideoTask
@@ -92,6 +92,42 @@ def calculate_length_equivalent_runs(watch_seconds: float, duration_seconds: flo
     return int(watch_seconds // duration_seconds)
 
 
+from datetime import datetime
+
+
+def is_within_cooldown(
+    last_timestamp: Optional[str],
+    cooldown_hours: float,
+    current_time: Optional[datetime] = None,
+) -> Tuple[bool, float]:
+    """Check if a timestamp is within the cooldown window.
+
+    Args:
+        last_timestamp: ISO format string of when the video was last watched/completed.
+        cooldown_hours: Cooldown duration in hours (0 = disabled).
+        current_time: Optional reference datetime for deterministic testing.
+
+    Returns:
+        (is_in_cooldown, remaining_hours)
+    """
+    if not last_timestamp or cooldown_hours <= 0:
+        return False, 0.0
+
+    try:
+        last_dt = datetime.fromisoformat(last_timestamp)
+        now_dt = current_time or datetime.now()
+        elapsed_seconds = (now_dt - last_dt).total_seconds()
+        cooldown_seconds = cooldown_hours * 3600.0
+
+        if 0 <= elapsed_seconds < cooldown_seconds:
+            remaining_hours = (cooldown_seconds - elapsed_seconds) / 3600.0
+            return True, remaining_hours
+    except Exception:
+        pass
+
+    return False, 0.0
+
+
 @dataclass
 class StatRecord:
     """Aggregated lifetime counters for one video."""
@@ -106,6 +142,7 @@ class StatRecord:
     ad_seconds: float = 0.0
     last_run: str = ""
     last_result: str = ""
+    last_completed: str = ""
     # Video length/duration in seconds (detected from HTML5 player)
     video_duration: float = 0.0
     # Task-derived keys that resolve to this video (queue-card lookup alias).
@@ -153,10 +190,16 @@ class StatRecord:
             ad_seconds=_float("ad_seconds"),
             last_run=_str("last_run"),
             last_result=_str("last_result"),
+            last_completed=_str("last_completed"),
             video_duration=_float("video_duration"),
             task_keys=_str_list("task_keys"),
         )
         return rec
+
+    def is_on_cooldown(self, cooldown_hours: float, current_time: Optional[datetime] = None) -> Tuple[bool, float]:
+        """Check if this video record is currently within cooldown period."""
+        timestamp = self.last_completed or self.last_run
+        return is_within_cooldown(timestamp, cooldown_hours, current_time)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -170,6 +213,7 @@ class StatRecord:
             "ad_seconds": round(self.ad_seconds, 3),
             "last_run": self.last_run,
             "last_result": self.last_result,
+            "last_completed": self.last_completed,
             "video_duration": round(self.video_duration, 3),
             "task_keys": list(self.task_keys),
         }
@@ -199,6 +243,8 @@ class StatRecord:
         # video is later reassigned or deleted from the queue.
         self.channel = outcome.channel
         self.last_run = timestamp
+        if outcome.playback_finished or outcome.success:
+            self.last_completed = timestamp
         self.last_result = outcome.result
 
 

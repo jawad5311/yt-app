@@ -334,7 +334,8 @@ class AutomationWorker:
                         if self.dispatcher is not None:
                             self.dispatcher.release_task(task)
                         continue
-                    if not is_video_task_runnable(task, channel_objs, self.stats_store):
+                    cooldown_h = self.config_mgr.get_float('VideoCooldownHours', 12.0)
+                    if not is_video_task_runnable(task, channel_objs, self.stats_store, cooldown_hours=cooldown_h):
                         emit(
                             self.log_queue,
                             f"Skipping task '{task.title or task.keywords or task.url}': channel '{task.channel}' is unchecked/disabled.",

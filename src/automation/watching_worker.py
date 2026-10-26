@@ -1115,12 +1115,15 @@ class WatchingWorker:
         current_runs = 0
         watch_seconds = 0.0
         video_duration = 0.0
+        rec = None
         if self.stats_store:
             rec = self.stats_store.find_for_task(existing_task or temp_task) or self.stats_store.get(vid_key)
             if rec:
                 current_runs = rec.runs
                 watch_seconds = rec.watch_seconds
                 video_duration = rec.video_duration
+
+        cooldown_hours = self.config_mgr.get_float("VideoCooldownHours", 12.0)
 
         if existing_task is not None:
             # If manually disabled in queue
@@ -1137,6 +1140,13 @@ class WatchingWorker:
                 reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and watch_seconds / eff_dur >= existing_task.target_multiplier) else f"run limit ({current_runs}/{limit_disp} runs completed)"
                 return False, existing_task, f"already reached {reason}"
 
+            # Check cooldown before confirming eligibility
+            if rec and cooldown_hours > 0 and hasattr(rec, "is_on_cooldown"):
+                is_cool, remaining_hours = rec.is_on_cooldown(cooldown_hours)
+                if is_cool:
+                    rem_str = f"{remaining_hours:.1f}h" if remaining_hours >= 1.0 else f"{int(remaining_hours * 60)}m"
+                    return False, existing_task, f"within {cooldown_hours:g}h cooldown period ({rem_str} remaining)"
+
             limit_desc = f"max_views={existing_task.max_runs}" if existing_task.max_runs > 0 else "unlimited views"
             mult_desc = f"target={existing_task.target_multiplier:.1f}x" if existing_task.target_multiplier > 0 else "unlimited target"
             return True, existing_task, f"eligible ({current_runs}/{limit_disp} runs completed)"
@@ -1144,6 +1154,13 @@ class WatchingWorker:
         # 3. Not in queue, but check if stats_store has already recorded >= 3 runs
         if current_runs >= 3:
             return False, None, f"already reached run limit ({current_runs}/3 runs completed in stats)"
+
+        # Check cooldown for non-queue videos as well
+        if rec and cooldown_hours > 0 and hasattr(rec, "is_on_cooldown"):
+            is_cool, remaining_hours = rec.is_on_cooldown(cooldown_hours)
+            if is_cool:
+                rem_str = f"{remaining_hours:.1f}h" if remaining_hours >= 1.0 else f"{int(remaining_hours * 60)}m"
+                return False, None, f"within {cooldown_hours:g}h cooldown period ({rem_str} remaining)"
 
         return True, None, "new video (0/3 runs)"
 
@@ -1263,7 +1280,20 @@ class WatchingWorker:
         if not valid_candidates:
             return None
 
-        fresh = [c for c in valid_candidates if (extract_video_id(c.get("href", "")) or "") not in session_watched_keys]
+        cooldown_hours = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+        fresh = []
+        for c in valid_candidates:
+            v_id = extract_video_id(c.get("href", "")) or ""
+            if v_id in session_watched_keys:
+                continue
+            if self.stats_store and cooldown_hours > 0 and v_id:
+                rec_stat = self.stats_store.get(v_id)
+                if rec_stat and hasattr(rec_stat, "is_on_cooldown"):
+                    is_cool, _ = rec_stat.is_on_cooldown(cooldown_hours)
+                    if is_cool:
+                        continue
+            fresh.append(c)
+
         pool = fresh if fresh else valid_candidates
         return random.choice(pool)
 

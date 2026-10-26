@@ -31,6 +31,7 @@ class ConfigManager:
             "ParallelBrowsers": 1,
             "AppearanceMode": "Dark",
             "FullVideoTimeoutMinutes": 5,
+            "VideoCooldownHours": 12,
             "BlockAds": False,
             "SkipAds": True,
             "MaxAdWatchSeconds": 32,
@@ -164,6 +165,14 @@ class ConfigManager:
             val = self.data.get("settings", {}).get(key, default)
             try:
                 return int(val)
+            except (ValueError, TypeError):
+                return default
+
+    def get_float(self, key: str, default: float = 0.0) -> float:
+        with self._lock:
+            val = self.data.get("settings", {}).get(key, default)
+            try:
+                return float(val)
             except (ValueError, TypeError):
                 return default
 

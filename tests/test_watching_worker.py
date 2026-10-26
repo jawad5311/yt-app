@@ -339,6 +339,8 @@ class TestWatchingWorker:
         from src.models.video_task import VideoTask
         from src.models.watch_stats import TaskOutcome
 
+        worker.config_mgr.set_setting("VideoCooldownHours", "0")
+
         vid_new = "newvid12345"
         vid_stored = "oldvid12345"
         url_new = f"https://www.youtube.com/watch?v={vid_new}"

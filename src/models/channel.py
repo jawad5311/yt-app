@@ -155,22 +155,29 @@ def is_video_task_runnable(
     task: VideoTask,
     channels: Sequence[Channel],
     stats_store: Optional[Any] = None,
+    cooldown_hours: float = 0.0,
 ) -> bool:
     """Determine whether a video task is enabled and runnable for automation.
     A task runs only if:
     1. task.enabled is True
     2. (if assigned to a channel) the corresponding channel is enabled and not archived
     3. (if max_runs > 0 and stats_store is provided) current runs have not reached max_runs.
+    4. (if cooldown_hours > 0 and stats_store is provided) not within cooldown period.
     """
     if not task.enabled:
         return False
     if stats_store is not None:
         record = stats_store.find_for_task(task)
-        current_runs = record.runs if record is not None else 0
-        watch_sec = record.watch_seconds if record is not None else 0.0
-        v_dur = record.video_duration if record is not None else 0.0
-        if task.is_target_reached(current_runs, watch_sec, v_dur):
-            return False
+        if record is not None:
+            if cooldown_hours > 0 and hasattr(record, "is_on_cooldown"):
+                is_cool, _ = record.is_on_cooldown(cooldown_hours)
+                if is_cool:
+                    return False
+            current_runs = record.runs
+            watch_sec = record.watch_seconds
+            v_dur = record.video_duration
+            if task.is_target_reached(current_runs, watch_sec, v_dur):
+                return False
     if task.channel:
         for ch in channels:
             if ch.name.lower() == task.channel.lower():
