@@ -279,7 +279,9 @@ def test_watch_video_with_interactivity_disabled():
         enable_interactivity=False,
     )
     assert result.completed is True
-    assert result.reason == "ended"
+    # 95s has crossed the configured 90s cutoff for this 100s video.
+    assert result.reason == "completion_cutoff"
+    assert result.playback_finished is False
 
 
 def test_expand_video_description():
