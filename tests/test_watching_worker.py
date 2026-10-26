@@ -1154,3 +1154,13 @@ class TestAdSlotFiltering:
             # Falls back to safe direct navigation to the legitimate video URL
             mock_safe_get.assert_called_once()
             assert "targetvid12" in mock_safe_get.call_args[0][1]
+
+    def test_video_with_action_buttons_not_flagged_as_ad(self):
+        from src.automation.watching_worker import is_candidate_ad
+
+        item = {
+            "title": "How to match/adapt throttle in old Skoda",
+            "href": "/watch?v=umjVEhetrzA",
+            "channel_name": "Iamcarhacker",
+        }
+        assert is_candidate_ad(item) is False

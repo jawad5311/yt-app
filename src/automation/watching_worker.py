@@ -45,7 +45,7 @@ return (function() {
     var results = [];
     var seenUrls = {};
 
-    var AD_SELECTORS = [
+    var AD_CONTAINERS = [
         'ytd-ad-slot-renderer',
         'ytd-in-feed-ad-layout-renderer',
         'ad-slot-renderer',
@@ -57,24 +57,25 @@ return (function() {
         'ytd-promoted-video-renderer',
         'square-image-layout-view-model',
         'ad-image-view-model',
-        'feed-ad-metadata-view-model',
-        '[layout*="ad"]'
+        'feed-ad-metadata-view-model'
     ].join(', ');
 
     function isAdElement(el) {
         if (!el) return false;
-        if (el.closest && el.closest(AD_SELECTORS)) return true;
+        if (el.closest && el.closest(AD_CONTAINERS)) return true;
         if (el.querySelector && el.querySelector(
             'ad-badge-view-model, ad-image-view-model, feed-ad-metadata-view-model, ' +
-            '.ytBadgeShapeAd, .badge-style-type-ad, .badge-style-type-sponsored, ' +
-            '[aria-label*="Sponsored" i], [aria-label="Ad" i], [aria-label*="Advertisement" i]'
+            '.ytBadgeShapeAd, .ytwAdImageViewModelHostIsClickableAdComponent, ' +
+            '.badge-style-type-ad, .badge-style-type-sponsored, ' +
+            '[aria-label="Sponsored" i], [aria-label="Ad" i], [aria-label="Advertisement" i], ' +
+            '[aria-label*="Sponsored" i]'
         )) {
             return true;
         }
         var badges = el.querySelectorAll ? el.querySelectorAll('badge-shape, yt-badge-shape, ytd-badge-supported-renderer, .ytBadgeShapeText, span.badge-style-type-simple') : [];
         for (var b = 0; b < badges.length; b++) {
             var txt = (badges[b].textContent || '').trim().toLowerCase();
-            if (txt === 'ad' || txt === 'sponsored' || txt === 'promoted' || txt.indexOf('sponsored') !== -1) {
+            if (txt === 'ad' || txt === 'sponsored' || txt === 'promoted') {
                 return true;
             }
         }
@@ -94,7 +95,7 @@ return (function() {
         ) {
             return true;
         }
-        if (lower.indexOf('/watch?v=') === -1 && lower.indexOf('watch?v=') === -1 && lower.indexOf('/watch?') === -1) {
+        if (lower.indexOf('/watch') === -1 && lower.indexOf('watch?') === -1 && lower.indexOf('v=') === -1) {
             return true;
         }
         return false;
@@ -106,7 +107,7 @@ return (function() {
 
     function parseCard(card, idx) {
         if (!card) return null;
-        if (isAdElement(card) || (card.parentElement && isAdElement(card.parentElement))) {
+        if (isAdElement(card)) {
             return null;
         }
         // Explicitly skip Shorts shelves, reels, and slim-media shorts lockups
@@ -219,7 +220,7 @@ return (function() {
     var results = [];
     var seenUrls = {};
 
-    var AD_SELECTORS = [
+    var AD_CONTAINERS = [
         'ytd-ad-slot-renderer',
         'ytd-in-feed-ad-layout-renderer',
         'ad-slot-renderer',
@@ -231,24 +232,25 @@ return (function() {
         'ytd-promoted-video-renderer',
         'square-image-layout-view-model',
         'ad-image-view-model',
-        'feed-ad-metadata-view-model',
-        '[layout*="ad"]'
+        'feed-ad-metadata-view-model'
     ].join(', ');
 
     function isAdElement(el) {
         if (!el) return false;
-        if (el.closest && el.closest(AD_SELECTORS)) return true;
+        if (el.closest && el.closest(AD_CONTAINERS)) return true;
         if (el.querySelector && el.querySelector(
             'ad-badge-view-model, ad-image-view-model, feed-ad-metadata-view-model, ' +
-            '.ytBadgeShapeAd, .badge-style-type-ad, .badge-style-type-sponsored, ' +
-            '[aria-label*="Sponsored" i], [aria-label="Ad" i], [aria-label*="Advertisement" i]'
+            '.ytBadgeShapeAd, .ytwAdImageViewModelHostIsClickableAdComponent, ' +
+            '.badge-style-type-ad, .badge-style-type-sponsored, ' +
+            '[aria-label="Sponsored" i], [aria-label="Ad" i], [aria-label="Advertisement" i], ' +
+            '[aria-label*="Sponsored" i]'
         )) {
             return true;
         }
         var badges = el.querySelectorAll ? el.querySelectorAll('badge-shape, yt-badge-shape, ytd-badge-supported-renderer, .ytBadgeShapeText, span.badge-style-type-simple') : [];
         for (var b = 0; b < badges.length; b++) {
             var txt = (badges[b].textContent || '').trim().toLowerCase();
-            if (txt === 'ad' || txt === 'sponsored' || txt === 'promoted' || txt.indexOf('sponsored') !== -1) {
+            if (txt === 'ad' || txt === 'sponsored' || txt === 'promoted') {
                 return true;
             }
         }
@@ -268,7 +270,7 @@ return (function() {
         ) {
             return true;
         }
-        if (lower.indexOf('/watch?v=') === -1 && lower.indexOf('watch?v=') === -1 && lower.indexOf('/watch?') === -1) {
+        if (lower.indexOf('/watch') === -1 && lower.indexOf('watch?') === -1 && lower.indexOf('v=') === -1) {
             return true;
         }
         return false;
@@ -280,7 +282,7 @@ return (function() {
 
     function parseRecCard(card, idx) {
         if (!card) return null;
-        if (isAdElement(card) || (card.parentElement && isAdElement(card.parentElement))) {
+        if (isAdElement(card)) {
             return null;
         }
         // Explicitly skip Shorts shelves and lockups
@@ -399,7 +401,7 @@ def is_candidate_ad(item: Dict[str, Any]) -> bool:
         return True
     if any(ad_kw in href for ad_kw in ["googleadservices", "doubleclick", "/pagead/", "aclk", "ad_type", "googleads"]):
         return True
-    if not ("/watch?v=" in href or "watch?v=" in href or "/watch?" in href):
+    if not ("/watch" in href or "v=" in href):
         return True
     title = (item.get("title") or "").strip().lower()
     if title.startswith("sponsored") or title.startswith("ad ") or title == "ad":
@@ -768,7 +770,7 @@ class WatchingWorker:
                 is_ad = self.driver.execute_script(r"""
                     var el = arguments[0];
                     if (!el) return true;
-                    return !!(el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]') ||
+                    return !!(el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, square-image-layout-view-model') ||
                               el.querySelector('ad-badge-view-model, feed-ad-metadata-view-model, .ytBadgeShapeAd'));
                 """, item)
                 if not is_ad:
@@ -820,7 +822,7 @@ class WatchingWorker:
                         is_ad_lk = self.driver.execute_script(r"""
                             var el = arguments[0];
                             if (!el) return true;
-                            return !!el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]');
+                            return !!el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, square-image-layout-view-model');
                         """, lk)
                         if is_ad_lk:
                             continue
@@ -905,7 +907,7 @@ class WatchingWorker:
                 is_ad = self.driver.execute_script(r"""
                     var el = arguments[0];
                     if (!el) return true;
-                    return !!(el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]') ||
+                    return !!(el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, square-image-layout-view-model') ||
                               el.querySelector('ad-badge-view-model, feed-ad-metadata-view-model, .ytBadgeShapeAd'));
                 """, item)
                 if not is_ad:
@@ -961,7 +963,7 @@ class WatchingWorker:
                         is_ad_lk = self.driver.execute_script(r"""
                             var el = arguments[0];
                             if (!el) return true;
-                            return !!el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]');
+                            return !!el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, square-image-layout-view-model');
                         """, lk)
                         if is_ad_lk:
                             continue
