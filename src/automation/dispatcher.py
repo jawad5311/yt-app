@@ -27,6 +27,8 @@ class TaskDispatcher:
         self._condition = threading.Condition(self._lock)
         # Video keys currently being played by active workers
         self._currently_playing_keys: Set[str] = set()
+        # Video keys excluded from further execution in this session (e.g. due to persistence failure)
+        self._excluded_video_keys: Set[str] = set()
         # Remaining tasks per worker (worker_id -> List[VideoTask])
         self._worker_queues: Dict[int, List[VideoTask]] = {}
 
@@ -66,19 +68,25 @@ class TaskDispatcher:
                 if not queue:
                     return None
 
-                # Drop any tasks that reached their run limit
-                if self.stats_store is not None:
-                    filtered_queue = []
-                    for t in queue:
-                        if t.max_runs > 0:
-                            rec = self.stats_store.find_for_task(t)
-                            if rec is not None and rec.runs >= t.max_runs:
+                # Drop any tasks that reached their run limit, target multiplier, or were excluded
+                filtered_queue = []
+                for t in queue:
+                    v_key = resolve_video_key(t)
+                    if v_key in self._excluded_video_keys:
+                        continue
+                    if self.stats_store is not None:
+                        rec = self.stats_store.find_for_task(t)
+                        if rec is not None:
+                            c_runs = rec.runs
+                            w_sec = rec.watch_seconds
+                            v_dur = (rec.video_duration if rec.video_duration > 0 else 0.0) or getattr(t, "duration_seconds", 0.0)
+                            if t.is_target_reached(c_runs, w_sec, v_dur):
                                 continue
-                        filtered_queue.append(t)
-                    queue = filtered_queue
-                    self._worker_queues[worker_id] = queue
-                    if not queue:
-                        return None
+                    filtered_queue.append(t)
+                queue = filtered_queue
+                self._worker_queues[worker_id] = queue
+                if not queue:
+                    return None
 
                 # Find candidate video not currently being played
                 chosen_idx: Optional[int] = None
@@ -103,6 +111,22 @@ class TaskDispatcher:
         with self._condition:
             v_key = resolve_video_key(task)
             self._currently_playing_keys.discard(v_key)
+            self._condition.notify_all()
+
+    def exclude_video_key(self, video_key: str, reason: str = "") -> None:
+        """Exclude a video from all workers for the remainder of the session."""
+        with self._condition:
+            self._excluded_video_keys.add(video_key)
+            self._currently_playing_keys.discard(video_key)
+            self._condition.notify_all()
+
+    def is_video_excluded(self, video_key: str) -> bool:
+        with self._condition:
+            return video_key in self._excluded_video_keys
+
+    def wake_all(self) -> None:
+        """Wake up any workers currently waiting on the condition."""
+        with self._condition:
             self._condition.notify_all()
 
     def get_remaining_count(self, worker_id: int) -> int:

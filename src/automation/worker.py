@@ -378,7 +378,11 @@ class AutomationWorker:
         try:
             self.stats_store.record(outcome)
         except Exception as exc:
-            emit(self.log_queue, f"Could not record watch statistics: {exc}", logging.WARNING)
+            emit(self.log_queue, f"Could not record watch statistics: {exc}", logging.ERROR)
+            if self.dispatcher is not None:
+                key = outcome.video_key or outcome.task_key
+                self.dispatcher.exclude_video_key(key, reason=str(exc))
+            raise
 
     # -------------------------------------------------------------------- run
 
@@ -484,15 +488,17 @@ class AutomationWorker:
 
                 try:
                     outcome = self._run_task(task, direct_link_fallback)
+                    if outcome.success:
+                        succeeded += 1
+                    try:
+                        self._record(outcome)
+                    except Exception as rec_exc:
+                        emit(self.log_queue, f"Persistence error for task '{task.title or task.keywords or task.url}': {rec_exc}. Video excluded.", logging.ERROR)
+                    processed += 1
+                    self._report_progress(processed, total)
                 finally:
                     if self.dispatcher is not None:
                         self.dispatcher.release_task(task)
-
-                processed += 1
-                if outcome.success:
-                    succeeded += 1
-                self._record(outcome)
-                self._report_progress(processed, total)
 
                 if self.stop_event.is_set():
                     emit(self.log_queue, "Automation stopped by user.")
@@ -517,5 +523,7 @@ class AutomationWorker:
     def stop(self) -> None:
         """Stop worker execution."""
         self.stop_event.set()
+        if self.dispatcher is not None:
+            self.dispatcher.wake_all()
         if hasattr(self, "channel_tracker"):
             self.channel_tracker.on_stop()
