@@ -676,11 +676,10 @@ class QueueView(ctk.CTkFrame):
         on_move_down: Optional[Callable[[], None]] = None,
     ):
         """Build a single video card; ``index`` is the task's real queue index."""
-        card = ctk.CTkFrame(parent, corner_radius=6)
-        card.grid_columnconfigure(0, weight=0)
-        card.grid_columnconfigure(1, weight=0)
-        card.grid_columnconfigure(2, weight=1)
-        card.grid_columnconfigure(3, weight=0)
+        # Outer row wrapper: places reorder buttons outside the video box
+        row_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        row_frame.grid_columnconfigure(0, weight=0)
+        row_frame.grid_columnconfigure(1, weight=1)
 
         def _toggle_task():
             new_state = bool(task_chk.get())
@@ -700,35 +699,42 @@ class QueueView(ctk.CTkFrame):
             self.save_queue()
             self.refresh_list()
 
-        # Reorder up / down arrows stacked on top of each other at left of checkbox
-        reorder_frame = ctk.CTkFrame(card, fg_color="transparent")
-        reorder_frame.grid(row=0, column=0, rowspan=2, padx=(8, 2), pady=6, sticky="ns")
+        # Reorder up / down arrows stacked on top of each other OUTSIDE the video box
+        reorder_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+        reorder_frame.grid(row=0, column=0, padx=(2, 6), sticky="")
 
         ctk.CTkButton(
             reorder_frame,
             text="▲",
-            width=20,
-            height=16,
+            width=18,
+            height=14,
             corner_radius=3,
-            font=ctk.CTkFont(size=9, weight="bold"),
-            fg_color="#374151" if can_move_up else "gray30",
-            hover_color="#4B5563" if can_move_up else "gray30",
+            font=ctk.CTkFont(size=8, weight="bold"),
+            fg_color="#374151" if can_move_up else "gray25",
+            hover_color="#4B5563" if can_move_up else "gray25",
             state="normal" if can_move_up else "disabled",
             command=on_move_up,
-        ).pack(side="top", pady=(2, 2))
+        ).pack(side="top", pady=(0, 2))
 
         ctk.CTkButton(
             reorder_frame,
             text="▼",
-            width=20,
-            height=16,
+            width=18,
+            height=14,
             corner_radius=3,
-            font=ctk.CTkFont(size=9, weight="bold"),
-            fg_color="#374151" if can_move_down else "gray30",
-            hover_color="#4B5563" if can_move_down else "gray30",
+            font=ctk.CTkFont(size=8, weight="bold"),
+            fg_color="#374151" if can_move_down else "gray25",
+            hover_color="#4B5563" if can_move_down else "gray25",
             state="normal" if can_move_down else "disabled",
             command=on_move_down,
-        ).pack(side="bottom", pady=(2, 2))
+        ).pack(side="bottom", pady=(2, 0))
+
+        # The video box itself
+        card = ctk.CTkFrame(row_frame, corner_radius=6)
+        card.grid(row=0, column=1, sticky="ew")
+        card.grid_columnconfigure(0, weight=0)  # Checkbox
+        card.grid_columnconfigure(1, weight=1)  # Details
+        card.grid_columnconfigure(2, weight=0)  # Action entries & delete button
 
         task_chk = ctk.CTkCheckBox(
             card,
@@ -742,7 +748,7 @@ class QueueView(ctk.CTkFrame):
         else:
             task_chk.deselect()
 
-        task_chk.grid(row=0, column=1, rowspan=2, padx=(2, 4), pady=10, sticky="w")
+        task_chk.grid(row=0, column=0, rowspan=2, padx=(10, 4), pady=10, sticky="w")
 
         # Lifetime watch statistics for this video (recorded runs only).
         store = self._stats()
@@ -798,7 +804,7 @@ class QueueView(ctk.CTkFrame):
             anchor="w",
             text_color=("gray50", "gray50") if (not task.enabled or not channel_enabled or is_limit_reached) else None,
         )
-        lbl.grid(row=0, column=2, padx=10, pady=(10, 0), sticky="ew")
+        lbl.grid(row=0, column=1, padx=10, pady=(10, 0), sticky="ew")
 
         stats_lbl = ctk.CTkLabel(
             card,
@@ -808,11 +814,11 @@ class QueueView(ctk.CTkFrame):
             anchor="w",
             text_color=("gray40", "gray60"),
         )
-        stats_lbl.grid(row=1, column=2, padx=10, pady=(2, 6 if (task.max_runs > 0 or getattr(task, "target_multiplier", 0.0) > 0) else 10), sticky="ew")
+        stats_lbl.grid(row=1, column=1, padx=10, pady=(2, 6 if (task.max_runs > 0 or getattr(task, "target_multiplier", 0.0) > 0) else 10), sticky="ew")
 
         # Action Buttons Frame (Fixed to column 3 on the right edge)
         action_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        action_btn_frame.grid(row=0, column=3, rowspan=2, padx=10, pady=10, sticky="e")
+        action_btn_frame.grid(row=0, column=2, rowspan=2, padx=10, pady=10, sticky="e")
 
         ctk.CTkLabel(action_btn_frame, text="Target:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 2))
         target_entry = ctk.CTkEntry(
@@ -970,6 +976,6 @@ class QueueView(ctk.CTkFrame):
                 fg_color=("gray85", "gray26"),
             )
             bar.set(ratio)
-            bar.grid(row=2, column=0, columnspan=4, sticky="ew", padx=12, pady=(0, 8))
+            bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 8))
 
-        return card
+        return row_frame

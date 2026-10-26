@@ -86,3 +86,39 @@ def test_queue_card_inline_entries_behavior():
         assert task.max_runs == 0
         assert view.save_queue.call_count == 4
         assert "0 (unlimited)" in view.show_popup_notification.call_args[0][1]
+
+
+def test_reorder_buttons_outside_card_frame():
+    view = QueueView.__new__(QueueView)
+    view.app_controller = MagicMock()
+    view.save_queue = MagicMock()
+    view.refresh_list = MagicMock()
+    view._stats = MagicMock(return_value=None)
+
+    task = VideoTask(title="Test Video", url="https://youtube.com/watch?v=123")
+
+    with patch("customtkinter.CTkCheckBox"),          patch("customtkinter.CTkLabel"),          patch("customtkinter.CTkFrame") as mock_frame_cls,          patch("customtkinter.CTkButton") as mock_btn_cls,          patch("customtkinter.CTkProgressBar"),          patch("customtkinter.CTkFont"),          patch("customtkinter.CTkEntry"):
+
+        mock_parent = MagicMock()
+        mock_row_frame = MagicMock()
+        mock_reorder_frame = MagicMock()
+        mock_card_frame = MagicMock()
+        mock_action_frame = MagicMock()
+        mock_frame_cls.side_effect = [mock_row_frame, mock_reorder_frame, mock_card_frame, mock_action_frame]
+
+        result = view._build_task_card(mock_parent, index=0, position=1, task=task, channel_enabled=True)
+
+        # The returned widget is the outer row frame
+        assert result == mock_row_frame
+
+        # Verify buttons were created inside reorder_frame with compact size (<= 18x14)
+        btn_calls = mock_btn_cls.call_args_list
+        assert len(btn_calls) >= 2
+        up_btn_kwargs = btn_calls[0][1]
+        down_btn_kwargs = btn_calls[1][1]
+        assert btn_calls[0][0][0] == mock_reorder_frame
+        assert btn_calls[1][0][0] == mock_reorder_frame
+        assert up_btn_kwargs.get("width") <= 18
+        assert up_btn_kwargs.get("height") <= 14
+        assert down_btn_kwargs.get("width") <= 18
+        assert down_btn_kwargs.get("height") <= 14
