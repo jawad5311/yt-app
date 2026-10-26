@@ -310,10 +310,21 @@ class YTBotApp(ctk.CTk):
             )
             return
 
-        # Read loop count from dashboard entry and persist
+        # Read queue pass count from dashboard entry and persist
         total_loops = 1
-        if "dashboard" in self.views and hasattr(self.views["dashboard"], "get_loop_count"):
-            total_loops = self.views["dashboard"].get_loop_count()
+        dashboard = self.views.get("dashboard")
+        if dashboard is not None:
+            try:
+                if hasattr(dashboard, "get_queue_passes"):
+                    total_loops = dashboard.get_queue_passes()
+                elif hasattr(dashboard, "get_loop_count"):
+                    total_loops = dashboard.get_loop_count()
+            except ValueError as err:
+                emit(self.log_queue, str(err), logging.ERROR)
+                if hasattr(dashboard, "set_status"):
+                    dashboard.set_status(str(err), "error")
+                return
+
         self.config_mgr.set_setting("AutomationLoops", str(total_loops))
 
         self.is_running = True
@@ -514,14 +525,34 @@ class YTBotApp(ctk.CTk):
         self.views["dashboard"].reset_progress()
         self.views["dashboard"].set_status("Starting watch session...", "info")
 
-        total_loops = 1
-        if "dashboard" in self.views and hasattr(self.views["dashboard"], "get_loop_count"):
-            total_loops = self.views["dashboard"].get_loop_count()
+        dashboard = self.views.get("dashboard")
+        browsing_limit = 1
+        is_unlimited = False
+        if dashboard is not None and hasattr(dashboard, "get_browsing_limit"):
+            try:
+                browsing_limit, is_unlimited = dashboard.get_browsing_limit()
+            except ValueError as err:
+                self.is_running = False
+                self.current_mode = "idle"
+                emit(self.log_queue, str(err), logging.ERROR)
+                if hasattr(dashboard, "set_status"):
+                    dashboard.set_status(str(err), "error")
+                if hasattr(dashboard, "set_running_state"):
+                    dashboard.set_running_state(False)
+                return
+        else:
+            is_unlimited = self.config_mgr.get_bool("BrowsingUnlimited", False)
+            browsing_limit = None if is_unlimited else self.config_mgr.get_int("BrowsingTargetLimit", 1)
+
+        self.config_mgr.update_settings({
+            "BrowsingUnlimited": is_unlimited,
+            "BrowsingTargetLimit": browsing_limit if browsing_limit is not None else 1,
+        })
 
         try:
             self.session_manager_thread = threading.Thread(
                 target=self._run_watching_session,
-                args=(self.loaded_accounts[0], active_channels, total_loops, session_id),
+                args=(self.loaded_accounts[0], active_channels, browsing_limit, is_unlimited, session_id),
                 daemon=True,
             )
             self.session_manager_thread.start()
@@ -539,7 +570,14 @@ class YTBotApp(ctk.CTk):
                 except Exception:
                     pass
 
-    def _run_watching_session(self, account: Account, channels: List[Channel], total_loops: int = 1, session_id: int = 0):
+    def _run_watching_session(
+        self,
+        account: Account,
+        channels: List[Channel],
+        browsing_limit: Optional[int] = 1,
+        is_unlimited: bool = False,
+        session_id: int = 0,
+    ):
         """Execute the continuous watching recommendation session."""
         session_event_queue = SessionEventQueue(self.event_queue, session_id)
         session_error: Optional[str] = None
@@ -554,7 +592,8 @@ class YTBotApp(ctk.CTk):
                 event_queue=session_event_queue,
                 stats_store=self.stats_store,
                 pause_event=self.pause_event,
-                total_loops=total_loops,
+                target_limit=browsing_limit,
+                is_unlimited=is_unlimited,
                 open_videos=True,
             )
             self.active_workers.append(worker)
@@ -649,7 +688,8 @@ class YTBotApp(ctk.CTk):
             self.worker_progress[worker_id] = (done, total)
             done_sum = sum(d for d, _ in self.worker_progress.values())
             total_sum = sum(t for _, t in self.worker_progress.values())
-            self.views["dashboard"].set_progress(done_sum, total_sum)
+            mode = getattr(self, "current_mode", "automation")
+            self.views["dashboard"].set_progress(done_sum, total_sum, mode=mode)
             # Watch counters are written when a task finishes: repaint them.
             self.refresh_watch_stats()
         elif kind == "add_video_task" and len(event) == 2:

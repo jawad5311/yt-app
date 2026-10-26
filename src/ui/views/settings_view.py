@@ -114,6 +114,26 @@ class SettingsView(ctk.CTkFrame):
         self.loop_entry.insert(0, str(self.config_mgr.get_int("AutomationLoops", 1)))
         self.loop_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
+        # Default Browsing Target Limit (1-1000)
+        ctk.CTkLabel(
+            container,
+            text="Default Browsing Target Limit (target videos per session, 1-1000):",
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(5, 2))
+        self.browsing_limit_entry = ctk.CTkEntry(container, width=100)
+        self.browsing_limit_entry.insert(0, str(self.config_mgr.get_int("BrowsingTargetLimit", 1)))
+        self.browsing_limit_entry.pack(anchor="w", padx=15, pady=(0, 6))
+
+        self.browsing_unlimited_switch = ctk.CTkSwitch(
+            container,
+            text="Default Browsing Unlimited (run until stopped or targets achieved)",
+        )
+        if self.config_mgr.get_bool("BrowsingUnlimited", False):
+            self.browsing_unlimited_switch.select()
+        else:
+            self.browsing_unlimited_switch.deselect()
+        self.browsing_unlimited_switch.pack(anchor="w", padx=15, pady=(0, 15))
+
         # Video Rewatch Cooldown (hours)
         ctk.CTkLabel(
             container,
@@ -309,7 +329,24 @@ class SettingsView(ctk.CTkFrame):
             messagebox.showerror("Error", "Automation Loops must be a valid positive integer between 1 and 1000.")
             return
 
-        # 10. Interactivity switches
+        # 10. Browsing target limit (1 - 1000) & Unlimited
+        if hasattr(self, "browsing_limit_entry"):
+            raw_browsing = self.browsing_limit_entry.get().strip()
+            try:
+                if not raw_browsing or "." in raw_browsing:
+                    raise ValueError
+                browsing_val = int(raw_browsing)
+                if browsing_val < 1 or browsing_val > 1000:
+                    raise ValueError
+                validated["BrowsingTargetLimit"] = browsing_val
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "Browsing Target Limit must be a valid positive integer between 1 and 1000.")
+                return
+
+        if hasattr(self, "browsing_unlimited_switch"):
+            validated["BrowsingUnlimited"] = bool(self.browsing_unlimited_switch.get())
+
+        # 11. Interactivity switches
         validated["EnableHumanInteractivity"] = bool(self.interactivity_switch.get())
         validated["RandomScrolling"] = bool(self.scroll_switch.get())
         validated["VariableSpeed"] = False

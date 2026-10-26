@@ -526,7 +526,9 @@ class WatchingWorker:
         event_queue: Optional[queue.Queue] = None,
         stats_store: Optional[StatsStore] = None,
         pause_event: Optional[threading.Event] = None,
-        total_loops: int = 1,
+        total_loops: Optional[int] = None,
+        target_limit: Optional[int] = None,
+        is_unlimited: bool = False,
         open_videos: bool = True,
     ):
         self.account = account
@@ -537,7 +539,29 @@ class WatchingWorker:
         self.pause_event = pause_event or threading.Event()
         self.event_queue = event_queue
         self.stats_store = stats_store
-        self.total_loops = max(1, total_loops)
+
+        if is_unlimited:
+            self.is_unlimited = True
+            self.target_limit = None
+        elif target_limit is not None:
+            self.is_unlimited = False
+            self.target_limit = max(1, target_limit)
+        elif total_loops is not None:
+            self.is_unlimited = False
+            self.target_limit = max(1, total_loops)
+        else:
+            unl = self.config_mgr.get_bool("BrowsingUnlimited", False) if self.config_mgr else False
+            if unl:
+                self.is_unlimited = True
+                self.target_limit = None
+            else:
+                lim = self.config_mgr.get_int("BrowsingTargetLimit", 1) if self.config_mgr else 1
+                self.is_unlimited = False
+                self.target_limit = max(1, lim)
+
+        self.total_loops = self.target_limit if not self.is_unlimited else 1
+        self.target_attempts = 0
+        self.watched_count = 0
         self.open_videos = open_videos
         self.driver: Any = None
         self.skip_ads = True
@@ -1371,15 +1395,22 @@ class WatchingWorker:
             )
         return watched_ok
 
+    def _is_target_limit_reached(self, target_attempts: int) -> bool:
+        if self.is_unlimited:
+            return False
+        if self.target_limit is None:
+            return False
+        return target_attempts >= self.target_limit
+
     def _after_target_video_watched(
         self,
         session_watched_keys: Set[str],
-        watched_count: int,
+        target_attempts: int,
     ) -> bool:
         """Execute Option 5: watch a non-target suggested video (30-90s) before seeking the next target video."""
         if self.stop_event.is_set():
             return False
-        if self.total_loops > 1 and watched_count >= self.total_loops:
+        if self._is_target_limit_reached(target_attempts):
             return False
 
         active_channels = self.get_target_channels()
@@ -1762,12 +1793,14 @@ class WatchingWorker:
                 return
 
             session_watched_keys: Set[str] = set()
-            watched_count = 0
+            target_attempts = 0
+            self.target_attempts = 0
+            self.watched_count = 0
             last_watched_channel: Optional[str] = None
 
             while not self.stop_event.is_set():
-                if self.total_loops > 1 and watched_count >= self.total_loops:
-                    emit(self.log_queue, f"Reached configured limit of {self.total_loops} video(s).")
+                if self._is_target_limit_reached(target_attempts):
+                    emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
                     break
 
                 self.check_pause()
@@ -1800,14 +1833,29 @@ class WatchingWorker:
 
                     if target_match:
                         item, match_obj, full_url, title, ch_display = target_match
-                        watch_res = self._play_target_video(
-                            item, full_url, title, ch_display, session_watched_keys, is_home=False
-                        )
+                        if self._is_target_limit_reached(target_attempts):
+                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
+                            break
+
+                        target_attempts += 1
+                        self.target_attempts = target_attempts
+                        self.watched_count = target_attempts
+                        prog_total = self.target_limit if not self.is_unlimited else 0
+                        self._emit_event(("progress", 0, target_attempts, prog_total))
+
+                        try:
+                            watch_res = self._play_target_video(
+                                item, full_url, title, ch_display, session_watched_keys, is_home=False
+                            )
+                        except Exception:
+                            raise
                         last_watched_channel = ch_display
-                        watched_count += 1
-                        self._emit_event(("progress", 0, watched_count, max(watched_count, self.total_loops)))
 
                         if self.stop_event.is_set():
+                            break
+
+                        if self._is_target_limit_reached(target_attempts):
+                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
                             break
 
                         if watch_res.interrupted:
@@ -1820,7 +1868,7 @@ class WatchingWorker:
                             continue
 
                         # Option 5: Interleave a 30-90s non-target video before next target video
-                        self._after_target_video_watched(session_watched_keys, watched_count)
+                        self._after_target_video_watched(session_watched_keys, target_attempts)
                         continue
 
                     # If no target video found in suggestions:
@@ -1877,19 +1925,34 @@ class WatchingWorker:
                         sub_target = self._find_target_video(rec_candidates, allowed_now, session_watched_keys)
                         if sub_target:
                             item, match_obj, full_url, title, ch_display = sub_target
+                            if self._is_target_limit_reached(target_attempts):
+                                emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
+                                break
+
+                            target_attempts += 1
+                            self.target_attempts = target_attempts
+                            self.watched_count = target_attempts
+                            prog_total = self.target_limit if not self.is_unlimited else 0
+                            self._emit_event(("progress", 0, target_attempts, prog_total))
+
                             emit(
                                 self.log_queue,
                                 f"Found target channel video after random video attempt {random_attempt}/3:",
                             )
-                            watch_res = self._play_target_video(
-                                item, full_url, title, ch_display, session_watched_keys, is_home=False
-                            )
+                            try:
+                                watch_res = self._play_target_video(
+                                    item, full_url, title, ch_display, session_watched_keys, is_home=False
+                                )
+                            except Exception:
+                                raise
                             last_watched_channel = ch_display
-                            watched_count += 1
-                            self._emit_event(("progress", 0, watched_count, max(watched_count, self.total_loops)))
                             found_target_via_random = True
 
                             if self.stop_event.is_set():
+                                break
+
+                            if self._is_target_limit_reached(target_attempts):
+                                emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
                                 break
 
                             if watch_res.interrupted:
@@ -1902,7 +1965,7 @@ class WatchingWorker:
                                 break
 
                             # Option 5: Interleave a 30-90s non-target video before next target video
-                            self._after_target_video_watched(session_watched_keys, watched_count)
+                            self._after_target_video_watched(session_watched_keys, target_attempts)
                             break
                         else:
                             emit(
@@ -2014,16 +2077,31 @@ class WatchingWorker:
 
                     if matched_home_item:
                         item, match_obj, full_url, title, ch_display = matched_home_item
+                        if self._is_target_limit_reached(target_attempts):
+                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
+                            break
+
+                        target_attempts += 1
+                        self.target_attempts = target_attempts
+                        self.watched_count = target_attempts
+                        prog_total = self.target_limit if not self.is_unlimited else 0
+                        self._emit_event(("progress", 0, target_attempts, prog_total))
+
                         emit(self.log_queue, "Found target channel video on Home page:")
-                        watch_res = self._play_target_video(
-                            item, full_url, title, ch_display, session_watched_keys, is_home=True
-                        )
+                        try:
+                            watch_res = self._play_target_video(
+                                item, full_url, title, ch_display, session_watched_keys, is_home=True
+                            )
+                        except Exception:
+                            raise
                         last_watched_channel = ch_display
-                        watched_count += 1
-                        self._emit_event(("progress", 0, watched_count, max(watched_count, self.total_loops)))
                         found_home_target = True
 
                         if self.stop_event.is_set():
+                            break
+
+                        if self._is_target_limit_reached(target_attempts):
+                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
                             break
 
                         if watch_res.interrupted:
@@ -2036,7 +2114,7 @@ class WatchingWorker:
                             continue
 
                         # Option 5: Interleave a 30-90s non-target video before next target video
-                        self._after_target_video_watched(session_watched_keys, watched_count)
+                        self._after_target_video_watched(session_watched_keys, target_attempts)
                         break
                     else:
                         emit(
@@ -2058,7 +2136,7 @@ class WatchingWorker:
 
                 continue
 
-            summary = f"Watching session finished: watched {watched_count} video(s)."
+            summary = f"Browsing session finished: attempted {target_attempts} target video(s)."
             emit(self.log_queue, summary)
             self._report_status(summary, "info")
 
