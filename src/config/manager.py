@@ -27,6 +27,11 @@ class CorruptCredentialsError(ConfigurationError):
     pass
 
 
+class CredentialConflictError(ConfigurationError):
+    """Raised when account migration detects conflicting credentials for the same identifier."""
+    pass
+
+
 def safe_float(val: Any, default: float = 0.0, min_val: Optional[float] = None, max_val: Optional[float] = None) -> float:
     if val is None:
         return default
@@ -222,6 +227,7 @@ class ConfigManager:
             if removed or channels_changed:
                 self._save_unlocked()
 
+
     @staticmethod
     def _sanitize_channels(raw: Any) -> List[Dict[str, Any]]:
         """Drop unusable channel entries and duplicate names coming from disk."""
@@ -308,44 +314,129 @@ class ConfigManager:
                     self.data["settings"].pop(key, None)
                 raise
 
-    def get_accounts(self) -> List[Dict[str, str]]:
-        """Return account credentials from the separate local credentials file."""
-        with self._lock:
-            if self.credentials_file.exists():
-                try:
-                    with open(self.credentials_file, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    loaded = json.loads(content)
-                    if not isinstance(loaded, dict):
-                        raise ValueError(f"Root of credentials file {self.credentials_file.name} is {type(loaded).__name__}, expected object")
-                    accounts = loaded.get("accounts")
-                    if not isinstance(accounts, list):
-                        raise ValueError(f"'accounts' in {self.credentials_file.name} must be a list")
-                    self.is_credentials_corrupt = False
-                    self.credentials_load_error = None
-                    return [
-                        {"email": str(a.get("email") or ""), "password": str(a.get("password") or "")}
-                        for a in accounts if isinstance(a, dict) and a.get("email")
-                    ]
-                except Exception as exc:
-                    self.is_credentials_corrupt = True
-                    self.credentials_load_error = f"Malformed credentials file {self.credentials_file.name}: {exc}"
-                    logging.error(self.credentials_load_error)
-                    # Do not fall through or overwrite credentials file!
-                    raise CorruptCredentialsError(self.credentials_load_error)
+    def migrate_credentials(self) -> None:
+        """Explicit, ordered, idempotent migration of legacy accounts in settings to credentials.json."""
+        dest_accounts: List[Dict[str, str]] = []
+        if self.credentials_file.exists():
+            try:
+                with open(self.credentials_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                loaded = json.loads(content)
+                if not isinstance(loaded, dict):
+                    raise ValueError(f"Root of credentials file {self.credentials_file.name} is {type(loaded).__name__}, expected object")
+                raw_dest = loaded.get("accounts")
+                if not isinstance(raw_dest, list):
+                    raise ValueError(f"'accounts' in {self.credentials_file.name} must be a list")
+                for a in raw_dest:
+                    if isinstance(a, dict) and a.get("email"):
+                        dest_accounts.append({
+                            "email": str(a.get("email") or "").strip(),
+                            "password": str(a.get("password") or ""),
+                        })
+            except Exception as exc:
+                self.is_credentials_corrupt = True
+                self.credentials_load_error = f"Malformed credentials file {self.credentials_file.name}: {exc}"
+                logging.error(self.credentials_load_error)
+                raise CorruptCredentialsError(self.credentials_load_error)
 
-            # Migrate legacy accounts from settings.json on first use if credentials_file does not exist.
-            legacy = [
-                {"email": str(a.get("email") or ""), "password": str(a.get("password") or "")}
-                for a in self.data.get("accounts", []) if isinstance(a, dict) and a.get("email")
-            ]
-            self._save_credentials_unlocked(legacy)
-            return legacy
+        raw_legacy = self.data.get("accounts", [])
+        valid_legacy: List[Dict[str, str]] = []
+        if isinstance(raw_legacy, list):
+            for a in raw_legacy:
+                if isinstance(a, dict) and a.get("email"):
+                    valid_legacy.append({
+                        "email": str(a.get("email") or "").strip(),
+                        "password": str(a.get("password") or ""),
+                    })
+
+        # If no legacy accounts to migrate:
+        if not valid_legacy:
+            if not self.credentials_file.exists():
+                self._save_credentials_unlocked([])
+            if isinstance(raw_legacy, list) and raw_legacy:
+                self.data["accounts"] = []
+                self._save_unlocked()
+            return
+
+        # Merge and deduplicate
+        merged_accounts = list(dest_accounts)
+        dest_by_email = {a["email"].lower(): a for a in dest_accounts}
+
+        for leg in valid_legacy:
+            email_key = leg["email"].lower()
+            if email_key in dest_by_email:
+                existing = dest_by_email[email_key]
+                if existing.get("password", "") != leg.get("password", ""):
+                    err_msg = f"Credential conflict for account '{leg['email']}': conflicting passwords in settings and credentials.json"
+                    logging.error(err_msg)
+                    raise CredentialConflictError(err_msg)
+            else:
+                merged_accounts.append(leg)
+                dest_by_email[email_key] = leg
+
+        # 1. Persist destination credentials
+        self._save_credentials_unlocked(merged_accounts)
+
+        # 2. Confirm destination can represent migrated accounts correctly
+        with open(self.credentials_file, "r", encoding="utf-8") as f:
+            verified = json.load(f)
+        if not isinstance(verified, dict) or verified.get("accounts") != merged_accounts:
+            raise ConfigurationError(f"Verification of saved credentials file {self.credentials_file.name} failed")
+
+        # 3. Only then remove legacy accounts from settings
+        old_accounts = self.data.get("accounts")
+        self.data["accounts"] = []
+        try:
+            self._save_unlocked()
+            logging.info(f"Successfully migrated {len(valid_legacy)} account(s) to {self.credentials_file.name}")
+        except Exception as e:
+            self.data["accounts"] = old_accounts
+            err_msg = f"Migration incomplete: credentials saved, but settings cleanup failed: {e}"
+            logging.warning(err_msg)
+            raise ConfigurationError(err_msg)
+
+    def get_accounts(self) -> List[Dict[str, str]]:
+        """Return account credentials from credentials.json, migrating legacy accounts if needed."""
+        with self._lock:
+            legacy_present = bool(self.data.get("accounts"))
+            if not self.credentials_file.exists() or legacy_present:
+                self.migrate_credentials()
+
+            if not self.credentials_file.exists():
+                return []
+
+            try:
+                with open(self.credentials_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                loaded = json.loads(content)
+                if not isinstance(loaded, dict):
+                    raise ValueError(f"Root of credentials file {self.credentials_file.name} is {type(loaded).__name__}, expected object")
+                accounts = loaded.get("accounts")
+                if not isinstance(accounts, list):
+                    raise ValueError(f"'accounts' in {self.credentials_file.name} must be a list")
+                self.is_credentials_corrupt = False
+                self.credentials_load_error = None
+                return [
+                    {"email": str(a.get("email") or "").strip(), "password": str(a.get("password") or "")}
+                    for a in accounts if isinstance(a, dict) and a.get("email")
+                ]
+            except Exception as exc:
+                self.is_credentials_corrupt = True
+                self.credentials_load_error = f"Malformed credentials file {self.credentials_file.name}: {exc}"
+                logging.error(self.credentials_load_error)
+                raise CorruptCredentialsError(self.credentials_load_error)
 
     def set_accounts(self, accounts_list: List[Dict[str, str]]) -> None:
         """Persist account credentials in credentials.json."""
         with self._lock:
-            self._save_credentials_unlocked(accounts_list)
+            clean_list = [
+                {"email": str(a.get("email") or "").strip(), "password": str(a.get("password") or "")}
+                for a in accounts_list if isinstance(a, dict) and a.get("email")
+            ]
+            self._save_credentials_unlocked(clean_list)
+            if self.data.get("accounts"):
+                self.data["accounts"] = []
+                self._save_unlocked()
 
     def _save_credentials_unlocked(self, accounts_list: List[Dict[str, str]]) -> None:
         self.credentials_file.parent.mkdir(parents=True, exist_ok=True)
