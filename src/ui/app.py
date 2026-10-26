@@ -26,6 +26,39 @@ from .views.queue_view import QueueView
 from .views.settings_view import SettingsView
 
 
+class SessionEventQueue:
+    """Wraps an event queue to tag all events with their session ID."""
+    def __init__(self, target_queue: queue.Queue, session_id: int):
+        self._target = target_queue
+        self.session_id = session_id
+
+    def put(self, item, block=True, timeout=None):
+        self._target.put(("session_event", self.session_id, item), block=block, timeout=timeout)
+
+    def put_nowait(self, item):
+        self._target.put_nowait(("session_event", self.session_id, item))
+
+    def get(self, *args, **kwargs):
+        return self._target.get(*args, **kwargs)
+
+    def get_nowait(self):
+        return self._target.get_nowait()
+
+    def empty(self):
+        return self._target.empty()
+
+
+def sanitize_error(exc: Any, accounts: Optional[List[Any]] = None) -> str:
+    """Format exception message without leaking account passwords."""
+    msg = str(exc)
+    if accounts:
+        for acc in accounts:
+            pwd = getattr(acc, "password", None)
+            if pwd and len(pwd) > 0 and pwd in msg:
+                msg = msg.replace(pwd, "[REDACTED_PASSWORD]")
+    return msg
+
+
 class YTBotApp(ctk.CTk):
     def __init__(self, config_mgr: Optional[ConfigManager] = None, stats_store: Optional[StatsStore] = None):
         super().__init__()
@@ -59,6 +92,8 @@ class YTBotApp(ctk.CTk):
         self._queue_needs_refresh = False
         self._channels_needs_refresh = False
         self.session_manager_thread: Optional[threading.Thread] = None
+        self._session_counter: int = 0
+        self.current_session_id: int = 0
         self._poll_job: Optional[str] = None
         self._close_check_job: Optional[str] = None
         self._close_start_time: float = 0.0
@@ -237,7 +272,8 @@ class YTBotApp(ctk.CTk):
         self.update_dashboard_stats()
 
     def start_automation(self):
-        if self.is_running or self.__dict__.get("is_closing", False):
+        if self.is_running or self.__dict__.get("is_closing", False) or bool(self._get_owned_threads()):
+            emit(self.log_queue, "Previous session is still cleaning up. Please wait.", logging.WARNING)
             return
 
         if not self.loaded_accounts:
@@ -270,6 +306,10 @@ class YTBotApp(ctk.CTk):
 
         self.is_running = True
         self.current_mode = "automation"
+        self._session_counter = self.__dict__.get("_session_counter", 0) + 1
+        session_id = self._session_counter
+        self.current_session_id = session_id
+
         self.update_dashboard_stats()
         self.stop_event.clear()
         self.worker_progress.clear()
@@ -282,18 +322,34 @@ class YTBotApp(ctk.CTk):
         self.views["dashboard"].reset_progress()
 
         # Run the full automation session across the requested number of loops in a background manager thread
-        self.session_manager_thread = threading.Thread(
-            target=self._run_automation_session,
-            args=(active_video_tasks, total_loops),
-            daemon=True,
-        )
-        self.session_manager_thread.start()
-
-    def _run_automation_session(self, active_video_tasks: List[VideoTask], total_loops: int):
-        """Execute the automation session across the requested number of loops."""
-        parallel_limit = self.config_mgr.get_int("ParallelBrowsers", 1)
-
         try:
+            self.session_manager_thread = threading.Thread(
+                target=self._run_automation_session,
+                args=(active_video_tasks, total_loops, session_id),
+                daemon=True,
+            )
+            self.session_manager_thread.start()
+        except Exception as exc:
+            self.is_running = False
+            self.current_mode = "idle"
+            self.session_manager_thread = None
+            err_msg = f"Failed to start automation manager thread: {sanitize_error(exc, self.loaded_accounts)}"
+            emit(self.log_queue, err_msg, logging.ERROR)
+            dashboard = self.views.get("dashboard")
+            if dashboard is not None:
+                try:
+                    dashboard.set_running_state(False)
+                    dashboard.set_status(err_msg, "error")
+                except Exception:
+                    pass
+
+    def _run_automation_session(self, active_video_tasks: List[VideoTask], total_loops: int, session_id: int = 0):
+        """Execute the automation session across the requested number of loops."""
+        session_event_queue = SessionEventQueue(self.event_queue, session_id)
+        session_error: Optional[str] = None
+        try:
+            parallel_limit = self.config_mgr.get_int("ParallelBrowsers", 1)
+
             for current_loop in range(1, total_loops + 1):
                 if self.stop_event.is_set():
                     break
@@ -332,7 +388,7 @@ class YTBotApp(ctk.CTk):
                         config_mgr=self.config_mgr,
                         log_queue=self.log_queue,
                         stop_event=self.stop_event,
-                        event_queue=self.event_queue,
+                        event_queue=session_event_queue,
                         worker_id=worker_id,
                         stats_store=self.stats_store,
                         dispatcher=dispatcher,
@@ -355,22 +411,46 @@ class YTBotApp(ctk.CTk):
                         self.log_queue,
                         f"Completed automation loop {current_loop}/{total_loops}. Restarting queue for loop {current_loop + 1}/{total_loops}...",
                     )
+        except Exception as exc:
+            if not self.stop_event.is_set():
+                session_error = f"Automation session error: {sanitize_error(exc, self.loaded_accounts)}"
+                emit(self.log_queue, session_error, logging.ERROR)
+            self.stop_event.set()
+            for worker in list(self.active_workers):
+                if hasattr(worker, "stop"):
+                    try:
+                        worker.stop()
+                    except Exception:
+                        pass
+            for t in list(self.active_threads):
+                if t.is_alive():
+                    try:
+                        t.join(timeout=10.0)
+                    except Exception:
+                        pass
         finally:
-            self.active_threads.clear()
-            self.active_workers.clear()
-            self.session_manager_thread = None
-            self.is_running = False
-            self.current_mode = "idle"
+            try:
+                self.active_threads.clear()
+                self.active_workers.clear()
+                self.session_manager_thread = None
+                self.is_running = False
+                self.current_mode = "idle"
+            except Exception:
+                self.is_running = False
+                self.current_mode = "idle"
+
             if not self.__dict__.get("is_closing", False):
                 try:
-                    self.event_queue.put_nowait(("finished",))
-                except queue.Full:
+                    session_event_queue.put_nowait(("finished", session_error))
+                except Exception:
                     pass
-            emit(self.log_queue, "=== Automation Session Completed ===")
+            if not session_error and not self.stop_event.is_set():
+                emit(self.log_queue, "=== Automation Session Completed ===")
 
     def start_watching(self):
         """Start the continuous watching recommendation loop."""
-        if self.is_running or self.__dict__.get("is_closing", False):
+        if self.is_running or self.__dict__.get("is_closing", False) or bool(self._get_owned_threads()):
+            emit(self.log_queue, "Previous session is still cleaning up. Please wait.", logging.WARNING)
             return
 
         if not self.loaded_accounts:
@@ -393,6 +473,10 @@ class YTBotApp(ctk.CTk):
 
         self.is_running = True
         self.current_mode = "watching"
+        self._session_counter = self.__dict__.get("_session_counter", 0) + 1
+        session_id = self._session_counter
+        self.current_session_id = session_id
+
         self.update_dashboard_stats()
         self.stop_event.clear()
         self.pause_event.clear()
@@ -411,44 +495,78 @@ class YTBotApp(ctk.CTk):
         if "dashboard" in self.views and hasattr(self.views["dashboard"], "get_loop_count"):
             total_loops = self.views["dashboard"].get_loop_count()
 
-        self.session_manager_thread = threading.Thread(
-            target=self._run_watching_session,
-            args=(self.loaded_accounts[0], active_channels, total_loops),
-            daemon=True,
-        )
-        self.session_manager_thread.start()
-
-    def _run_watching_session(self, account: Account, channels: List[Channel], total_loops: int = 1):
-        """Execute the continuous watching recommendation session."""
-        worker = WatchingWorker(
-            account=account,
-            channels=channels,
-            config_mgr=self.config_mgr,
-            log_queue=self.log_queue,
-            stop_event=self.stop_event,
-            event_queue=self.event_queue,
-            stats_store=self.stats_store,
-            pause_event=self.pause_event,
-            total_loops=total_loops,
-            open_videos=True,
-        )
-        self.active_workers.append(worker)
         try:
-            worker.run()
-        finally:
-            if worker in self.active_workers:
-                self.active_workers.remove(worker)
-            self.active_threads.clear()
-            self.active_workers.clear()
-            self.session_manager_thread = None
+            self.session_manager_thread = threading.Thread(
+                target=self._run_watching_session,
+                args=(self.loaded_accounts[0], active_channels, total_loops, session_id),
+                daemon=True,
+            )
+            self.session_manager_thread.start()
+        except Exception as exc:
             self.is_running = False
             self.current_mode = "idle"
+            self.session_manager_thread = None
+            err_msg = f"Failed to start watching manager thread: {sanitize_error(exc, [self.loaded_accounts[0]])}"
+            emit(self.log_queue, err_msg, logging.ERROR)
+            dashboard = self.views.get("dashboard")
+            if dashboard is not None:
+                try:
+                    dashboard.set_running_state(False)
+                    dashboard.set_status(err_msg, "error")
+                except Exception:
+                    pass
+
+    def _run_watching_session(self, account: Account, channels: List[Channel], total_loops: int = 1, session_id: int = 0):
+        """Execute the continuous watching recommendation session."""
+        session_event_queue = SessionEventQueue(self.event_queue, session_id)
+        session_error: Optional[str] = None
+        worker = None
+        try:
+            worker = WatchingWorker(
+                account=account,
+                channels=channels,
+                config_mgr=self.config_mgr,
+                log_queue=self.log_queue,
+                stop_event=self.stop_event,
+                event_queue=session_event_queue,
+                stats_store=self.stats_store,
+                pause_event=self.pause_event,
+                total_loops=total_loops,
+                open_videos=True,
+            )
+            self.active_workers.append(worker)
+            worker.run()
+        except Exception as exc:
+            if not self.stop_event.is_set():
+                session_error = f"Watching session error: {sanitize_error(exc, [account])}"
+                emit(self.log_queue, session_error, logging.ERROR)
+            self.stop_event.set()
+            for w in list(self.active_workers):
+                if hasattr(w, "stop"):
+                    try:
+                        w.stop()
+                    except Exception:
+                        pass
+        finally:
+            try:
+                if worker in self.active_workers:
+                    self.active_workers.remove(worker)
+                self.active_threads.clear()
+                self.active_workers.clear()
+                self.session_manager_thread = None
+                self.is_running = False
+                self.current_mode = "idle"
+            except Exception:
+                self.is_running = False
+                self.current_mode = "idle"
+
             if not self.__dict__.get("is_closing", False):
                 try:
-                    self.event_queue.put_nowait(("finished",))
-                except queue.Full:
+                    session_event_queue.put_nowait(("finished", session_error))
+                except Exception:
                     pass
-            emit(self.log_queue, "=== Watching Session Completed ===")
+            if not session_error and not self.stop_event.is_set():
+                emit(self.log_queue, "=== Watching Session Completed ===")
 
     def toggle_pause_watching(self):
         """Toggle pause/resume state during browsing session."""
@@ -489,6 +607,18 @@ class YTBotApp(ctk.CTk):
         """Apply a structured worker event to the dashboard (main thread only)."""
         if not event or self.__dict__.get("is_closing", False):
             return
+
+        if isinstance(event, tuple) and len(event) >= 3 and event[0] == "session_event":
+            _, event_session_id, inner_event = event
+            current_sid = self.__dict__.get("current_session_id", 0)
+            if event_session_id != current_sid:
+                # Stale event from a prior session! Discard to prevent resetting or modifying newer run.
+                return
+            event = inner_event
+
+        if not event:
+            return
+
         kind = event[0]
 
         if kind == "progress" and len(event) == 4:
@@ -547,8 +677,22 @@ class YTBotApp(ctk.CTk):
             _, message, level = event
             self.views["dashboard"].set_status(message, level)
         elif kind == "finished":
-            self.views["dashboard"].set_running_state(False)
-            self.refresh_watch_stats()
+            error_msg = event[1] if len(event) > 1 else None
+            dashboard = self.views.get("dashboard")
+            if dashboard is not None:
+                try:
+                    dashboard.set_running_state(False)
+                except Exception:
+                    pass
+                if error_msg:
+                    try:
+                        dashboard.set_status(error_msg, "error")
+                    except Exception:
+                        pass
+            try:
+                self.refresh_watch_stats()
+            except Exception:
+                pass
 
     def _poll_log_queue(self):
         if self.__dict__.get("is_closing", False):

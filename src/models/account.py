@@ -9,6 +9,12 @@ class Account:
     password: str
     status: str = "Ready"
 
+    def __repr__(self) -> str:
+        return f"Account(email={self.email!r}, status={self.status!r})"
+
+    def __str__(self) -> str:
+        return f"Account({self.email})"
+
     def get_profile_dir_name(self) -> str:
         """Sanitize email to get a safe folder name for Chrome user data."""
         safe_email = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in self.email)
