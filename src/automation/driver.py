@@ -16,28 +16,23 @@ import undetected_chromedriver as uc
 from ..models.account import Account
 from ..utils.logger import emit
 from ..utils.helpers import get_project_root
-
-
-def get_runtime_profiles_dir() -> Path:
-    """Path to account Chrome profiles directory."""
-    runtime_dir = get_project_root() / "runtime" / "chrome_profiles"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    return runtime_dir
+from .profile_manager import (
+    get_runtime_profiles_dir,
+    resolve_profile_dir,
+    ProfileLock,
+    ProfileBusyError,
+    is_chrome_lock_active,
+)
 
 
 def cleanup_profile_locks(profile_path: Path) -> None:
-    """Terminate lingering Chrome processes and remove lock files to prevent startup hangs."""
-    if os.name == "nt":
-        dir_name = profile_path.name
-        ps_script = (
-            f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe' or Name = 'chromedriver.exe'\" | "
-            f"Where-Object {{ $_.CommandLine -like '*{dir_name}*' }} | "
-            f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
-        )
-        try:
-            subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=10)
-        except Exception:
-            pass
+    """Safely check and remove stale lock files left by crashed browser sessions.
+
+    Never terminates unrelated Chrome processes by broad substring match or removes
+    locks while an active process is using the profile.
+    """
+    if is_chrome_lock_active(profile_path):
+        raise ProfileBusyError(f"Chrome is actively running in profile '{profile_path.name}'.")
 
     lock_names = ["SingletonLock", "SingletonSocket", "SingletonCookie", "lockfile"]
     for lock in lock_names:
@@ -201,44 +196,48 @@ def setup_driver(
     adblock_path: Optional[Path] = None,
 ) -> uc.Chrome:
     """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
-    profile_dir = get_runtime_profiles_dir() / account.get_profile_dir_name()
+    profile_dir = resolve_profile_dir(account)
     profile_dir.mkdir(parents=True, exist_ok=True)
-    cleanup_profile_locks(profile_dir)
 
-    emit(log_queue, f"Initializing Chrome driver for account: {account.email}")
-    emit(log_queue, f"Using persistent Chrome profile: {profile_dir}")
-
-    options = uc.ChromeOptions()
-    options.page_load_strategy = "eager"
-    options.add_argument(f"--user-data-dir={profile_dir}")
-    options.add_argument("--no-first-run")
-    options.add_argument("--no-service-autorun")
-    options.add_argument("--password-store=basic")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1280,800")
-    options.add_argument("--lang=en-US,en")
-
-    chrome_version = get_chrome_version()
-    chrome_major = None
-    if chrome_version:
-        try:
-            chrome_major = int(chrome_version.split(".")[0])
-        except ValueError:
-            chrome_major = None
-        emit(log_queue, f"Detected system Chrome version: {chrome_version}")
-
-    driver_path = None
-    if chrome_version:
-        driver_path = ensure_chromedriver(chrome_version, log_queue)
-
-    launch_kwargs: Dict[str, Any] = {"use_subprocess": True}
-    if chrome_major:
-        launch_kwargs["version_main"] = chrome_major
-    if driver_path is not None:
-        launch_kwargs["driver_executable_path"] = str(driver_path)
+    profile_lock = ProfileLock(profile_dir)
+    profile_lock.acquire()
 
     try:
+        cleanup_profile_locks(profile_dir)
+
+        emit(log_queue, f"Initializing Chrome driver for account: {account.email}")
+        emit(log_queue, f"Using persistent Chrome profile: {profile_dir}")
+
+        options = uc.ChromeOptions()
+        options.page_load_strategy = "eager"
+        options.add_argument(f"--user-data-dir={profile_dir}")
+        options.add_argument("--no-first-run")
+        options.add_argument("--no-service-autorun")
+        options.add_argument("--password-store=basic")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1280,800")
+        options.add_argument("--lang=en-US,en")
+
+        chrome_version = get_chrome_version()
+        chrome_major = None
+        if chrome_version:
+            try:
+                chrome_major = int(chrome_version.split(".")[0])
+            except ValueError:
+                chrome_major = None
+            emit(log_queue, f"Detected system Chrome version: {chrome_version}")
+
+        driver_path = None
+        if chrome_version:
+            driver_path = ensure_chromedriver(chrome_version, log_queue)
+
+        launch_kwargs: Dict[str, Any] = {"use_subprocess": True}
+        if chrome_major:
+            launch_kwargs["version_main"] = chrome_major
+        if driver_path is not None:
+            launch_kwargs["driver_executable_path"] = str(driver_path)
+
         emit(log_queue, "Launching Chrome browser instance...")
         with DRIVER_INIT_LOCK:
             try:
@@ -252,7 +251,6 @@ def setup_driver(
                 driver = uc.Chrome(options=options, **launch_kwargs)
         driver.set_page_load_timeout(45)
 
-
         # First successful automatic download -> keep a copy for offline launches.
         if driver_path is None and chrome_major:
             try:
@@ -264,17 +262,19 @@ def setup_driver(
             except Exception:
                 pass
 
+        driver._profile_lock = profile_lock
         emit(log_queue, f"Chrome driver successfully started for {account.email}.")
         return driver
     except Exception as exc:
+        profile_lock.release()
         emit(log_queue, f"Failed to initialize Chrome driver: {exc}", logging.ERROR)
         raise
-
 
 
 def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None) -> None:
     """Safely quit driver session and terminate lingering browser processes."""
     if driver is not None:
+        profile_lock = getattr(driver, "_profile_lock", None)
         try:
             browser_pid = getattr(driver, "browser_pid", None)
             driver.quit()
@@ -289,4 +289,10 @@ def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None)
                     pass
         except Exception:
             pass
+        finally:
+            if profile_lock:
+                try:
+                    profile_lock.release()
+                except Exception:
+                    pass
         emit(log_queue, "Browser session closed.")

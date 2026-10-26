@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..models.account import normalize_account_id
 from ..models.channel import Channel
 from ..utils.helpers import get_project_root
 from ..models.video_task import DEFAULT_WATCHTIME_DURATION, VideoTask
@@ -416,10 +417,24 @@ class ConfigManager:
                     raise ValueError(f"'accounts' in {self.credentials_file.name} must be a list")
                 self.is_credentials_corrupt = False
                 self.credentials_load_error = None
-                return [
-                    {"email": str(a.get("email") or "").strip(), "password": str(a.get("password") or "")}
-                    for a in accounts if isinstance(a, dict) and a.get("email")
-                ]
+
+                seen_accounts: Dict[str, str] = {}
+                clean_accounts: List[Dict[str, str]] = []
+                for a in accounts:
+                    if isinstance(a, dict) and a.get("email"):
+                        norm_email = normalize_account_id(str(a.get("email") or ""))
+                        pwd = str(a.get("password") or "")
+                        if norm_email in seen_accounts:
+                            if seen_accounts[norm_email] != pwd:
+                                raise CredentialConflictError(
+                                    f"Conflicting passwords for duplicate account '{norm_email}' in {self.credentials_file.name}"
+                                )
+                            continue
+                        seen_accounts[norm_email] = pwd
+                        clean_accounts.append({"email": norm_email, "password": pwd})
+                return clean_accounts
+            except CredentialConflictError:
+                raise
             except Exception as exc:
                 self.is_credentials_corrupt = True
                 self.credentials_load_error = f"Malformed credentials file {self.credentials_file.name}: {exc}"
@@ -429,10 +444,18 @@ class ConfigManager:
     def set_accounts(self, accounts_list: List[Dict[str, str]]) -> None:
         """Persist account credentials in credentials.json."""
         with self._lock:
-            clean_list = [
-                {"email": str(a.get("email") or "").strip(), "password": str(a.get("password") or "")}
-                for a in accounts_list if isinstance(a, dict) and a.get("email")
-            ]
+            seen: Dict[str, str] = {}
+            clean_list: List[Dict[str, str]] = []
+            for a in accounts_list:
+                if isinstance(a, dict) and a.get("email"):
+                    norm_email = normalize_account_id(str(a.get("email") or ""))
+                    pwd = str(a.get("password") or "")
+                    if norm_email in seen:
+                        if seen[norm_email] != pwd:
+                            raise CredentialConflictError(f"Conflicting passwords for account '{norm_email}'")
+                        continue
+                    seen[norm_email] = pwd
+                    clean_list.append({"email": norm_email, "password": pwd})
             self._save_credentials_unlocked(clean_list)
             if self.data.get("accounts"):
                 self.data["accounts"] = []

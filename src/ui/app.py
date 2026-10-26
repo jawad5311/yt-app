@@ -264,7 +264,18 @@ class YTBotApp(ctk.CTk):
             self.config_mgr.set_setting("AppearanceMode", mode if mode in valid else "Dark")
 
     def on_accounts_changed(self, accounts: List[Account]):
-        self.loaded_accounts = accounts
+        seen = set()
+        deduped = []
+        duplicates = []
+        for a in accounts:
+            if a.email in seen:
+                duplicates.append(a.email)
+            else:
+                seen.add(a.email)
+                deduped.append(a)
+        if duplicates:
+            emit(self.log_queue, f"Duplicate account(s) omitted: {', '.join(duplicates)}", logging.WARNING)
+        self.loaded_accounts = deduped
         self.update_dashboard_stats()
 
     def on_queue_changed(self, tasks: List[VideoTask]):
@@ -374,14 +385,25 @@ class YTBotApp(ctk.CTk):
 
                 # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
                 dispatcher = TaskDispatcher(tasks=current_tasks, randomize=True, stats_store=self.stats_store, cooldown_hours=cooldown_h)
-                active_workers_count = min(len(self.loaded_accounts), parallel_limit)
+
+                # Ensure unique accounts across workers to prevent duplicate sessions
+                unique_accounts = []
+                seen_worker_emails = set()
+                for acc in self.loaded_accounts:
+                    if acc.email not in seen_worker_emails:
+                        seen_worker_emails.add(acc.email)
+                        unique_accounts.append(acc)
+                    else:
+                        emit(self.log_queue, f"Skipping duplicate account session for '{acc.email}'.", logging.WARNING)
+
+                active_workers_count = min(len(unique_accounts), parallel_limit)
                 emit(
                     self.log_queue,
                     f"Dispatching {len(current_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
                 )
 
                 # Distribute accounts across worker threads
-                for worker_id, acc in enumerate(self.loaded_accounts[:parallel_limit]):
+                for worker_id, acc in enumerate(unique_accounts[:parallel_limit]):
                     worker = AutomationWorker(
                         account=acc,
                         video_tasks=active_video_tasks,

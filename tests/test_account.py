@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.models.account import Account
+from src.models.account import Account, normalize_account_id
 
 
 @pytest.mark.parametrize(
@@ -31,9 +31,13 @@ def test_parse_line(line, expected):
 
 def test_profile_dir_name_is_filesystem_safe():
     account = Account(email="First.Last+tag@gmail.com", password="pw")
+    # Normalized email
+    assert account.email == "first.last+tag@gmail.com"
     profile = account.get_profile_dir_name()
-    assert profile == "profile_First_Last_tag_gmail_com"
     assert all(c.isalnum() or c in ("-", "_") for c in profile)
+    legacy = account.get_legacy_profile_dir_name()
+    assert legacy == "profile_first_last_tag_gmail_com"
+    assert all(c.isalnum() or c in ("-", "_") for c in legacy)
 
 
 def test_profile_dir_name_defaults_status():

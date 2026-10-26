@@ -1,5 +1,17 @@
+import hashlib
 from dataclasses import dataclass
 from typing import Optional
+
+
+def normalize_account_id(email: str) -> str:
+    """Establish one account-identifier normalization policy:
+    - Trim surrounding whitespace
+    - Treat casing consistently (lowercase)
+    - Do not remove dots, plus-address suffixes, or other meaningful characters
+    """
+    if not email:
+        return ""
+    return email.strip().lower()
 
 
 @dataclass
@@ -9,6 +21,13 @@ class Account:
     password: str
     status: str = "Ready"
 
+    def __post_init__(self) -> None:
+        self.email = normalize_account_id(self.email)
+
+    @property
+    def normalized_email(self) -> str:
+        return self.email
+
     def __repr__(self) -> str:
         return f"Account(email={self.email!r}, status={self.status!r})"
 
@@ -16,7 +35,17 @@ class Account:
         return f"Account({self.email})"
 
     def get_profile_dir_name(self) -> str:
-        """Sanitize email to get a safe folder name for Chrome user data."""
+        """Return a stable, collision-resistant folder name for Chrome user data.
+
+        Distinct emails that previously produced the same sanitized prefix
+        receive distinct profile folder names via deterministic hashing.
+        """
+        safe_email = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in self.email)
+        digest = hashlib.sha256(self.email.encode("utf-8")).hexdigest()[:8]
+        return f"profile_{safe_email}_{digest}"
+
+    def get_legacy_profile_dir_name(self) -> str:
+        """Return legacy folder name for backwards compatibility."""
         safe_email = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in self.email)
         return f"profile_{safe_email}"
 

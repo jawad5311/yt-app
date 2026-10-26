@@ -96,8 +96,31 @@ class AccountsView(ctk.CTkFrame):
                 if acc:
                     new_accounts.append(acc)
 
-        if new_accounts:
-            self.accounts = new_accounts
+        seen: dict = {}
+        duplicates = []
+        conflicts = []
+        for acc in new_accounts:
+            if acc.email in seen:
+                if seen[acc.email].password != acc.password:
+                    conflicts.append(acc.email)
+                else:
+                    duplicates.append(acc.email)
+            else:
+                seen[acc.email] = acc
+
+        if conflicts:
+            messagebox.showerror(
+                "Credential Conflict",
+                f"Conflicting passwords found for account(s): {', '.join(set(conflicts))}. Import aborted without saving.",
+            )
+            return
+
+        if duplicates:
+            logging.info(f"Omitted {len(duplicates)} duplicate entry/entries during import.")
+
+        unique_accounts = list(seen.values())
+        if unique_accounts:
+            self.accounts = unique_accounts
             self.save_accounts()
             self.refresh_list()
 
@@ -107,6 +130,13 @@ class AccountsView(ctk.CTkFrame):
         if input_text:
             acc = Account.parse_line(input_text)
             if acc:
+                existing = next((a for a in self.accounts if a.email == acc.email), None)
+                if existing:
+                    if existing.password != acc.password:
+                        messagebox.showerror("Conflict", f"Account '{acc.email}' already exists with a different password.")
+                    else:
+                        messagebox.showwarning("Duplicate", f"Account '{acc.email}' is already added.")
+                    return
                 self.accounts.append(acc)
                 self.save_accounts()
                 self.refresh_list()
