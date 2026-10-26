@@ -235,6 +235,7 @@ class MockElement:
         self._title = title
         self._text = text
         self.clicked = False
+        self._driver = None
 
     def get_attribute(self, name: str) -> str:
         if name == "href":
@@ -249,6 +250,8 @@ class MockElement:
 
     def click(self):
         self.clicked = True
+        if self._driver is not None:
+            self._driver.current_url = self._href
 
 
 class MockSearchBox:
@@ -262,6 +265,8 @@ class MockDriver:
 
     def __init__(self, results: List[MockElement]):
         self.results = results
+        for r in self.results:
+            r._driver = self
 
     def set_page_load_timeout(self, timeout): pass
     def get(self, url): pass
@@ -313,14 +318,15 @@ def test_navigation_prioritizes_url_over_title(monkeypatch):
 
 
 def test_navigation_matches_title_when_url_not_found(monkeypatch):
-    """Ensure that if URL is not in results, Pass 2 matches by alternative Video Title 2."""
+    """Ensure that for tasks without explicit URL, Pass 2 matches by alternative Video Title 2,
+    while tasks with an explicit URL never let title match override conflicting ID."""
     elem_diff_id_matching_title2 = MockElement(
         href="https://www.youtube.com/watch?v=SOME_OTHER_ID",
         title="Podcast Episode 2: The Truth",
     )
 
     mock_driver = MockDriver([elem_diff_id_matching_title2])
-    task = VideoTask(
+    task_with_url = VideoTask(
         url="https://www.youtube.com/watch?v=TARGET_NOT_IN_RESULTS",
         title="Podcast Ep 1",
         title_2="Podcast Episode 2: The Truth",
@@ -341,7 +347,19 @@ def test_navigation_matches_title_when_url_not_found(monkeypatch):
 
     monkeypatch.setattr(WebDriverWait, "until", fake_until)
 
-    success = navigate_to_video_organically(mock_driver, task, direct_link_fallback=False)
+    # 1. Conflicting explicit URL must NOT be overridden by title match
+    success_conflicting = navigate_to_video_organically(mock_driver, task_with_url, direct_link_fallback=False)
+    assert success_conflicting is False
+    assert elem_diff_id_matching_title2.clicked is False
+
+    # 2. Title-only task without explicit URL matches by Title 2
+    task_title_only = VideoTask(
+        url="",
+        title="Podcast Ep 1",
+        title_2="Podcast Episode 2: The Truth",
+    )
+    until_calls["count"] = 0
+    success = navigate_to_video_organically(mock_driver, task_title_only, direct_link_fallback=False)
     assert success is True
     assert elem_diff_id_matching_title2.clicked is True
 

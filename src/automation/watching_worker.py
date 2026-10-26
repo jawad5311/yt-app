@@ -1465,17 +1465,28 @@ class WatchingWorker:
             clicked = self.click_recommended_video(card_info)
 
         cur_url = getattr(self.driver, "current_url", "") or ""
-        if target_vid_id and target_vid_id not in cur_url:
+        cur_id = extract_video_id(cur_url)
+        if target_vid_id and cur_id != target_vid_id:
             emit(self.log_queue, f"Navigation not detected after click, navigating directly to: {full_url}", logging.INFO)
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
 
         try:
             if target_vid_id:
-                WebDriverWait(self.driver, 15).until(lambda d: target_vid_id in (getattr(d, "current_url", "") or ""))
+                WebDriverWait(self.driver, 15).until(lambda d: extract_video_id(getattr(d, "current_url", "") or "") == target_vid_id)
             else:
                 WebDriverWait(self.driver, 15).until(lambda d: "/watch" in (getattr(d, "current_url", "") or ""))
         except Exception:
             pass
+
+        final_cur_url = getattr(self.driver, "current_url", "") or ""
+        final_cur_id = extract_video_id(final_cur_url)
+        if target_vid_id and final_cur_id != target_vid_id:
+            emit(
+                self.log_queue,
+                f"Playback identity verification failed: expected video ID '{target_vid_id}', observed '{final_cur_id or final_cur_url}'. Aborting playback.",
+                logging.ERROR,
+            )
+            return WatchResult(completed=False, reason="navigation_identity_mismatch", interrupted=True)
 
         human_like_delay(2.0, 3.5)
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)

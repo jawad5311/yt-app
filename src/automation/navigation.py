@@ -1,3 +1,4 @@
+import time
 import logging
 import queue
 from typing import Any, Optional
@@ -97,6 +98,8 @@ def navigate_to_video_organically(
     else:
         search_query = task.keywords.strip() or task.title.strip()
     target_video_id = extract_video_id(task.url)
+    start_url = str(getattr(driver, "current_url", "") or "")
+    start_video_id = extract_video_id(start_url)
 
     emit(
         log_queue,
@@ -183,54 +186,55 @@ def navigate_to_video_organically(
 
             selected_link = None
 
-            # Pass 1: Match by Video URL / Video ID ONLY (do not match titles yet)
+            # Pass 1: Match by parsed Video ID ONLY (compare parsed IDs, not substrings)
             if target_video_id:
                 for idx, link in enumerate(results[:25]):
                     try:
                         href = link.get_attribute("href") or ""
-                        if target_video_id in href:
+                        link_vid_id = extract_video_id(href)
+                        if link_vid_id and link_vid_id == target_video_id:
                             selected_link = link
-                            emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID/URL ('{target_video_id}')!")
+                            emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID ('{target_video_id}')!")
                             break
                     except Exception:
                         continue
 
-            # Pass 2: If not found using URL, increase timeout/wait and check by Titles
+            # Pass 2: If not found in top results, scroll down and check more results
             candidate_titles = task.get_title_queries()
-            if not selected_link and candidate_titles:
-                emit(
-                    log_queue,
-                    "[Step 4/6] Video not found by URL in initial scan. Scrolling down and checking for match...",
-                    logging.INFO,
-                )
-                try:
-                    driver.execute_script("window.scrollBy(0, 600);")
-                except Exception:
-                    pass
-                human_like_delay(2.0, 3.0)
-
-                try:
-                    more_results = WebDriverWait(driver, 15).until(
-                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, results_selector))
-                    )
-                    results = more_results
-                except Exception:
-                    pass
-
-                # Check if video ID appeared after scrolling
+            if not selected_link:
                 if target_video_id:
+                    emit(
+                        log_queue,
+                        "[Step 4/6] Video not found by ID in initial scan. Scrolling down and checking for match...",
+                        logging.INFO,
+                    )
+                    try:
+                        driver.execute_script("window.scrollBy(0, 600);")
+                    except Exception:
+                        pass
+                    human_like_delay(2.0, 3.0)
+
+                    try:
+                        more_results = WebDriverWait(driver, 15).until(
+                            EC.presence_of_all_elements_located((By.CSS_SELECTOR, results_selector))
+                        )
+                        results = more_results
+                    except Exception:
+                        pass
+
                     for idx, link in enumerate(results[:35]):
                         try:
                             href = link.get_attribute("href") or ""
-                            if target_video_id in href:
+                            link_vid_id = extract_video_id(href)
+                            if link_vid_id and link_vid_id == target_video_id:
                                 selected_link = link
-                                emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID/URL ('{target_video_id}') after scroll!")
+                                emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Video ID ('{target_video_id}') after scroll!")
                                 break
                         except Exception:
                             continue
 
-                # If still not found by URL, check by any of the candidate titles
-                if not selected_link:
+                # Pass 2b: ONLY for tasks without an explicit video ID, match by candidate titles
+                elif candidate_titles:
                     for cand_title in candidate_titles:
                         target_title_lower = cand_title.strip().lower()
                         if not target_title_lower:
@@ -238,7 +242,9 @@ def navigate_to_video_organically(
                         for idx, link in enumerate(results[:35]):
                             try:
                                 title_text = (link.get_attribute("title") or link.text or "").strip().lower()
-                                if target_title_lower in title_text or title_text in target_title_lower:
+                                if not title_text:
+                                    continue  # Reject empty result titles
+                                if target_title_lower in title_text or (len(title_text) >= 5 and title_text in target_title_lower):
                                     selected_link = link
                                     emit(log_queue, f"[Step 4/6] Matched search result #{idx + 1} by Title ('{cand_title}')!")
                                     break
@@ -261,10 +267,49 @@ def navigate_to_video_organically(
                     selected_link.click()
                 except Exception:
                     driver.execute_script("arguments[0].click();", selected_link)
-                human_like_delay(3.0, 5.0)
-                organic_success = True
-                emit(log_queue, "[Step 5/6] Successfully opened video from YouTube organic search results!")
-                return True
+                human_like_delay(2.0, 3.5)
+
+                # Confirm navigation actually occurred and identifies the selected video
+                start_confirm = time.time()
+                confirmed = False
+                while time.time() - start_confirm < 10.0:
+                    cur_url = str(getattr(driver, "current_url", "") or "")
+                    cur_id = extract_video_id(cur_url)
+                    if target_video_id:
+                        if cur_id == target_video_id:
+                            confirmed = True
+                            break
+                    else:
+                        if cur_id and cur_url != start_url and "/watch" in cur_url:
+                            confirmed = True
+                            break
+                    time.sleep(0.5)
+
+                final_url = str(getattr(driver, "current_url", "") or "")
+                final_id = extract_video_id(final_url)
+
+                if target_video_id:
+                    if final_id == target_video_id:
+                        emit(log_queue, f"[Step 5/6] Successfully verified opened video ID: '{target_video_id}'.")
+                        return True
+                    else:
+                        emit(
+                            log_queue,
+                            f"[Step 5/6] Navigation verification failed: expected video ID '{target_video_id}', observed '{final_id or final_url}'.",
+                            logging.WARNING,
+                        )
+                        organic_success = False
+                else:
+                    if confirmed and final_id:
+                        emit(log_queue, f"[Step 5/6] Successfully opened video for title task (verified video ID: '{final_id}').")
+                        return True
+                    else:
+                        emit(
+                            log_queue,
+                            f"[Step 5/6] Navigation verification failed for title task (current URL: '{final_url}').",
+                            logging.WARNING,
+                        )
+                        organic_success = False
             else:
                 emit(log_queue, "[Step 4/6] Target video not found in search results by URL or Title.", logging.WARNING)
 
@@ -280,8 +325,27 @@ def navigate_to_video_organically(
             emit(log_queue, f"[Step 6/6] Direct Link Fallback: Navigating directly to URL: {task.url}")
             try:
                 safe_get(driver, task.url, timeout=35, log_queue=log_queue)
-                human_like_delay(3.0, 5.0)
-                return True
+                human_like_delay(2.0, 3.5)
+
+                # Confirm direct navigation arrived at expected video ID
+                cur_url = str(getattr(driver, "current_url", "") or "")
+                cur_id = extract_video_id(cur_url)
+                if target_video_id:
+                    if cur_id == target_video_id:
+                        emit(log_queue, f"[Step 6/6] Successfully verified direct navigation to video ID '{target_video_id}'.")
+                        return True
+                    else:
+                        emit(
+                            log_queue,
+                            f"[Step 6/6] Direct navigation verification failed: expected video ID '{target_video_id}', observed '{cur_id or cur_url}'.",
+                            logging.ERROR,
+                        )
+                        return False
+                else:
+                    if cur_id and "/watch" in cur_url:
+                        return True
+                    emit(log_queue, f"[Step 6/6] Direct navigation verification failed for URL: '{cur_url}'.", logging.ERROR)
+                    return False
             except Exception as exc:
                 emit(log_queue, f"[Step 6/6] Direct link navigation failed: {exc}", logging.ERROR)
                 return False

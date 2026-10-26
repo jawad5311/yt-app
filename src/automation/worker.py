@@ -382,7 +382,6 @@ class AutomationWorker:
             if self.dispatcher is not None:
                 key = outcome.video_key or outcome.task_key
                 self.dispatcher.exclude_video_key(key, reason=str(exc))
-            raise
 
     # -------------------------------------------------------------------- run
 
