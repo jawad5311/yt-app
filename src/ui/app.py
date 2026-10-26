@@ -134,7 +134,8 @@ class YTBotApp(ctk.CTk):
             else []
         )
         stats = getattr(self, "stats_store", None)
-        return sum(1 for t in self.queued_video_tasks if is_video_task_runnable(t, channels, stats))
+        cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0) if hasattr(self, "config_mgr") else 0.0
+        return sum(1 for t in self.queued_video_tasks if is_video_task_runnable(t, channels, stats, cooldown_hours=cooldown_h))
 
     def reset_all_watch_stats(self) -> None:
         """Completely reset all watch statistics across stats.json, settings channel counters, and running workers."""
@@ -240,7 +241,8 @@ class YTBotApp(ctk.CTk):
             return
 
         channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
-        active_video_tasks = [t for t in self.queued_video_tasks if is_video_task_runnable(t, channels, self.stats_store)]
+        cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+        active_video_tasks = [t for t in self.queued_video_tasks if is_video_task_runnable(t, channels, self.stats_store, cooldown_hours=cooldown_h)]
         if not active_video_tasks:
             self.show_view("queue")
             emit(
@@ -286,9 +288,10 @@ class YTBotApp(ctk.CTk):
 
             # Filter tasks to ensure any video that reached its run limit is excluded
             channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
-            current_tasks = [t for t in active_video_tasks if is_video_task_runnable(t, channels, self.stats_store)]
+            cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+            current_tasks = [t for t in active_video_tasks if is_video_task_runnable(t, channels, self.stats_store, cooldown_hours=cooldown_h)]
             if not current_tasks:
-                emit(self.log_queue, "All active video tasks have reached their run limit. Ending automation session.")
+                emit(self.log_queue, "All active video tasks have reached their run limit or are in cooldown. Ending automation session.")
                 break
 
             loop_header = (
@@ -302,7 +305,7 @@ class YTBotApp(ctk.CTk):
             self.active_threads.clear()
 
             # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
-            dispatcher = TaskDispatcher(tasks=current_tasks, randomize=True, stats_store=self.stats_store)
+            dispatcher = TaskDispatcher(tasks=current_tasks, randomize=True, stats_store=self.stats_store, cooldown_hours=cooldown_h)
             active_workers_count = min(len(self.loaded_accounts), parallel_limit)
             emit(
                 self.log_queue,

@@ -1,3 +1,4 @@
+from datetime import datetime
 import re
 """Channel model: named YouTube channels used to group queued video tasks."""
 
@@ -160,40 +161,67 @@ class Channel:
         )
 
 
+def check_video_task_eligibility(
+    task: VideoTask,
+    channels: Sequence[Channel],
+    stats_store: Optional[Any] = None,
+    cooldown_hours: float = 0.0,
+    current_time: Optional[datetime] = None,
+) -> Tuple[bool, str]:
+    """Determine whether a video task is enabled and runnable for automation.
+
+    Returns:
+        (is_eligible, reason_msg)
+    """
+    if not task.enabled:
+        return False, "task is disabled in queue"
+
+    if stats_store is not None:
+        record = stats_store.find_for_task(task)
+        if record is not None:
+            if cooldown_hours > 0 and hasattr(record, "is_on_cooldown"):
+                is_cool, remaining_hours = record.is_on_cooldown(cooldown_hours, current_time=current_time)
+                if is_cool:
+                    rem_str = f"{remaining_hours:.1f}h" if remaining_hours >= 1.0 else f"{int(remaining_hours * 60)}m"
+                    return False, f"within {cooldown_hours:g}h cooldown period ({rem_str} remaining)"
+
+            current_runs = record.runs
+            watch_sec = record.watch_seconds
+            v_dur = (record.video_duration if record.video_duration > 0 else 0.0) or getattr(task, "duration_seconds", 0.0)
+            if task.is_target_reached(current_runs, watch_sec, v_dur):
+                reason = f"target multiplier {task.target_multiplier:.1f}x reached" if (getattr(task, "target_multiplier", 0.0) > 0 and v_dur > 0 and watch_sec / v_dur >= task.target_multiplier) else f"max views limit of {task.max_runs} reached"
+                return False, reason
+
+    if task.channel:
+        clean_ch = task.channel.strip().lower().lstrip("@")
+        matching = [c for c in channels if (c.name or "").strip().lower().lstrip("@") == clean_ch]
+        if not matching:
+            if channels:
+                return False, f"channel '{task.channel}' is not found or inactive"
+        else:
+            ch = matching[0]
+            if ch.archived:
+                return False, f"channel '{task.channel}' is archived"
+            if not ch.enabled:
+                return False, f"channel '{task.channel}' is disabled"
+            if ch.target_achieved:
+                return False, f"channel '{task.channel}' target watch time achieved"
+
+    return True, "eligible"
+
+
 def is_video_task_runnable(
     task: VideoTask,
     channels: Sequence[Channel],
     stats_store: Optional[Any] = None,
     cooldown_hours: float = 0.0,
+    current_time: Optional[datetime] = None,
 ) -> bool:
-    """Determine whether a video task is enabled and runnable for automation.
-    A task runs only if:
-    1. task.enabled is True
-    2. (if assigned to a channel) the corresponding channel is enabled and not archived
-    3. (if max_runs > 0 and stats_store is provided) current runs have not reached max_runs.
-    4. (if cooldown_hours > 0 and stats_store is provided) not within cooldown period.
-    """
-    if not task.enabled:
-        return False
-    if stats_store is not None:
-        record = stats_store.find_for_task(task)
-        if record is not None:
-            if cooldown_hours > 0 and hasattr(record, "is_on_cooldown"):
-                is_cool, _ = record.is_on_cooldown(cooldown_hours)
-                if is_cool:
-                    return False
-            current_runs = record.runs
-            watch_sec = record.watch_seconds
-            v_dur = record.video_duration
-            if task.is_target_reached(current_runs, watch_sec, v_dur):
-                return False
-    if task.channel:
-        for ch in channels:
-            if ch.name.lower() == task.channel.lower():
-                if ch.archived or not ch.enabled or ch.target_achieved:
-                    return False
-                return True
-    return True
+    """Determine whether a video task is enabled and runnable for automation."""
+    eligible, _ = check_video_task_eligibility(
+        task, channels, stats_store=stats_store, cooldown_hours=cooldown_hours, current_time=current_time
+    )
+    return eligible
 
 
 @dataclass

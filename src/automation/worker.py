@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
-from ..models.channel import Channel, is_video_task_runnable
+from ..models.channel import Channel, is_video_task_runnable, check_video_task_eligibility
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.helpers import extract_video_id
@@ -442,9 +442,10 @@ class AutomationWorker:
                     task = self.video_tasks[task_idx]
 
                 task_idx += 1
+                raw_channels = self.config_mgr.get_channels()
+                channel_objs = [Channel.from_dict(c) for c in raw_channels]
+
                 if task.channel:
-                    raw_channels = self.config_mgr.get_channels()
-                    channel_objs = [Channel.from_dict(c) for c in raw_channels]
                     matching_ch = [c for c in channel_objs if c.name.lower() == task.channel.lower()]
                     target_hit = False
                     if matching_ch:
@@ -459,30 +460,19 @@ class AutomationWorker:
                         if self.dispatcher is not None:
                             self.dispatcher.release_task(task)
                         continue
-                    cooldown_h = self.config_mgr.get_float('VideoCooldownHours', 12.0)
-                    if not is_video_task_runnable(task, channel_objs, self.stats_store, cooldown_hours=cooldown_h):
-                        emit(
-                            self.log_queue,
-                            f"Skipping task '{task.title or task.keywords or task.url}': channel '{task.channel}' is unchecked/disabled.",
-                        )
-                        if self.dispatcher is not None:
-                            self.dispatcher.release_task(task)
-                        continue
 
-                if self.stats_store is not None:
-                    rec = self.stats_store.find_for_task(task)
-                    current_runs = rec.runs if rec is not None else 0
-                    watch_sec = rec.watch_seconds if rec is not None else 0.0
-                    vid_dur = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(task, "duration_seconds", 0.0)
-                    if task.is_target_reached(current_runs, watch_sec, vid_dur):
-                        reason = f"target multiplier {task.target_multiplier:.1f}x reached" if (getattr(task, "target_multiplier", 0.0) > 0 and vid_dur > 0 and watch_sec / vid_dur >= task.target_multiplier) else f"max views limit of {task.max_runs} reached"
-                        emit(
-                            self.log_queue,
-                            f"Skipping task '{task.title or task.keywords or task.url}': {reason}.",
-                        )
-                        if self.dispatcher is not None:
-                            self.dispatcher.release_task(task)
-                        continue
+                cooldown_h = self.config_mgr.get_float('VideoCooldownHours', 12.0)
+                eligible, unrunnable_reason = check_video_task_eligibility(
+                    task, channel_objs, self.stats_store, cooldown_hours=cooldown_h
+                )
+                if not eligible:
+                    emit(
+                        self.log_queue,
+                        f"Skipping task '{task.title or task.keywords or task.url}': {unrunnable_reason}.",
+                    )
+                    if self.dispatcher is not None:
+                        self.dispatcher.release_task(task)
+                    continue
 
                 emit(self.log_queue, f"\n--- Processing Video Task {task_idx}/{total}: {task.title or task.keywords or task.url} ---")
 

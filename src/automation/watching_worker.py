@@ -1299,8 +1299,9 @@ class WatchingWorker:
                         continue
             fresh.append(c)
 
-        pool = fresh if fresh else valid_candidates
-        return random.choice(pool)
+        if not fresh:
+            return None
+        return random.choice(fresh)
 
     def _watch_interleaving_buffer_video(self, session_watched_keys: Set[str]) -> bool:
         """Watch a random video that is NOT from any target channel for 30-90s (Option 5)."""

@@ -19,10 +19,12 @@ class TaskDispatcher:
         tasks: List[VideoTask],
         randomize: bool = True,
         stats_store: Optional[Any] = None,
+        cooldown_hours: float = 0.0,
     ):
         self.tasks: List[VideoTask] = list(tasks)
         self.randomize = randomize
         self.stats_store = stats_store
+        self.cooldown_hours = max(0.0, float(cooldown_hours))
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         # Video keys currently being played by active workers
@@ -68,7 +70,7 @@ class TaskDispatcher:
                 if not queue:
                     return None
 
-                # Drop any tasks that reached their run limit, target multiplier, or were excluded
+                # Drop any tasks that reached their run limit, target multiplier, are on cooldown, or were excluded
                 filtered_queue = []
                 for t in queue:
                     v_key = resolve_video_key(t)
@@ -77,6 +79,10 @@ class TaskDispatcher:
                     if self.stats_store is not None:
                         rec = self.stats_store.find_for_task(t)
                         if rec is not None:
+                            if self.cooldown_hours > 0 and hasattr(rec, "is_on_cooldown"):
+                                is_cool, _ = rec.is_on_cooldown(self.cooldown_hours)
+                                if is_cool:
+                                    continue
                             c_runs = rec.runs
                             w_sec = rec.watch_seconds
                             v_dur = (rec.video_duration if rec.video_duration > 0 else 0.0) or getattr(t, "duration_seconds", 0.0)
