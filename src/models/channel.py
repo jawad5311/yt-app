@@ -1,3 +1,37 @@
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+import math
+
+def safe_float(val: Any, default: float = 0.0, min_val: Optional[float] = None, max_val: Optional[float] = None) -> float:
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if not math.isfinite(f):
+            return default
+        if min_val is not None and f < min_val:
+            return default
+        if max_val is not None and f > max_val:
+            return default
+        return f
+    except (TypeError, ValueError):
+        return default
+
+def safe_int(val: Any, default: int = 0, min_val: Optional[int] = None, max_val: Optional[int] = None) -> int:
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if not math.isfinite(f):
+            return default
+        i = int(f)
+        if min_val is not None and i < min_val:
+            return default
+        if max_val is not None and i > max_val:
+            return default
+        return i
+    except (TypeError, ValueError):
+        return default
+
 from datetime import datetime
 import re
 """Channel model: named YouTube channels used to group queued video tasks."""
@@ -174,8 +208,8 @@ class Channel:
         archived_val = data.get("archived", False)
         if isinstance(archived_val, str):
             archived_val = archived_val.lower() in ("true", "1", "yes")
-        watch_sec_val = float(data.get("watch_seconds", 0.0) or 0.0)
-        target_watch_sec_val = float(data.get("target_watch_seconds", 0.0) or 0.0)
+        watch_sec_val = safe_float(data.get("watch_seconds"), default=0.0, min_val=0.0)
+        target_watch_sec_val = safe_float(data.get("target_watch_seconds"), default=0.0, min_val=0.0)
         return cls(
             name=str(data.get("name") or "").strip(),
             url=normalize_channel_url(str(data.get("url") or "")),

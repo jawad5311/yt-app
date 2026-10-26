@@ -1,3 +1,37 @@
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+import math
+
+def safe_float(val: Any, default: float = 0.0, min_val: Optional[float] = None, max_val: Optional[float] = None) -> float:
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if not math.isfinite(f):
+            return default
+        if min_val is not None and f < min_val:
+            return default
+        if max_val is not None and f > max_val:
+            return default
+        return f
+    except (TypeError, ValueError):
+        return default
+
+def safe_int(val: Any, default: int = 0, min_val: Optional[int] = None, max_val: Optional[int] = None) -> int:
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if not math.isfinite(f):
+            return default
+        i = int(f)
+        if min_val is not None and i < min_val:
+            return default
+        if max_val is not None and i > max_val:
+            return default
+        return i
+    except (TypeError, ValueError):
+        return default
+
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -122,24 +156,15 @@ class VideoTask:
             enabled_val = enabled_val.lower() in ("true", "1", "yes")
 
         raw_duration_sec = data.get("duration_seconds", 0)
-        try:
-            duration_seconds_val = max(0, int(raw_duration_sec))
-        except (TypeError, ValueError):
-            duration_seconds_val = 0
+        duration_seconds_val = safe_int(raw_duration_sec, default=0, min_val=0)
 
         duration_text_val = str(data.get("duration_text", "") or "")
 
         raw_max_runs = data.get("max_runs", 0)
-        try:
-            max_runs_val = max(0, int(raw_max_runs))
-        except (TypeError, ValueError):
-            max_runs_val = 0
+        max_runs_val = max(0, safe_int(raw_max_runs, default=0, min_val=0))
 
         raw_mult = data.get("target_multiplier", 0.0)
-        try:
-            target_multiplier_val = max(0.0, float(raw_mult))
-        except (TypeError, ValueError):
-            target_multiplier_val = 0.0
+        target_multiplier_val = safe_float(raw_mult, default=0.0, min_val=0.0)
 
         return cls(
             url=data.get("url", ""),

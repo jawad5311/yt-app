@@ -59,7 +59,11 @@ class AccountsView(ctk.CTkFrame):
         self.load_saved_accounts()
 
     def load_saved_accounts(self):
-        raw_accounts = self.app_controller.config_mgr.get_accounts()
+        try:
+            raw_accounts = self.app_controller.config_mgr.get_accounts()
+        except Exception as exc:
+            logging.error(f"Failed to load accounts: {exc}")
+            raw_accounts = []
         self.accounts = []
         for item in raw_accounts:
             if isinstance(item, dict) and "email" in item and "password" in item:
