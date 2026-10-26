@@ -16,6 +16,7 @@ from ..models.channel import Channel, is_video_task_runnable
 from ..models.video_task import VideoTask
 from ..models.watch_stats import format_duration, resolve_video_key
 from ..utils.logger import emit, init_logging
+from .background_jobs import BackgroundJobs
 from .views.accounts_view import AccountsView
 from .views.channels_view import ChannelsView
 from .views.dashboard_view import DashboardView
@@ -41,6 +42,7 @@ class YTBotApp(ctk.CTk):
         self.log_queue: queue.Queue = queue.Queue()
         # Structured worker events: ("progress", worker_id, done, total) / ("status", text, level)
         self.event_queue: queue.Queue = queue.Queue()
+        self.background_jobs = BackgroundJobs()
         self.worker_progress: dict = {}
 
         self.loaded_accounts: List[Account] = []
@@ -525,6 +527,11 @@ class YTBotApp(ctk.CTk):
             self.refresh_watch_stats()
 
     def _poll_log_queue(self):
+        # Network jobs have their own queue so starting a session cannot erase
+        # a pending dialog result when it clears worker progress events.
+        jobs = self.__dict__.get("background_jobs")
+        if jobs is not None:
+            jobs.drain()
         # 1. Batch up to 25 log messages per tick to prevent UI lockup
         log_batch = []
         try:
@@ -536,13 +543,20 @@ class YTBotApp(ctk.CTk):
         if log_batch:
             logs_view = self.views.get("logs")
             if logs_view is not None:
-                logs_view.append_log("\n".join(log_batch))
+                try:
+                    logs_view.append_log("\n".join(log_batch))
+                except Exception:
+                    logging.exception("Failed to update the log view")
 
         # 2. Process up to 10 worker events per tick
-        try:
-            for _ in range(10):
-                self._handle_worker_event(self.event_queue.get_nowait())
-        except queue.Empty:
-            pass
+        for _ in range(10):
+            try:
+                event = self.event_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._handle_worker_event(event)
+            except Exception:
+                logging.exception("Failed to apply worker event")
 
         self.after(50, self._poll_log_queue)

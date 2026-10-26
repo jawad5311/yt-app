@@ -1,7 +1,6 @@
 import re
-import threading
 import webbrowser
-from tkinter import messagebox
+from tkinter import TclError, messagebox
 from typing import Callable, List, Optional, Set
 
 import customtkinter as ctk
@@ -197,6 +196,87 @@ class ChannelsView(ctk.CTkFrame):
         views = getattr(self.app_controller, "views", None)
         return views.get("queue") if isinstance(views, dict) else None
 
+    @staticmethod
+    def _widget_exists(widget) -> bool:
+        try:
+            return bool(widget.winfo_exists())
+        except TclError:
+            return False
+
+    def _channel_is_current(self, channel, name, url) -> bool:
+        return (
+            any(saved is channel for saved in self.channels)
+            and channel.name == name
+            and canonical_channel_url(channel.url) == canonical_channel_url(url)
+        )
+
+    def _submit_channel_job(self, loading, progress_bar, work, done, *, current=lambda: True):
+        """Bridge plain network results to live dialogs on the main thread."""
+        def close_loading():
+            if self._widget_exists(loading):
+                progress_bar.stop()
+                loading.destroy()
+
+        def finish(result):
+            close_loading()
+            done(result)
+
+        def fail(exc):
+            close_loading()
+            messagebox.showerror("Fetch Error", f"Failed to fetch channel details:\n{exc}", parent=self)
+
+        return self.app_controller.background_jobs.submit(
+            work, done=finish, error=fail,
+            current=lambda: self._widget_exists(self) and self._widget_exists(loading) and current(),
+            discard=close_loading,
+        )
+
+    def _fetch_name_for_dialog(self, modal, url_entry, name_entry, fetch_btn, status_lbl, *, on_loaded=None):
+        """Resolve a name without overwriting newer edits or touching a closed dialog."""
+        url = url_entry.get().strip()
+        original_name = name_entry.get()
+        jobs = self.app_controller.background_jobs
+        previous = modal.__dict__.get("_channel_name_job")
+        if previous is not None:
+            jobs.cancel(previous)
+        token = object()
+        modal._channel_name_token = token
+        fetch_btn.configure(state="disabled", text="⏳ Fetching...")
+        status_lbl.configure(text="Contacting YouTube for official channel name...", text_color=("gray40", "gray60"))
+
+        def reset_button():
+            if self._widget_exists(modal) and modal._channel_name_token is token:
+                fetch_btn.configure(state="normal", text="🔍 Fetch Name")
+                status_lbl.configure(text="")
+
+        def current():
+            return (
+                self._widget_exists(self) and self._widget_exists(modal)
+                and modal._channel_name_token is token
+                and url_entry.get().strip() == url and name_entry.get() == original_name
+            )
+
+        def done(fetched):
+            reset_button()
+            if fetched or on_loaded is not None:
+                fetched = fetched or extract_fallback_channel_name(url)
+                name_entry.delete(0, "end")
+                name_entry.insert(0, fetched)
+                status_lbl.configure(text=f"✓ Detected: '{fetched}'", text_color="#10B981")
+                if on_loaded is not None:
+                    on_loaded()
+            else:
+                status_lbl.configure(text="Could not auto-detect channel name; you can type it above.", text_color="#F59E0B")
+
+        def fail(exc):
+            reset_button()
+            status_lbl.configure(text=f"Could not fetch the name: {exc}", text_color="#EF4444")
+
+        modal._channel_name_job = jobs.submit(
+            lambda report: fetch_channel_title_online(url), done=done, error=fail,
+            current=current, discard=reset_button,
+        )
+
     def video_count(self, channel_name: str) -> int:
         tasks = getattr(self.app_controller, "queued_video_tasks", None) or []
         return sum(1 for task in tasks if task.channel == channel_name)
@@ -247,6 +327,7 @@ class ChannelsView(ctk.CTkFrame):
         index = edit_index if edit_index is not None else -1
         is_editing = 0 <= index < len(self.channels)
         target = self.channels[index] if is_editing else Channel()
+        original_identity = (target.name, target.url)
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Channel" if is_editing else "Add Channel")
@@ -303,25 +384,7 @@ class ChannelsView(ctk.CTkFrame):
                 if not silent_if_empty:
                     status_lbl.configure(text="Please enter a channel URL or handle first.", text_color="#EF4444")
                 return
-            fetch_btn.configure(state="disabled", text="⏳ Fetching...")
-            status_lbl.configure(text="Contacting YouTube for official channel name...", text_color=("gray40", "gray60"))
-
-            def _bg():
-                fetched = fetch_channel_title_online(u)
-                def _ui():
-                    try:
-                        fetch_btn.configure(state="normal", text="🔍 Fetch Name")
-                        if fetched:
-                            name_entry.delete(0, "end")
-                            name_entry.insert(0, fetched)
-                            status_lbl.configure(text=f"✓ Detected: '{fetched}'", text_color="#10B981")
-                        else:
-                            status_lbl.configure(text="Could not auto-detect channel name; you can type it above.", text_color="#F59E0B")
-                    except Exception:
-                        pass
-                modal.after(0, _ui)
-
-            threading.Thread(target=_bg, daemon=True).start()
+            self._fetch_name_for_dialog(modal, url_entry, name_entry, fetch_btn, status_lbl)
 
         fetch_btn.configure(command=lambda: _do_fetch_name(silent_if_empty=False))
         url_entry.bind("<FocusOut>", lambda e: _do_fetch_name(silent_if_empty=True) if (not name_entry.get().strip() or name_entry.get().strip().startswith("@")) else None)
@@ -374,11 +437,16 @@ class ChannelsView(ctk.CTkFrame):
             raw_name = name_entry.get().strip()
             raw_url = url_entry.get().strip()
 
+            current_index = next((i for i, ch in enumerate(self.channels) if ch is target), -1)
+            if is_editing and (current_index < 0 or (target.name, target.url) != original_identity):
+                messagebox.showerror("Channel Changed", "This channel changed or was removed. Reopen it before saving.", parent=modal)
+                return
+
             if not raw_name and not raw_url:
                 messagebox.showerror("Error", "Please provide a Channel Name or Channel URL.", parent=modal)
                 return
 
-            candidates = [ch for i, ch in enumerate(self.channels) if not is_editing or i != index]
+            candidates = [ch for i, ch in enumerate(self.channels) if not is_editing or i != current_index]
 
             # Check duplicate URL early
             if raw_url:
@@ -426,8 +494,10 @@ class ChannelsView(ctk.CTkFrame):
 
             # Case: Channel Name left empty, but URL provided without auto-fetch
             if not raw_name and raw_url:
-                fetched = fetch_channel_title_online(raw_url)
-                raw_name = fetched or extract_fallback_channel_name(raw_url)
+                self._fetch_name_for_dialog(
+                    modal, url_entry, name_entry, fetch_btn, status_lbl, on_loaded=on_submit,
+                )
+                return
 
             try:
                 channel = Channel.parse(
@@ -443,9 +513,9 @@ class ChannelsView(ctk.CTkFrame):
                 messagebox.showerror("Error", str(exc), parent=modal)
                 return
 
-            old_name = self.channels[index].name if is_editing else ""
+            old_name = target.name if is_editing else ""
             if is_editing:
-                self.channels[index] = channel
+                self.channels[current_index] = channel
             else:
                 self.channels.append(channel)
             self.save_channels()
@@ -514,17 +584,7 @@ class ChannelsView(ctk.CTkFrame):
         prog.pack(pady=(0, 15))
         prog.start()
 
-        def _bg_fetch():
-            res = fetch_channel_videos(channel.url, max_results=max_results)
-            self.after(0, lambda: _on_fetch_done(res))
-
         def _on_fetch_done(res: ChannelFetchResult):
-            try:
-                prog.stop()
-                loading.destroy()
-            except Exception:
-                pass
-
             if res.error:
                 messagebox.showerror(
                     "Fetch Error",
@@ -580,7 +640,11 @@ class ChannelsView(ctk.CTkFrame):
                 on_import=_handle_import,
             )
 
-        threading.Thread(target=_bg_fetch, daemon=True).start()
+        name, url = channel.name, channel.url
+        self._submit_channel_job(
+            loading, prog, lambda report: fetch_channel_videos(url, max_results=max_results),
+            _on_fetch_done, current=lambda: self._channel_is_current(channel, name, url),
+        )
 
     def _fetch_and_create_channel(
         self,
@@ -616,17 +680,13 @@ class ChannelsView(ctk.CTkFrame):
         prog.pack(pady=(0, 15))
         prog.start()
 
-        def _bg_fetch():
+        def _bg_fetch(report):
             res = fetch_channel_videos(raw_url, max_results=max_fetch)
-            self.after(0, lambda: _on_fetch_done(res))
+            if not res.error and not (res.channel_title or "").strip():
+                res.channel_title = fetch_channel_title_online(raw_url) or extract_fallback_channel_name(raw_url)
+            return res
 
         def _on_fetch_done(res: ChannelFetchResult):
-            try:
-                prog.stop()
-                loading.destroy()
-            except Exception:
-                pass
-
             if res.error:
                 messagebox.showerror(
                     "Fetch Error",
@@ -635,7 +695,7 @@ class ChannelsView(ctk.CTkFrame):
                 )
                 return
 
-            resolved_name = (res.channel_title or "").strip() or fetch_channel_title_online(raw_url) or extract_fallback_channel_name(raw_url)
+            resolved_name = (res.channel_title or "").strip() or extract_fallback_channel_name(raw_url)
             # Ensure unique name among existing channels
             unique_name = resolved_name
             counter = 2
@@ -715,7 +775,7 @@ class ChannelsView(ctk.CTkFrame):
                 on_import=_handle_import,
             )
 
-        threading.Thread(target=_bg_fetch, daemon=True).start()
+        self._submit_channel_job(loading, prog, _bg_fetch, _on_fetch_done)
 
     # --------------------------------------------------------------- actions
 
@@ -993,48 +1053,65 @@ class ChannelsView(ctk.CTkFrame):
         prog.pack(pady=(0, 15))
         prog.start()
 
-        def _bg_sync():
+        snapshots = [(ch, ch.name, ch.url) for ch in channels_with_urls]
+        requests = [(name, url) for _, name, url in snapshots]
+
+        def _bg_sync(report):
+            names = []
+            for i, (name, url) in enumerate(requests, 1):
+                report((i, name))
+                try:
+                    names.append(fetch_channel_title_online(url))
+                except Exception:
+                    names.append("")
+            return names
+
+        def _close():
+            if self._widget_exists(toast):
+                prog.stop()
+                toast.destroy()
+
+        def _done(names):
+            _close()
             updated_count = 0
-            for i, ch in enumerate(channels_with_urls):
-                try:
-                    def _update_progress(idx=i+1, name=ch.name):
-                        try:
-                            lbl.configure(text=f"Resolving '{name}' ({idx}/{len(channels_with_urls)})...")
-                        except Exception:
-                            pass
-                    toast.after(0, _update_progress)
-
-                    official_name = fetch_channel_title_online(ch.url)
-                    if official_name and official_name.strip() and official_name != ch.name:
-                        old_name = ch.name
-                        ch.name = official_name.strip()
-                        queue = self._queue_view()
-                        if queue is not None:
-                            queue.reassign_channel(old_name, ch.name)
-                        updated_count += 1
-                except Exception:
-                    pass
-
-            def _done():
-                try:
-                    prog.stop()
-                    toast.destroy()
-                except Exception:
-                    pass
+            queue = self._queue_view()
+            for (ch, old_name, old_url), fetched in zip(snapshots, names):
+                if not self._channel_is_current(ch, old_name, old_url):
+                    continue
+                official_name = (fetched or "").strip()
+                if not official_name or official_name == old_name:
+                    continue
+                # A rename must not collapse two saved channels into one.
+                if any(other is not ch and other.name.lower() == official_name.lower() for other in self.channels):
+                    continue
+                ch.name = official_name
+                if queue is not None:
+                    queue.reassign_channel(old_name, ch.name)
+                updated_count += 1
+            if updated_count:
                 self.save_channels()
                 self.load_channels()
-                queue = self._queue_view()
                 if queue is not None:
                     queue.refresh_list()
-                messagebox.showinfo(
-                    "Sync Complete",
-                    f"Channel names updated: {updated_count} channel(s) updated to official YouTube names.",
-                    parent=self,
-                )
+            messagebox.showinfo(
+                "Sync Complete",
+                f"Channel names updated: {updated_count} channel(s) updated to official YouTube names.",
+                parent=self,
+            )
 
-            self.after(0, _done)
+        def _progress(data):
+            idx, name = data
+            lbl.configure(text=f"Resolving '{name}' ({idx}/{len(requests)})...")
 
-        threading.Thread(target=_bg_sync, daemon=True).start()
+        def _failed(exc):
+            _close()
+            messagebox.showerror("Sync Error", f"Failed to sync channel names:\n{exc}", parent=self)
+
+        self.app_controller.background_jobs.submit(
+            _bg_sync, done=_done, error=_failed, progress=_progress,
+            current=lambda: self._widget_exists(self) and self._widget_exists(toast),
+            discard=_close,
+        )
 
     def clear_channels(self) -> None:
         if not self.channels:
