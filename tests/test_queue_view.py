@@ -156,10 +156,19 @@ def test_queue_card_title_and_stats_lines_display():
         assert len(lines) == 2
         # Line 1: Single title, no separator
         assert lines[0] == "#1. Stop Wasting Money on Meta Ads! Try This Strategy"
-        # Line 2: Stats only, no "Titles:" prefix
+        # Line 2: Stats only, no "Titles:", no "Max Views:", no "Multiplier:"
         assert "Titles:" not in lines[1]
+        assert "Max Views:" not in lines[1]
+        assert "Multiplier:" not in lines[1]
         assert "Watchtime:" in lines[1]
         assert "Length: 8 min" in lines[1]
+
+        # Second label created is stats_lbl (line 3)
+        stats_lbl_call = mock_label_cls.call_args_list[1]
+        line3_text = stats_lbl_call[1].get("text")
+        assert "runs --" in line3_text
+        assert "Length:" not in line3_text
+        assert "last" not in line3_text
 
     # 2. Multiple titles test
     task_multi = VideoTask(

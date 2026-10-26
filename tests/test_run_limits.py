@@ -54,29 +54,28 @@ def test_video_task_run_limit_helpers():
 
 def test_format_watch_line_with_run_limits():
     # Not run yet without limit
-    assert format_watch_line(None, max_runs=0) == "▶ Not run yet"
+    assert format_watch_line(None, max_runs=0) == "0 runs -- 0s watched"
 
     # Not run yet with limit
-    assert format_watch_line(None, max_runs=5) == "▶ 0/5 full runs (5 remaining)"
+    assert format_watch_line(None, max_runs=5) == "0/5 runs -- 0s watched"
 
     # Partial runs remaining
     rec = StatRecord(runs=2, watch_seconds=125.0, last_result="success")
     line = format_watch_line(rec, max_runs=5)
-    assert "2/5 full runs (3 remaining)" in line
+    assert "2/5 runs" in line
     assert "2m 05s watched" in line
-    assert "last ✅" in line
 
     # 1 run remaining singular formatting
     rec_one_left = StatRecord(runs=4, watch_seconds=200.0)
-    assert "4/5 full runs (1 remaining)" in format_watch_line(rec_one_left, max_runs=5)
+    assert "4/5 runs" in format_watch_line(rec_one_left, max_runs=5)
 
     # Limit reached exactly
     rec_full = StatRecord(runs=5, watch_seconds=300.0, last_result="success")
-    assert "5/5 full runs (Limit reached)" in format_watch_line(rec_full, max_runs=5)
+    assert "5/5 runs" in format_watch_line(rec_full, max_runs=5)
 
     # Exceeded limit
     rec_over = StatRecord(runs=7, watch_seconds=420.0)
-    assert "7/5 full runs (Limit reached)" in format_watch_line(rec_over, max_runs=5)
+    assert "7/5 runs" in format_watch_line(rec_over, max_runs=5)
 
 
 def test_is_video_task_runnable_respects_run_limit(tmp_path):

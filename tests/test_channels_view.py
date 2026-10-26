@@ -63,7 +63,7 @@ def test_format_watch_line_with_hours():
     rec = StatRecord(runs=2, watch_seconds=3600.0, last_result="success")
     line = format_watch_line(rec, max_runs=5, use_hours=True)
     assert "1.0 hours watched" in line
-    assert "2/5 full runs" in line
+    assert "2/5 runs" in line
 
     rec2 = StatRecord(runs=1, watch_seconds=500.0, last_result="success")
     line2 = format_watch_line(rec2, use_hours=True)

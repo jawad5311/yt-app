@@ -379,36 +379,18 @@ def format_watch_line(
     use_hours: bool = False,
     task_duration: float = 0.0,
 ) -> str:
-    """Queue-card line: ``▶ 12 full runs · 4.4 hours watched (1.5x) · Length: 60 min · last ✅`` or with limit progress."""
+    """Queue-card line: ``x/x runs -- xx watched (multiplier)``."""
     current_runs = record.runs if record is not None else 0
     if max_runs > 0:
-        if current_runs >= max_runs:
-            runs_str = f"{current_runs}/{max_runs} full runs (Limit reached)"
-        else:
-            remaining = max_runs - current_runs
-            rem_str = "1 remaining" if remaining == 1 else f"{remaining} remaining"
-            runs_str = f"{current_runs}/{max_runs} full runs ({rem_str})"
+        runs_str = f"{current_runs}/{max_runs} runs"
     else:
-        if current_runs == 0:
-            runs_str = ""
-        elif current_runs == 1:
-            runs_str = "1 full run"
-        else:
-            runs_str = f"{current_runs} full runs"
+        runs_str = "1 run" if current_runs == 1 else f"{current_runs} runs"
 
     eff_duration = task_duration
     if eff_duration <= 0 and record is not None and record.video_duration > 0:
         eff_duration = record.video_duration
 
     mult = format_watch_multiplier(record.watch_seconds if record else 0.0, eff_duration) if eff_duration > 0 else ""
-    length_suffix = f" · Length: {max(1, int(round(eff_duration / 60.0)))} min" if eff_duration > 0 else ""
-
-    if record is None or current_runs == 0:
-        if max_runs > 0:
-            base = f"▶ {runs_str} ({mult})" if mult else f"▶ {runs_str}"
-        else:
-            base = f"▶ Not run yet ({mult})" if mult else "▶ Not run yet"
-        return f"{base}{length_suffix}"
 
     watch_sec = record.watch_seconds if record else 0.0
     if use_hours:
@@ -417,12 +399,7 @@ def format_watch_line(
         time_str = f"{format_duration(watch_sec)} watched"
 
     mult_suffix = f" ({mult})" if mult else ""
-    line = f"▶ {runs_str} · {time_str}{mult_suffix}{length_suffix}"
-    if record is not None and record.last_result:
-        icon = RESULT_ICONS.get(record.last_result)
-        if icon:
-            line += f" · last {icon}"
-    return line
+    return f"{runs_str} -- {time_str}{mult_suffix}"
 
 
 def format_totals_line(totals: Totals) -> str:
