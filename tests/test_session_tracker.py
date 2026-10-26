@@ -1,6 +1,12 @@
 from unittest.mock import MagicMock
-from src.models.channel import Channel
+
+import pytest
+
 from src.automation.session_tracker import SessionChannelTracker
+from src.config.manager import ConfigManager
+from src.config.stats_store import StatsStore
+from src.models.channel import Channel
+from src.models.watch_stats import TaskOutcome
 
 
 def test_session_tracker_increments_by_minute_only_for_active_channel():
@@ -109,3 +115,33 @@ def test_session_tracker_converts_remaining_minutes_on_stop():
     # 25 minutes converted to 25 * 60 = 1500 seconds -> total 5100 seconds (1.4 hours)
     assert ch_a.watch_seconds == 3600.0 + 1500.0
     assert any(ev[0] == "channel_watch_time_updated" for ev in events)
+
+
+@pytest.mark.parametrize("watch_seconds", [120.0, 3600.0, 3720.0])
+def test_session_and_video_record_count_watch_time_once(tmp_path, watch_seconds):
+    config = ConfigManager(tmp_path / "settings.json")
+    channel = Channel(name="Cooking")
+    config.set_channels([channel.to_dict()])
+    store = StatsStore(tmp_path / "stats.json")
+    tracker = SessionChannelTracker(config_mgr=config, stats_store=store, channels=[channel])
+    tracker.set_active_channel(channel.name)
+    tracker.add_watch_delta(channel.name, watch_seconds)
+
+    # Hourly session commits must not create a second StatsStore entry.
+    assert store.all() == {}
+    store.record(TaskOutcome(
+        video_key="dQw4w9WgXcQ", channel=channel.name, attempts=1,
+        success=True, playback_finished=True, video_duration=watch_seconds,
+        watched_seconds=watch_seconds,
+    ))
+    tracker.on_stop()
+    tracker.on_stop()
+
+    assert config.get_channels()[0]["watch_seconds"] == watch_seconds
+    assert store.channel_totals(channel.name).watch_seconds == watch_seconds
+    assert store.lifetime_totals().watch_seconds == watch_seconds
+    assert store.lifetime_totals().runs == 1
+    assert list(store.all()) == ["dQw4w9WgXcQ"]
+    reloaded = StatsStore(tmp_path / "stats.json")
+    assert reloaded.channel_totals(channel.name).watch_seconds == watch_seconds
+    assert reloaded.lifetime_totals().watch_seconds == watch_seconds

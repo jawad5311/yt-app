@@ -217,19 +217,7 @@ class ChannelsView(ctk.CTkFrame):
         store = getattr(self.app_controller, "stats_store", None)
         if not store:
             return "0.0 hours"
-        clean = (channel.name or "").strip()
-        names = {
-            clean.lower(),
-            clean.lstrip("@").lower(),
-            f"@{clean.lstrip('@')}".lower(),
-        }
-        total_sec = 0.0
-        with store._lock:
-            for record in store.records.values():
-                ch_rec = (record.channel or "").strip().lower()
-                if ch_rec in names:
-                    total_sec += float(record.watch_seconds)
-        return format_hours(total_sec)
+        return format_hours(store.channel_totals(channel.name).watch_seconds)
 
     def channel_stats_line(self, channel_name: str) -> str:
         """``27 runs · 12h 04m watched`` for one channel row, or ``""``."""

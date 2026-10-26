@@ -213,15 +213,10 @@ class SessionChannelTracker:
             except Exception as e:
                 logging.debug(f"Failed updating channel in config_mgr: {e}")
 
-        # 3. Update stats_store
-        if self.stats_store:
-            try:
-                if hasattr(self.stats_store, "add_channel_watch_seconds"):
-                    self.stats_store.add_channel_watch_seconds(channel_name, seconds)
-            except Exception as e:
-                logging.debug(f"Failed updating stats_store: {e}")
+        # Video outcomes are recorded by the workers in StatsStore. Writing
+        # these same seconds there as a channel record would count them twice.
 
-        # 4. Notify app UI to refresh watch stats
+        # 3. Notify app UI to refresh watch stats
         if self.emit_event:
             try:
                 self.emit_event(("channel_watch_time_updated", channel_name, seconds))

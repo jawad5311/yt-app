@@ -177,6 +177,34 @@ def test_channel_totals_sum_the_snapshotted_records(tmp_path):
     assert lifetime.watch_seconds == 95.0
 
 
+def test_legacy_channel_summaries_are_preserved_but_excluded_from_totals(tmp_path):
+    store = make_store(tmp_path)
+    store.record(outcome(channel="Cooking", watched_seconds=3600.0))
+    payload = json.loads(store.stats_file.read_text(encoding="utf-8"))
+    payload["videos"]["channel::cooking"] = {
+        "channel": "@Cooking", "watch_seconds": 3600.0,
+    }
+    store.stats_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    reloaded = make_store(tmp_path)
+    assert reloaded.channel_totals("@Cooking").watch_seconds == 3600.0
+    assert reloaded.channel_totals("Cooking").videos == 1
+    assert reloaded.lifetime_totals().watch_seconds == 3600.0
+    assert reloaded.lifetime_totals().videos == 1
+    assert len(reloaded.for_channel("Cooking")) == 1
+
+    # Subsequent recordings and channel changes must not reintroduce the
+    # duplicate. Keep the legacy entry available rather than deleting history.
+    reloaded.record(outcome(watched_seconds=60.0))
+    reloaded.rename_channel("Cooking", "Food")
+    assert reloaded.channel_totals("Food").watch_seconds == 3660.0
+    reloaded.unassign_channel("Food")
+    assert reloaded.channel_totals("").watch_seconds == 3660.0
+    assert make_store(tmp_path).lifetime_totals().watch_seconds == 3660.0
+    saved = json.loads(store.stats_file.read_text(encoding="utf-8"))
+    assert saved["videos"]["channel::cooking"]["watch_seconds"] == 3600.0
+
+
 def test_rename_channel_cascades_into_stats(tmp_path):
     store = make_store(tmp_path)
     store.record(outcome(channel="Cooking"))

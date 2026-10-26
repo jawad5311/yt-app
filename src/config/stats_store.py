@@ -131,26 +131,14 @@ class StatsStore:
         with self._lock:
             return dict(self.records)
 
-    def add_channel_watch_seconds(self, channel_name: str, seconds: float) -> None:
-        """Add watch seconds for a channel to stats store."""
-        if seconds <= 0:
-            return
-        clean = (channel_name or "").strip()
-        key = f"channel::{clean.lower().lstrip('@')}"
-        with self._lock:
-            rec = self.records.get(key)
-            if rec is None:
-                rec = StatRecord(channel=channel_name)
-                self.records[key] = rec
-            rec.watch_seconds += seconds
-            self._save_unlocked()
-
     def for_channel(self, channel: str) -> List[StatRecord]:
+        """Return video records only; legacy channel summaries duplicate them."""
         with self._lock:
             clean = (channel or "").strip().lower().lstrip("@")
             return [
-                record for record in self.records.values()
-                if (record.channel or "").strip().lower().lstrip("@") == clean
+                record for key, record in self.records.items()
+                if not key.startswith("channel::")
+                and (record.channel or "").strip().lower().lstrip("@") == clean
             ]
 
     def channel_totals(self, channel: str) -> Totals:
@@ -158,7 +146,12 @@ class StatsStore:
 
     def lifetime_totals(self) -> Totals:
         with self._lock:
-            return totals_for(self.records.values())
+            # Retain old summaries on disk, but never sum them with the video
+            # records from which they were derived.
+            return totals_for(
+                record for key, record in self.records.items()
+                if not key.startswith("channel::")
+            )
 
     # ------------------------------------------------------- channel changes
 
