@@ -503,7 +503,7 @@ def calculate_end_buffer(video_duration: float, target_buffer: float = 10.0) -> 
     if video_duration <= 0:
         return 1.5
     # Cap buffer to 12% of duration for shorter videos, with a minimum of 1.5s
-    max_allowed = max(1.5, video_duration * 0.12)
+    max_allowed = min(max(1.5, video_duration * 0.12), video_duration * 0.5)
     return min(target_buffer, max_allowed)
 
 
@@ -532,12 +532,7 @@ def watch_video(
         else float(end_buffer_seconds)
     )
 
-    # Random completion cutoff between 95% and 100% (e.g. 0.95 to 0.995)
-    if completion_ratio is not None and completion_ratio > 0:
-        effective_completion_ratio = float(completion_ratio)
-    else:
-        effective_completion_ratio = random.uniform(0.95, 0.995)
-    logged_95_pct = False
+    logged_cutoff = None
 
     cfg = interactivity_config or {}
     simulator = HumanInteractivitySimulator(
@@ -776,27 +771,21 @@ def watch_video(
         if now - last_heartbeat_log >= 60.0:
             last_heartbeat_log = now
 
-        # Milestone: Log when video reaches 95% completion
-        if video_duration > 0 and curr_time >= (video_duration * 0.95) and not logged_95_pct:
-            logged_95_pct = True
-            target_pct_fmt = round(effective_completion_ratio * 100, 1)
+        effective_buffer = calculate_end_buffer(video_duration, target_buffer)
+        threshold_time = video_duration - effective_buffer
+        if completion_ratio is not None and completion_ratio > 0:
+            threshold_time = min(threshold_time, video_duration * min(1.0, completion_ratio))
+        if is_full_mode and video_duration > 0 and logged_cutoff != threshold_time:
+            logged_cutoff = threshold_time
             emit(
                 log_queue,
-                f"Video viewed for 95% ({_format_clock(curr_time)} / {_format_clock(video_duration)}). "
-                f"Closing randomly between 95%–100% (target cutoff: {target_pct_fmt}%)...",
+                f"Full-video cutoff: {_format_clock(threshold_time)} / {_format_clock(video_duration)} "
+                f"(stop buffer: {effective_buffer:g}s).",
             )
-
-        # Playback finished check (random 95%–100% cutoff, capped at video_duration - 1.0s to avoid autoplay countdown)
-        effective_buffer = calculate_end_buffer(video_duration, target_buffer)
-        raw_cutoff = video_duration * effective_completion_ratio
-        if completion_ratio is not None and completion_ratio > 0:
-            threshold_time = min(video_duration - effective_buffer, raw_cutoff) if effective_completion_ratio < 1.0 else (video_duration - effective_buffer)
-        else:
-            threshold_time = min(video_duration - 1.0, max(video_duration * 0.95, raw_cutoff))
 
         if ended:
             return _result(True, "ended", playback_finished=True)
-        if video_duration > 0 and curr_time >= threshold_time:
+        if is_full_mode and video_duration > 0 and curr_time >= threshold_time:
             return _result(True, "completion_cutoff")
 
         # Check watch progress: if video progress is still zero, loop and tap play button
@@ -807,7 +796,8 @@ def watch_video(
                 ensure_video_playing(driver, log_queue=log_queue)
 
         # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
-        if paused and not ended and (video_duration == 0 or curr_time < (video_duration - effective_buffer - 1.0)):
+        resume_cutoff = threshold_time if is_full_mode else video_duration
+        if paused and not ended and (video_duration == 0 or curr_time < resume_cutoff):
             if now - last_play_attempt >= 3.0:
                 last_play_attempt = now
                 play_attempts += 1

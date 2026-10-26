@@ -223,7 +223,7 @@ def test_skip_button_ignores_visit_site_cta():
     assert is_genuine_skip_button(skip_btn) is True
 
 
-def test_watch_video_random_cutoff_between_95_and_100_percent():
+def test_watch_video_logs_the_configured_cutoff():
     import queue
     driver = MagicMock()
     driver.current_url = "https://www.youtube.com/watch?v=test95percent"
@@ -248,20 +248,22 @@ def test_watch_video_random_cutoff_between_95_and_100_percent():
         duration_seconds=None,
         log_queue=log_q,
         enable_interactivity=False,
+        end_buffer_seconds=10,
     )
 
     assert result.completed is True
     assert result.playback_finished is False
     assert result.reason == "completion_cutoff"
 
-    # Check logs for 95% milestone notification and final random cutoff
+    # The logs describe the configured cutoff rather than an unrelated percentage.
     logs = []
     while not log_q.empty():
         logs.append(log_q.get_nowait())
     log_text = " ".join(logs)
 
-    assert "Video viewed for 95%" in log_text
-    assert "Closing randomly between 95%–100%" in log_text
+    assert "Full-video cutoff: 16:30 / 16:40" in log_text
+    assert "stop buffer: 10s" in log_text
+    assert "Closing randomly" not in log_text
 
 
 def run_scripted_watch(monkeypatch, states, **kwargs):
@@ -357,3 +359,57 @@ def test_cutoff_is_successful_partial_watch(monkeypatch):
     assert result.reason == "completion_cutoff"
     assert not result.playback_finished
     assert result.watched_seconds == 0
+
+
+@pytest.mark.parametrize("buffer,expected", [(10, 990), (30, 970)])
+def test_configured_full_video_buffer_controls_cutoff(monkeypatch, buffer, expected):
+    result, _ = run_scripted_watch(monkeypatch, [
+        playback_state(951), playback_state(expected - 0.1), playback_state(expected),
+    ], duration_seconds=None, end_buffer_seconds=buffer)
+    assert result.reason == "completion_cutoff"
+    assert result.final_current_time == expected
+    assert not result.playback_finished
+
+
+def test_zero_buffer_selects_fallback_once(monkeypatch):
+    from src.automation import youtube_actions as module
+
+    choose = MagicMock(return_value=8)
+    monkeypatch.setattr(module.random, "uniform", choose)
+    result, _ = run_scripted_watch(monkeypatch, [playback_state(951), playback_state(992)],
+        duration_seconds=None, end_buffer_seconds=0)
+    assert result.final_current_time == 992
+    choose.assert_called_once_with(7.0, 12.0)
+
+
+@pytest.mark.parametrize("ratio,expected", [(0.9, 900), (1.0, 990)])
+def test_explicit_ratio_can_only_advance_buffer_cutoff(monkeypatch, ratio, expected):
+    result, _ = run_scripted_watch(monkeypatch, [playback_state(expected)],
+        duration_seconds=None, end_buffer_seconds=10, completion_ratio=ratio)
+    assert result.reason == "completion_cutoff"
+    assert not result.playback_finished
+
+
+def test_tiny_video_cannot_complete_at_zero(monkeypatch):
+    result, _ = run_scripted_watch(monkeypatch, [
+        playback_state(0, duration=1), playback_state(0.5, duration=1),
+    ], duration_seconds=None, end_buffer_seconds=120)
+    assert result.reason == "completion_cutoff"
+    assert result.final_current_time > 0
+
+
+def test_full_video_buffer_does_not_shorten_fixed_watch(monkeypatch):
+    result, _ = run_scripted_watch(monkeypatch, [
+        playback_state(p, duration=10) for p in (0, 3, 6, 9)
+    ], duration_seconds=9, end_buffer_seconds=120)
+    assert result.reason == "duration_reached"
+    assert result.watched_seconds == 9
+
+
+def test_ad_position_does_not_satisfy_full_video_cutoff(monkeypatch):
+    result, _ = run_scripted_watch(monkeypatch, [
+        playback_state(999, isAd=True), playback_state(990),
+    ], duration_seconds=None, end_buffer_seconds=10, skip_ads=False, max_ad_seconds=0)
+    assert result.reason == "completion_cutoff"
+    assert result.ad_seconds == 0  # First probe establishes the ad clock.
+    assert result.final_current_time == 990
