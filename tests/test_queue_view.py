@@ -111,17 +111,17 @@ def test_reorder_buttons_outside_card_frame():
         # The returned widget is the outer row frame
         assert result == mock_row_frame
 
-        # Verify buttons were created inside reorder_frame with compact size (<= 18x14)
+        # Verify buttons were created inside reorder_frame with increased size (24x20)
         btn_calls = mock_btn_cls.call_args_list
         assert len(btn_calls) >= 2
         up_btn_kwargs = btn_calls[0][1]
         down_btn_kwargs = btn_calls[1][1]
         assert btn_calls[0][0][0] == mock_reorder_frame
         assert btn_calls[1][0][0] == mock_reorder_frame
-        assert up_btn_kwargs.get("width") <= 18
-        assert up_btn_kwargs.get("height") <= 14
-        assert down_btn_kwargs.get("width") <= 18
-        assert down_btn_kwargs.get("height") <= 14
+        assert up_btn_kwargs.get("width") == 24
+        assert up_btn_kwargs.get("height") == 20
+        assert down_btn_kwargs.get("width") == 24
+        assert down_btn_kwargs.get("height") == 20
 
 
 def test_queue_card_title_and_stats_lines_display():
