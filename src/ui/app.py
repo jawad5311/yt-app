@@ -1,3 +1,4 @@
+import time
 import logging
 import queue
 import threading
@@ -52,13 +53,20 @@ class YTBotApp(ctk.CTk):
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.is_running = False
+        self.is_closing = False
         self.current_mode = "idle"
         self.current_view_name = "dashboard"
         self._queue_needs_refresh = False
         self._channels_needs_refresh = False
+        self.session_manager_thread: Optional[threading.Thread] = None
+        self._poll_job: Optional[str] = None
+        self._close_check_job: Optional[str] = None
+        self._close_start_time: float = 0.0
+        self._close_timeout: float = 20.0
 
         self._build_ui()
-        self.after(50, self._poll_log_queue)
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self._poll_job = self.after(50, self._poll_log_queue)
 
         # Pre-load accounts fallback if saved list is empty and accounts.txt exists
         if not self.loaded_accounts:
@@ -148,7 +156,7 @@ class YTBotApp(ctk.CTk):
             self.config_mgr.reset_channel_watch_times()
 
         # Reset in-memory trackers of active workers
-        for worker in list(getattr(self, "active_workers", [])):
+        for worker in list(self.__dict__.get("active_workers", [])):
             tracker = getattr(worker, "channel_tracker", None)
             if tracker and hasattr(tracker, "reset"):
                 tracker.reset()
@@ -229,7 +237,7 @@ class YTBotApp(ctk.CTk):
         self.update_dashboard_stats()
 
     def start_automation(self):
-        if self.is_running:
+        if self.is_running or self.__dict__.get("is_closing", False):
             return
 
         if not self.loaded_accounts:
@@ -274,89 +282,95 @@ class YTBotApp(ctk.CTk):
         self.views["dashboard"].reset_progress()
 
         # Run the full automation session across the requested number of loops in a background manager thread
-        threading.Thread(
+        self.session_manager_thread = threading.Thread(
             target=self._run_automation_session,
             args=(active_video_tasks, total_loops),
             daemon=True,
-        ).start()
+        )
+        self.session_manager_thread.start()
 
     def _run_automation_session(self, active_video_tasks: List[VideoTask], total_loops: int):
         """Execute the automation session across the requested number of loops."""
         parallel_limit = self.config_mgr.get_int("ParallelBrowsers", 1)
 
-        for current_loop in range(1, total_loops + 1):
-            if self.stop_event.is_set():
-                break
+        try:
+            for current_loop in range(1, total_loops + 1):
+                if self.stop_event.is_set():
+                    break
 
-            # Filter tasks to ensure any video that reached its run limit is excluded
-            channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
-            cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0)
-            current_tasks = [t for t in active_video_tasks if is_video_task_runnable(t, channels, self.stats_store, cooldown_hours=cooldown_h)]
-            if not current_tasks:
-                emit(self.log_queue, "All active video tasks have reached their run limit or are in cooldown. Ending automation session.")
-                break
+                # Filter tasks to ensure any video that reached its run limit is excluded
+                channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
+                cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+                current_tasks = [t for t in active_video_tasks if is_video_task_runnable(t, channels, self.stats_store, cooldown_hours=cooldown_h)]
+                if not current_tasks:
+                    emit(self.log_queue, "All active video tasks have reached their run limit or are in cooldown. Ending automation session.")
+                    break
 
-            loop_header = (
-                f"=== Starting YouTube Automation Session (Loop {current_loop}/{total_loops}) ==="
-                if total_loops > 1
-                else "=== Starting YouTube Automation Session ==="
-            )
-            emit(self.log_queue, loop_header)
-
-            self.worker_progress.clear()
-            self.active_threads.clear()
-
-            # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
-            dispatcher = TaskDispatcher(tasks=current_tasks, randomize=True, stats_store=self.stats_store, cooldown_hours=cooldown_h)
-            active_workers_count = min(len(self.loaded_accounts), parallel_limit)
-            emit(
-                self.log_queue,
-                f"Dispatching {len(current_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
-            )
-
-            # Distribute accounts across worker threads
-            for worker_id, acc in enumerate(self.loaded_accounts[:parallel_limit]):
-                worker = AutomationWorker(
-                    account=acc,
-                    video_tasks=active_video_tasks,
-                    config_mgr=self.config_mgr,
-                    log_queue=self.log_queue,
-                    stop_event=self.stop_event,
-                    event_queue=self.event_queue,
-                    worker_id=worker_id,
-                    stats_store=self.stats_store,
-                    dispatcher=dispatcher,
+                loop_header = (
+                    f"=== Starting YouTube Automation Session (Loop {current_loop}/{total_loops}) ==="
+                    if total_loops > 1
+                    else "=== Starting YouTube Automation Session ==="
                 )
-                self.active_workers.append(worker)
-                thread = threading.Thread(target=worker.run, daemon=True)
-                self.active_threads.append(thread)
-                thread.start()
+                emit(self.log_queue, loop_header)
 
-            # Wait for all workers in this loop iteration to finish
-            for t in self.active_threads:
-                t.join()
+                self.worker_progress.clear()
+                self.active_threads.clear()
 
-            if self.stop_event.is_set():
-                emit(self.log_queue, "Automation stopped by user.")
-                break
-
-            if current_loop < total_loops:
+                # Thread-safe dispatcher coordinates randomized, non-overlapping task assignment
+                dispatcher = TaskDispatcher(tasks=current_tasks, randomize=True, stats_store=self.stats_store, cooldown_hours=cooldown_h)
+                active_workers_count = min(len(self.loaded_accounts), parallel_limit)
                 emit(
                     self.log_queue,
-                    f"Completed automation loop {current_loop}/{total_loops}. Restarting queue for loop {current_loop + 1}/{total_loops}...",
+                    f"Dispatching {len(current_tasks)} enabled video(s) across {active_workers_count} parallel browser(s) with random non-overlapping assignment.",
                 )
 
-        self.is_running = False
-        self.current_mode = "idle"
-        try:
-            self.event_queue.put_nowait(("finished",))
-        except queue.Full:
-            pass
-        emit(self.log_queue, "=== Automation Session Completed ===")
+                # Distribute accounts across worker threads
+                for worker_id, acc in enumerate(self.loaded_accounts[:parallel_limit]):
+                    worker = AutomationWorker(
+                        account=acc,
+                        video_tasks=active_video_tasks,
+                        config_mgr=self.config_mgr,
+                        log_queue=self.log_queue,
+                        stop_event=self.stop_event,
+                        event_queue=self.event_queue,
+                        worker_id=worker_id,
+                        stats_store=self.stats_store,
+                        dispatcher=dispatcher,
+                    )
+                    self.active_workers.append(worker)
+                    thread = threading.Thread(target=worker.run, daemon=True)
+                    self.active_threads.append(thread)
+                    thread.start()
+
+                # Wait for all workers in this loop iteration to finish
+                for t in list(self.active_threads):
+                    t.join()
+
+                if self.stop_event.is_set():
+                    emit(self.log_queue, "Automation stopped by user.")
+                    break
+
+                if current_loop < total_loops:
+                    emit(
+                        self.log_queue,
+                        f"Completed automation loop {current_loop}/{total_loops}. Restarting queue for loop {current_loop + 1}/{total_loops}...",
+                    )
+        finally:
+            self.active_threads.clear()
+            self.active_workers.clear()
+            self.session_manager_thread = None
+            self.is_running = False
+            self.current_mode = "idle"
+            if not self.__dict__.get("is_closing", False):
+                try:
+                    self.event_queue.put_nowait(("finished",))
+                except queue.Full:
+                    pass
+            emit(self.log_queue, "=== Automation Session Completed ===")
 
     def start_watching(self):
         """Start the continuous watching recommendation loop."""
-        if self.is_running:
+        if self.is_running or self.__dict__.get("is_closing", False):
             return
 
         if not self.loaded_accounts:
@@ -397,11 +411,12 @@ class YTBotApp(ctk.CTk):
         if "dashboard" in self.views and hasattr(self.views["dashboard"], "get_loop_count"):
             total_loops = self.views["dashboard"].get_loop_count()
 
-        threading.Thread(
+        self.session_manager_thread = threading.Thread(
             target=self._run_watching_session,
             args=(self.loaded_accounts[0], active_channels, total_loops),
             daemon=True,
-        ).start()
+        )
+        self.session_manager_thread.start()
 
     def _run_watching_session(self, account: Account, channels: List[Channel], total_loops: int = 1):
         """Execute the continuous watching recommendation session."""
@@ -423,14 +438,17 @@ class YTBotApp(ctk.CTk):
         finally:
             if worker in self.active_workers:
                 self.active_workers.remove(worker)
-
-        self.is_running = False
-        self.current_mode = "idle"
-        try:
-            self.event_queue.put_nowait(("finished",))
-        except queue.Full:
-            pass
-        emit(self.log_queue, "=== Watching Session Completed ===")
+            self.active_threads.clear()
+            self.active_workers.clear()
+            self.session_manager_thread = None
+            self.is_running = False
+            self.current_mode = "idle"
+            if not self.__dict__.get("is_closing", False):
+                try:
+                    self.event_queue.put_nowait(("finished",))
+                except queue.Full:
+                    pass
+            emit(self.log_queue, "=== Watching Session Completed ===")
 
     def toggle_pause_watching(self):
         """Toggle pause/resume state during browsing session."""
@@ -460,10 +478,16 @@ class YTBotApp(ctk.CTk):
                     pass
         self.pause_event.clear()
         self.stop_event.set()
+        for worker in list(self.__dict__.get("active_workers", [])):
+            if hasattr(worker, "stop"):
+                try:
+                    worker.stop()
+                except Exception:
+                    pass
 
     def _handle_worker_event(self, event) -> None:
         """Apply a structured worker event to the dashboard (main thread only)."""
-        if not event:
+        if not event or self.__dict__.get("is_closing", False):
             return
         kind = event[0]
 
@@ -527,6 +551,10 @@ class YTBotApp(ctk.CTk):
             self.refresh_watch_stats()
 
     def _poll_log_queue(self):
+        if self.__dict__.get("is_closing", False):
+            self._poll_job = None
+            return
+
         # Network jobs have their own queue so starting a session cannot erase
         # a pending dialog result when it clears worker progress events.
         jobs = self.__dict__.get("background_jobs")
@@ -559,4 +587,120 @@ class YTBotApp(ctk.CTk):
             except Exception:
                 logging.exception("Failed to apply worker event")
 
-        self.after(50, self._poll_log_queue)
+        if not self.__dict__.get("is_closing", False):
+            self._poll_job = self.after(50, self._poll_log_queue)
+        else:
+            self._poll_job = None
+
+    def _get_owned_threads(self) -> List[threading.Thread]:
+        """Collect all live session threads managed by this application."""
+        threads: List[threading.Thread] = []
+        mgr = self.__dict__.get("session_manager_thread", None)
+        if mgr is not None and mgr.is_alive():
+            threads.append(mgr)
+        for t in self.__dict__.get("active_threads", []):
+            if t is not None and t.is_alive() and t not in threads:
+                threads.append(t)
+        return threads
+
+    def _cancel_scheduled_callbacks(self) -> None:
+        """Cancel all pending Tk after callbacks before widget destruction."""
+        if self.__dict__.get("_poll_job", None) is not None:
+            try:
+                self.after_cancel(self._poll_job)
+            except Exception:
+                pass
+            self._poll_job = None
+        if self.__dict__.get("_close_check_job", None) is not None:
+            try:
+                self.after_cancel(self._close_check_job)
+            except Exception:
+                pass
+            self._close_check_job = None
+
+    def _prompt_stuck_workers(self) -> str:
+        """Prompt user when workers take too long during shutdown.
+        Returns 'wait' to continue waiting or 'cancel' to cancel closing.
+        """
+        try:
+            from tkinter import messagebox
+            resp = messagebox.askyesno(
+                "Workers Busy",
+                "Some worker threads are taking longer than expected to finish saving data.\n\n"
+                "Do you want to continue waiting?\n"
+                "(Selecting 'No' will cancel closing so no data is lost.)",
+                parent=self,
+            )
+            return "wait" if resp else "cancel"
+        except Exception:
+            return "wait"
+
+    def on_closing(self) -> None:
+        """Orderly application shutdown handler registered with WM_DELETE_WINDOW."""
+        if self.__dict__.get("is_closing", False):
+            return
+
+        self.is_closing = True
+
+        # Check if any session is actively running
+        active_threads = self._get_owned_threads()
+        if not self.is_running and not active_threads:
+            # Idle: clean exit immediately
+            self._cancel_scheduled_callbacks()
+            self.destroy()
+            return
+
+        # Active session: signal stop and release pause
+        self.pause_event.clear()
+        self.stop_event.set()
+
+        for worker in list(self.__dict__.get("active_workers", [])):
+            if hasattr(worker, "stop"):
+                try:
+                    worker.stop()
+                except Exception:
+                    pass
+
+        emit(self.log_queue, "Closing application... Shutting down active session safely.")
+        dashboard = self.views.get("dashboard")
+        if dashboard is not None:
+            try:
+                dashboard.set_status("Closing application... Waiting for workers to finish.", "warning")
+            except Exception:
+                pass
+
+        self._close_start_time = time.monotonic()
+        self._check_shutdown_progress()
+
+    def _check_shutdown_progress(self) -> None:
+        if not self.__dict__.get("is_closing", False):
+            return
+
+        living_threads = self._get_owned_threads()
+        if not living_threads:
+            # All session threads finished cleanly!
+            self._cancel_scheduled_callbacks()
+            self.destroy()
+            return
+
+        elapsed = time.monotonic() - self.__dict__.get("_close_start_time", time.monotonic())
+        close_timeout = self.__dict__.get("_close_timeout", 20.0)
+
+        if elapsed >= close_timeout:
+            decision = self._prompt_stuck_workers()
+            if decision == "wait":
+                self._close_start_time = time.monotonic()
+                self._close_check_job = self.after(200, self._check_shutdown_progress)
+                return
+            else:
+                self.is_closing = False
+                emit(self.log_queue, "Close request cancelled. Active session remains stopped.", logging.WARNING)
+                dashboard = self.views.get("dashboard")
+                if dashboard is not None:
+                    try:
+                        dashboard.set_status("Close cancelled. Workers still finishing.", "warning")
+                    except Exception:
+                        pass
+                return
+
+        self._close_check_job = self.after(100, self._check_shutdown_progress)
