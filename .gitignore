@@ -39,6 +39,7 @@ extensions/
 *.manifest
 *.spec
 !yt_tool.spec
+build/staging/
 
 # IDE
 .idea/
@@ -53,5 +54,17 @@ settings.json
 # Per-video / per-channel watch statistics (created on first recorded run)
 stats.json
 
-# Configuration files with credentials (never commit)
+# Configuration files with credentials and default accounts import (never commit)
 credentials.json
+accounts.txt
+
+# Backup and temporary configuration files
+*.bak
+*.tmp
+*.backup_*
+
+# Allow trackable example templates and test fixtures
+!*.example.*
+!*.example
+!accounts.example.txt
+!settings.example.json

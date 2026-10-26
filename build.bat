@@ -12,12 +12,14 @@ if not exist ".venv\Scripts\pyinstaller.exe" (
     call ".venv\Scripts\pip.exe" install pyinstaller
 )
 
-echo Cleaning previous build artifacts...
-if exist "build" rmdir /s /q "build"
-if exist "dist\YTAutomationTool" rmdir /s /q "dist\YTAutomationTool"
+set STAGING_DIR=%SCRIPT_DIR%build\staging\YTAutomationTool
+set DIST_DIR=%SCRIPT_DIR%dist\YTAutomationTool
 
-echo Running PyInstaller...
-call ".venv\Scripts\pyinstaller.exe" --clean yt_tool.spec
+echo Cleaning staging build directory...
+if exist "%SCRIPT_DIR%build\staging" rmdir /s /q "%SCRIPT_DIR%build\staging"
+
+echo Running PyInstaller in isolated staging...
+call ".venv\Scripts\pyinstaller.exe" --clean --distpath "%SCRIPT_DIR%build\staging" yt_tool.spec
 
 if errorlevel 1 (
     echo.
@@ -26,16 +28,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Syncing configuration and account files to build folder...
-if exist "settings.json" copy /y "settings.json" "dist\YTAutomationTool\settings.json" >nul
-if exist "stats.json" copy /y "stats.json" "dist\YTAutomationTool\stats.json" >nul
-if exist "accounts.txt" copy /y "accounts.txt" "dist\YTAutomationTool\accounts.txt" >nul
-if exist "credentials.json" copy /y "credentials.json" "dist\YTAutomationTool\credentials.json" >nul
+echo Syncing release files to destination...
+if not exist "%DIST_DIR%" mkdir "%DIST_DIR%"
+xcopy /s /y /i /d "%STAGING_DIR%" "%DIST_DIR%" >nul
+
+echo [NOTE] Personal credentials and state are excluded from the release build.
+echo [NOTE] The application will initialize settings with safe defaults on first launch.
+if exist "accounts.example.txt" copy /y "accounts.example.txt" "%DIST_DIR%\accounts.example.txt" >nul
+if exist "settings.example.json" copy /y "settings.example.json" "%DIST_DIR%\settings.example.json" >nul
 
 echo.
 echo =========================================================
 echo   Build Successful!
 echo   Executable created at:
-echo   %SCRIPT_DIR%dist\YTAutomationTool\YTAutomationTool.exe
+echo   %DIST_DIR%\YTAutomationTool.exe
 echo =========================================================
 pause

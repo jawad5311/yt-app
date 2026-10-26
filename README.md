@@ -113,6 +113,18 @@ python -m mypy                                  # type check
 
 The same checks run in CI (`.github/workflows/ci.yml`) on every push and pull request.
 
+### 5. Building the Standalone Executable
+
+To package a standalone Windows executable (`dist/YTAutomationTool/YTAutomationTool.exe`):
+
+```powershell
+.\build.bat
+```
+
+- **Clean Release Distribution**: The build script isolates artifacts in a staging folder and strictly excludes personal credentials (`credentials.json`), account import files (`accounts.txt`), personal settings (`settings.json`), statistics (`stats.json`), and temporary backup files (`*.bak`, `*.tmp`).
+- **Safe First-Run**: A fresh installation created by `build.bat` follows standard first-run setup without requiring bundled credentials. Sanitized templates (`accounts.example.txt` and `settings.example.json`) are provided for reference.
+- **Data Preservation**: Building into `dist/YTAutomationTool` preserves any existing user configuration in the target directory without recursive deletion.
+
 ## Usage
 
 ### 1. Load Accounts

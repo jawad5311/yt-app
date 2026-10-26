@@ -1,0 +1,29 @@
+{
+  "settings": {
+    "AccountsFile": "accounts.txt",
+    "DirectLinkFallback": false,
+    "WatchtimeDuration": "Full Video",
+    "ParallelBrowsers": 1,
+    "AppearanceMode": "Dark",
+    "FullVideoTimeoutMinutes": 5,
+    "VideoCooldownHours": 12,
+    "BlockAds": false,
+    "SkipAds": true,
+    "MaxAdWatchSeconds": 32,
+    "AutoplayEndBufferSeconds": 10,
+    "AutomationLoops": 1,
+    "EnableHumanInteractivity": true,
+    "RandomScrolling": true,
+    "VariableSpeed": false,
+    "ToggleCaptions": true,
+    "ExpandDescription": true,
+    "LikeComments": true,
+    "LikeVideo": true,
+    "AdjustQuality": true,
+    "QualityLevel": "360p",
+    "RandomMicroPauses": true
+  },
+  "accounts": [],
+  "videos": [],
+  "channels": []
+}

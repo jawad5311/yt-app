@@ -1,10 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
 # Collect all data files and submodules from customtkinter
 datas = collect_data_files("customtkinter")
+
+# Exclude sensitive local configuration, credentials, statistics, and temp/backup files
+SENSITIVE_NAMES = {
+    "credentials.json",
+    "accounts.txt",
+    "settings.json",
+    "stats.json",
+}
+
+filtered_datas = []
+for src, dst in datas:
+    src_base = os.path.basename(src).lower()
+    if src_base in SENSITIVE_NAMES or src_base.endswith(".bak") or src_base.endswith(".tmp") or ".backup_" in src_base:
+        continue
+    filtered_datas.append((src, dst))
+datas = filtered_datas
+
 hiddenimports = (
     collect_submodules("customtkinter")
     + collect_submodules("selenium")

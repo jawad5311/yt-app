@@ -1,0 +1,6 @@
+# Example Google Accounts file
+# Format: email:password or email,password (one per line)
+# Lines starting with # are ignored.
+#
+# user1@gmail.com:sample_password_1
+# user2@gmail.com,sample_password_2
