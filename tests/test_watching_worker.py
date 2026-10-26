@@ -984,3 +984,173 @@ class TestDashboardButtonsAndState:
         assert record.channel == "@testchannel"
         assert record.runs == 1
         assert record.watch_seconds == 60.0
+
+
+class TestAdSlotFiltering:
+    """Tests ensuring in-feed ads, sponsored items, and ad slot renderers are never selected or clicked."""
+
+    def test_is_candidate_ad(self):
+        from src.automation.watching_worker import is_candidate_ad
+
+        # Ad tracking links (like googleadservices)
+        ad_item_1 = {
+            "title": "Try GoHighLevel 30-day Free Trial",
+            "href": "https://www.googleadservices.com/pagead/aclk?sa=L&ai=C02PeA5Leap7IIpbv1LsP&gad_source=2",
+            "channel_name": "GoHighLevel",
+        }
+        assert is_candidate_ad(ad_item_1) is True
+
+        # Sponsored title or badge
+        ad_item_2 = {
+            "title": "Sponsored - Learn Python Fast in 2026",
+            "href": "/watch?v=abcdefghijk",
+            "channel_name": "Course Provider",
+        }
+        assert is_candidate_ad(ad_item_2) is True
+
+        # Non-watch URL or channel link masquerading as video
+        ad_item_3 = {
+            "title": "Explore Channel",
+            "href": "/@somechannel",
+            "channel_name": "Some Channel",
+        }
+        assert is_candidate_ad(ad_item_3) is True
+
+        # Sponsored channel name
+        ad_item_4 = {
+            "title": "Marketing Automation Tool",
+            "href": "/watch?v=12345678901",
+            "channel_name": "Sponsored",
+        }
+        assert is_candidate_ad(ad_item_4) is True
+
+        # Legitimate YouTube video candidate
+        legit_item = {
+            "title": "Amazing Cooking Recipe",
+            "href": "/watch?v=abcdefghijk",
+            "channel_name": "Chef Master",
+        }
+        assert is_candidate_ad(legit_item) is False
+
+    def test_find_random_suggested_video_never_picks_first_item_if_ad(self, tmp_path):
+        from src.automation.watching_worker import WatchingWorker
+        from src.config.manager import ConfigManager
+        from src.models.account import Account
+        from src.models.channel import Channel
+
+        worker = WatchingWorker(
+            account=Account(email="test@gmail.com", password="pwd"),
+            channels=[Channel(name="Target Channel", url="")],
+            config_mgr=ConfigManager(config_file=tmp_path / "settings.json"),
+        )
+
+        candidates = [
+            {
+                "index": 0,
+                "title": "HighLevel - All-In-One Marketing Platform",
+                "href": "https://www.googleadservices.com/pagead/aclk?sa=L&ai=xyz123",
+                "channel_name": "HighLevel",
+            },
+            {
+                "index": 1,
+                "title": "Sponsored Course: Learn Web Dev",
+                "href": "/watch?v=adcourse123",
+                "channel_name": "Sponsor",
+            },
+            {
+                "index": 2,
+                "title": "Legitimate Suggested Video",
+                "href": "/watch?v=legitvid123",
+                "channel_name": "Organic Channel",
+            },
+        ]
+
+        picked = worker._find_random_suggested_video(
+            candidates=candidates,
+            current_url="https://www.youtube.com/watch?v=currentvid1",
+            session_watched_keys=set(),
+            exclude_target_channels=True,
+        )
+
+        assert picked is not None
+        assert picked["title"] == "Legitimate Suggested Video"
+        assert picked["href"] == "/watch?v=legitvid123"
+
+    def test_find_target_video_skips_ads_matching_channel_name(self, tmp_path):
+        from src.automation.watching_worker import WatchingWorker
+        from src.config.manager import ConfigManager
+        from src.models.account import Account
+        from src.models.channel import Channel
+
+        ch = Channel(name="Iamcarhacker", url="")
+        worker = WatchingWorker(
+            account=Account(email="test@gmail.com", password="pwd"),
+            channels=[ch],
+            config_mgr=ConfigManager(config_file=tmp_path / "settings.json"),
+        )
+
+        candidates = [
+            {
+                "index": 0,
+                "title": "Sponsored: Car Diagnostic Scanner Tools",
+                "href": "https://www.googleadservices.com/pagead/aclk?sa=L&ai=scanner123",
+                "channel_name": "Iamcarhacker",
+            },
+            {
+                "index": 1,
+                "title": "How to match/adapt throttle in old Skoda Volkswagen",
+                "href": "/watch?v=umjVEhetrzA",
+                "channel_name": "Iamcarhacker",
+            },
+        ]
+
+        match_res = worker._find_target_video(
+            candidates=candidates,
+            allowed_channels=[ch],
+            session_watched_keys=set(),
+        )
+
+        assert match_res is not None
+        item, match_channel_obj, full_url, title, channel_display = match_res
+        assert title == "How to match/adapt throttle in old Skoda Volkswagen"
+        assert "umjVEhetrzA" in full_url
+
+    def test_click_recommended_video_refuses_ad_element_at_index(self, tmp_path):
+        from src.automation.watching_worker import WatchingWorker
+        from src.config.manager import ConfigManager
+        from src.models.account import Account
+
+        worker = WatchingWorker(
+            account=Account(email="test@gmail.com", password="pwd"),
+            channels=[],
+            config_mgr=ConfigManager(config_file=tmp_path / "settings.json"),
+        )
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://www.youtube.com/watch?v=initial123"
+        worker.driver = mock_driver
+
+        # Simulate index 0 element being detected as an ad
+        ad_card_element = MagicMock()
+        mock_driver.find_elements.return_value = [ad_card_element]
+        
+        def script_mock(script, *args):
+            # If checking is_ad on the element, return True
+            if "closest('ytd-ad-slot-renderer" in script or "is_ad" in script:
+                return True
+            return None
+
+        mock_driver.execute_script.side_effect = script_mock
+
+        target_card = {
+            "index": 0,
+            "title": "Non-ad Video",
+            "href": "/watch?v=targetvid12",
+        }
+
+        with patch("src.automation.watching_worker.safe_get") as mock_safe_get:
+            res = worker.click_recommended_video(target_card)
+            # Must NOT click the ad element
+            ad_card_element.click.assert_not_called()
+            # Falls back to safe direct navigation to the legitimate video URL
+            mock_safe_get.assert_called_once()
+            assert "targetvid12" in mock_safe_get.call_args[0][1]

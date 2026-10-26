@@ -45,12 +45,70 @@ return (function() {
     var results = [];
     var seenUrls = {};
 
+    var AD_SELECTORS = [
+        'ytd-ad-slot-renderer',
+        'ytd-in-feed-ad-layout-renderer',
+        'ad-slot-renderer',
+        'yt-ad-slot-renderer',
+        'ytd-display-ad-renderer',
+        'ytd-banner-promo-renderer',
+        'ytd-promoted-sparkles-web-renderer',
+        'ytd-compact-promoted-video-renderer',
+        'ytd-promoted-video-renderer',
+        'square-image-layout-view-model',
+        'ad-image-view-model',
+        'feed-ad-metadata-view-model',
+        '[layout*="ad"]'
+    ].join(', ');
+
+    function isAdElement(el) {
+        if (!el) return false;
+        if (el.closest && el.closest(AD_SELECTORS)) return true;
+        if (el.querySelector && el.querySelector(
+            'ad-badge-view-model, ad-image-view-model, feed-ad-metadata-view-model, ' +
+            '.ytBadgeShapeAd, .badge-style-type-ad, .badge-style-type-sponsored, ' +
+            '[aria-label*="Sponsored" i], [aria-label="Ad" i], [aria-label*="Advertisement" i]'
+        )) {
+            return true;
+        }
+        var badges = el.querySelectorAll ? el.querySelectorAll('badge-shape, yt-badge-shape, ytd-badge-supported-renderer, .ytBadgeShapeText, span.badge-style-type-simple') : [];
+        for (var b = 0; b < badges.length; b++) {
+            var txt = (badges[b].textContent || '').trim().toLowerCase();
+            if (txt === 'ad' || txt === 'sponsored' || txt === 'promoted' || txt.indexOf('sponsored') !== -1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function isAdUrl(href) {
+        if (!href) return true;
+        var lower = href.toLowerCase();
+        if (
+            lower.indexOf('googleadservices.com') !== -1 ||
+            lower.indexOf('/pagead/') !== -1 ||
+            lower.indexOf('doubleclick.net') !== -1 ||
+            lower.indexOf('googleads') !== -1 ||
+            lower.indexOf('ad_type') !== -1 ||
+            lower.indexOf('aclk') !== -1
+        ) {
+            return true;
+        }
+        if (lower.indexOf('/watch?v=') === -1 && lower.indexOf('watch?v=') === -1 && lower.indexOf('/watch?') === -1) {
+            return true;
+        }
+        return false;
+    }
+
     var cards = document.querySelectorAll(
         'ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-grid-media'
     );
 
     function parseCard(card, idx) {
         if (!card) return null;
+        if (isAdElement(card) || (card.parentElement && isAdElement(card.parentElement))) {
+            return null;
+        }
         // Explicitly skip Shorts shelves, reels, and slim-media shorts lockups
         if (
             card.closest('ytd-rich-shelf-renderer[is-shorts], ytd-rich-shelf-renderer, ytd-reel-shelf-renderer, ytd-rich-section-renderer') ||
@@ -64,7 +122,7 @@ return (function() {
             linkEl = card;
         }
         var href = linkEl ? (linkEl.getAttribute('href') || '') : '';
-        if (!href || (!href.includes('/watch') && !href.includes('v='))) {
+        if (!href || isAdUrl(href)) {
             return null;
         }
 
@@ -123,11 +181,14 @@ return (function() {
         var links = document.querySelectorAll('a[href*="/watch?v="]');
         for (var j = 0; j < links.length; j++) {
             var a = links[j];
+            if (isAdElement(a)) continue;
             var hrefVal = a.getAttribute('href') || '';
+            if (isAdUrl(hrefVal)) continue;
             var cUrl = hrefVal.split('&')[0];
             if (seenUrls[cUrl]) continue;
 
             var parentCard = a.closest('ytd-rich-item-renderer, ytd-video-renderer, ytd-grid-video-renderer, ytd-rich-grid-media, div#dismissible');
+            if (parentCard && isAdElement(parentCard)) continue;
             var parsedFallback = parseCard(parentCard, j);
             if (parsedFallback) {
                 results.push(parsedFallback);
@@ -158,12 +219,70 @@ return (function() {
     var results = [];
     var seenUrls = {};
 
+    var AD_SELECTORS = [
+        'ytd-ad-slot-renderer',
+        'ytd-in-feed-ad-layout-renderer',
+        'ad-slot-renderer',
+        'yt-ad-slot-renderer',
+        'ytd-display-ad-renderer',
+        'ytd-banner-promo-renderer',
+        'ytd-promoted-sparkles-web-renderer',
+        'ytd-compact-promoted-video-renderer',
+        'ytd-promoted-video-renderer',
+        'square-image-layout-view-model',
+        'ad-image-view-model',
+        'feed-ad-metadata-view-model',
+        '[layout*="ad"]'
+    ].join(', ');
+
+    function isAdElement(el) {
+        if (!el) return false;
+        if (el.closest && el.closest(AD_SELECTORS)) return true;
+        if (el.querySelector && el.querySelector(
+            'ad-badge-view-model, ad-image-view-model, feed-ad-metadata-view-model, ' +
+            '.ytBadgeShapeAd, .badge-style-type-ad, .badge-style-type-sponsored, ' +
+            '[aria-label*="Sponsored" i], [aria-label="Ad" i], [aria-label*="Advertisement" i]'
+        )) {
+            return true;
+        }
+        var badges = el.querySelectorAll ? el.querySelectorAll('badge-shape, yt-badge-shape, ytd-badge-supported-renderer, .ytBadgeShapeText, span.badge-style-type-simple') : [];
+        for (var b = 0; b < badges.length; b++) {
+            var txt = (badges[b].textContent || '').trim().toLowerCase();
+            if (txt === 'ad' || txt === 'sponsored' || txt === 'promoted' || txt.indexOf('sponsored') !== -1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function isAdUrl(href) {
+        if (!href) return true;
+        var lower = href.toLowerCase();
+        if (
+            lower.indexOf('googleadservices.com') !== -1 ||
+            lower.indexOf('/pagead/') !== -1 ||
+            lower.indexOf('doubleclick.net') !== -1 ||
+            lower.indexOf('googleads') !== -1 ||
+            lower.indexOf('ad_type') !== -1 ||
+            lower.indexOf('aclk') !== -1
+        ) {
+            return true;
+        }
+        if (lower.indexOf('/watch?v=') === -1 && lower.indexOf('watch?v=') === -1 && lower.indexOf('/watch?') === -1) {
+            return true;
+        }
+        return false;
+    }
+
     var cards = document.querySelectorAll(
         'yt-lockup-view-model, ytd-compact-video-renderer, #related ytd-video-renderer, ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer, ytd-compact-radio-renderer'
     );
 
     function parseRecCard(card, idx) {
         if (!card) return null;
+        if (isAdElement(card) || (card.parentElement && isAdElement(card.parentElement))) {
+            return null;
+        }
         // Explicitly skip Shorts shelves and lockups
         if (
             card.closest('ytd-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts], ytd-rich-section-renderer') ||
@@ -175,7 +294,7 @@ return (function() {
         var linkEl = card.querySelector('a.ytLockupViewModelContentImage, a.ytLockupMetadataViewModelTitle, a#thumbnail, a.yt-simple-endpoint, a#video-title-link, a[href*="/watch?v="], a[href*="watch?"]');
         if (!linkEl && card.tagName === 'A') linkEl = card;
         var href = linkEl ? (linkEl.getAttribute('href') || '') : '';
-        if (!href || (!href.includes('/watch') && !href.includes('v='))) {
+        if (!href || isAdUrl(href)) {
             return null;
         }
 
@@ -214,7 +333,7 @@ return (function() {
 
         if (!channelName && linkEl) {
             var aria = linkEl.getAttribute('aria-label') || '';
-            var match = aria.match(/\bby\s+([^0-9\n\r]+?)(?:\s+\d+|\s+ago|\s+views|\s+Streamed|$)/i);
+            var match = aria.match(/\\bby\\s+([^0-9\\n\\r]+?)(?:\\s+\\d+|\\s+ago|\\s+views|\\s+Streamed|$)/i);
             if (match && match[1]) {
                 channelName = match[1].trim();
             }
@@ -251,10 +370,13 @@ return (function() {
         var links = (relContainer || document).querySelectorAll('a[href*="/watch?v="]');
         for (var j = 0; j < links.length; j++) {
             var a = links[j];
+            if (isAdElement(a)) continue;
             var h = a.getAttribute('href') || '';
+            if (isAdUrl(h)) continue;
             var cUrl = h.split('&')[0];
             if (seenUrls[cUrl]) continue;
             var parent = a.closest('yt-lockup-view-model, ytd-compact-video-renderer, ytd-video-renderer, div#dismissible');
+            if (parent && isAdElement(parent)) continue;
             var p = parseRecCard(parent, j);
             if (p) {
                 results.push(p);
@@ -266,6 +388,26 @@ return (function() {
 })();
 """
 
+
+
+def is_candidate_ad(item: Dict[str, Any]) -> bool:
+    """Check if candidate video dictionary represents an advertisement or sponsored card."""
+    if not isinstance(item, dict):
+        return True
+    href = (item.get("href") or "").lower()
+    if not href:
+        return True
+    if any(ad_kw in href for ad_kw in ["googleadservices", "doubleclick", "/pagead/", "aclk", "ad_type", "googleads"]):
+        return True
+    if not ("/watch?v=" in href or "watch?v=" in href or "/watch?" in href):
+        return True
+    title = (item.get("title") or "").strip().lower()
+    if title.startswith("sponsored") or title.startswith("ad ") or title == "ad":
+        return True
+    ch_name = (item.get("channel_name") or "").strip().lower()
+    if ch_name.startswith("sponsored") or ch_name == "ad":
+        return True
+    return False
 
 def is_clean_youtube_home_url(url: str) -> bool:
     """Check if URL is strictly the clean YouTube Home page (no extra path, channel, or query parameters)."""
@@ -521,8 +663,9 @@ class WatchingWorker:
                             if m:
                                 return raw_items
 
-                    if len(raw_items) >= target_count and not target_channels:
-                        return raw_items[:target_count]
+                    filtered_items = [it for it in raw_items if not is_candidate_ad(it)]
+                    if len(filtered_items) >= target_count and not target_channels:
+                        return filtered_items[:target_count]
 
                 # Perform a smooth scroll down
                 scroll_step = random.randint(500, 800)
@@ -540,7 +683,8 @@ class WatchingWorker:
                     time.sleep(0.1)
 
             raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
-            return raw_items if isinstance(raw_items, list) else []
+            items_list = raw_items if isinstance(raw_items, list) else []
+            return [it for it in items_list if not is_candidate_ad(it)]
         except Exception as exc:
             emit(self.log_queue, f"Error fetching home page videos: {exc}", logging.WARNING)
             return []
@@ -554,15 +698,18 @@ class WatchingWorker:
                 if self.stop_event.is_set():
                     return []
                 raw_items = self.driver.execute_script(RECOMMENDED_VIDEOS_JS)
-                if isinstance(raw_items, list) and len(raw_items) >= 10:
-                    return raw_items
+                if isinstance(raw_items, list):
+                    filtered_rec = [it for it in raw_items if not is_candidate_ad(it)]
+                    if len(filtered_rec) >= 10:
+                        return filtered_rec
 
                 # Smoothly scroll down the page slightly to populate recommended items
                 self.driver.execute_script("window.scrollBy({top: 600, behavior: 'smooth'});")
                 time.sleep(1.8)
 
             raw_items = self.driver.execute_script(RECOMMENDED_VIDEOS_JS)
-            return raw_items if isinstance(raw_items, list) else []
+            items_list = raw_items if isinstance(raw_items, list) else []
+            return [it for it in items_list if not is_candidate_ad(it)]
         except Exception as exc:
             emit(self.log_queue, f"Error fetching recommended videos: {exc}", logging.WARNING)
             return []
@@ -572,6 +719,45 @@ class WatchingWorker:
         href = card_info.get("href", "")
         vid_id = extract_video_id(href) or (href.split("v=")[-1].split("&")[0] if "v=" in href else "")
         try:
+            # 1. Direct search by vid_id: find clean non-ad link on Home page
+            if vid_id:
+                try:
+                    matched_el = self.driver.execute_script(r"""
+                        var vidId = arguments[0];
+                        var links = document.querySelectorAll(
+                            'ytd-rich-item-renderer a[href*="' + vidId + '"], ' +
+                            'ytd-video-renderer a[href*="' + vidId + '"], ' +
+                            'a[href*="' + vidId + '"]'
+                        );
+                        for (var i = 0; i < links.length; i++) {
+                            var l = links[i];
+                            if (l.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]')) {
+                                continue;
+                            }
+                            return l;
+                        }
+                        return null;
+                    """, vid_id)
+                    if matched_el:
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", matched_el)
+                        human_like_delay(0.5, 1.0)
+                        try:
+                            ActionChains(self.driver).move_to_element(matched_el).pause(0.2).click().perform()
+                        except Exception:
+                            try:
+                                matched_el.click()
+                            except Exception:
+                                click_element(self.driver, matched_el)
+
+                        for _ in range(8):
+                            cur = getattr(self.driver, "current_url", "") or ""
+                            if (vid_id and vid_id in cur) or ("/watch" in cur):
+                                return True
+                            time.sleep(0.3)
+                except Exception as exc:
+                    emit(self.log_queue, f"Direct home video click attempt error: {exc}", logging.DEBUG)
+
+            # 2. Index-based element click (with strict ad check)
             idx = int(card_info.get("index", 0))
             items = self.driver.find_elements(
                 By.CSS_SELECTOR,
@@ -579,49 +765,65 @@ class WatchingWorker:
             )
             if 0 <= idx < len(items):
                 item = items[idx]
-                try:
-                    self.driver.execute_script(
-                        "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", item
-                    )
-                    human_like_delay(0.8, 1.5)
-                except Exception:
-                    pass
-
-                clickable = None
-                for selector in (
-                    "a#video-title-link",
-                    "a#thumbnail",
-                    "#video-title",
-                    "a.yt-simple-endpoint",
-                    "a[href*='/watch']",
-                ):
-                    els = item.find_elements(By.CSS_SELECTOR, selector)
-                    if els and els[0].is_displayed():
-                        clickable = els[0]
-                        break
-
-                target = clickable or item
-                try:
-                    ActionChains(self.driver).move_to_element(target).pause(0.2).click().perform()
-                except Exception:
+                is_ad = self.driver.execute_script(r"""
+                    var el = arguments[0];
+                    if (!el) return true;
+                    return !!(el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]') ||
+                              el.querySelector('ad-badge-view-model, feed-ad-metadata-view-model, .ytBadgeShapeAd'));
+                """, item)
+                if not is_ad:
                     try:
-                        target.click()
+                        self.driver.execute_script(
+                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", item
+                        )
+                        human_like_delay(0.8, 1.5)
                     except Exception:
-                        click_element(self.driver, target)
+                        pass
 
-                for _ in range(8):
-                    cur = getattr(self.driver, "current_url", "") or ""
-                    if (vid_id and vid_id in cur) or ("/watch" in cur):
-                        return True
-                    time.sleep(0.3)
+                    clickable = None
+                    for selector in (
+                        "a#video-title-link",
+                        "a#thumbnail",
+                        "#video-title",
+                        "a.yt-simple-endpoint",
+                        "a[href*='/watch']",
+                    ):
+                        els = item.find_elements(By.CSS_SELECTOR, selector)
+                        if els and els[0].is_displayed():
+                            clickable = els[0]
+                            break
 
-            # If index click did not trigger navigation, match by URL
+                    target = clickable or item
+                    try:
+                        ActionChains(self.driver).move_to_element(target).pause(0.2).click().perform()
+                    except Exception:
+                        try:
+                            target.click()
+                        except Exception:
+                            click_element(self.driver, target)
+
+                    for _ in range(8):
+                        cur = getattr(self.driver, "current_url", "") or ""
+                        if (vid_id and vid_id in cur) or ("/watch" in cur):
+                            return True
+                        time.sleep(0.3)
+                else:
+                    emit(self.log_queue, "Home video item at index is an ad element; skipping index click to avoid ad.", logging.WARNING)
+
+            # 3. XPath fallback matching vid_id (with strict ad check)
             if href and vid_id:
                 match_links = self.driver.find_elements(
                     By.XPATH, f"//a[contains(@href, '{vid_id}')]"
                 )
                 for lk in match_links:
                     if lk.is_displayed():
+                        is_ad_lk = self.driver.execute_script(r"""
+                            var el = arguments[0];
+                            if (!el) return true;
+                            return !!el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]');
+                        """, lk)
+                        if is_ad_lk:
+                            continue
                         try:
                             self.driver.execute_script(
                                 "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", lk
@@ -657,56 +859,112 @@ class WatchingWorker:
         href = card_info.get("href", "")
         vid_id = extract_video_id(href) or (href.split("v=")[-1].split("&")[0] if "v=" in href else "")
         try:
+            # 1. Direct search by vid_id: find clean non-ad link
+            if vid_id:
+                try:
+                    matched_el = self.driver.execute_script(r"""
+                        var vidId = arguments[0];
+                        var links = document.querySelectorAll(
+                            '#related a[href*="' + vidId + '"], ' +
+                            'ytd-watch-next-secondary-results-renderer a[href*="' + vidId + '"], ' +
+                            'a[href*="' + vidId + '"]'
+                        );
+                        for (var i = 0; i < links.length; i++) {
+                            var l = links[i];
+                            if (l.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]')) {
+                                continue;
+                            }
+                            return l;
+                        }
+                        return null;
+                    """, vid_id)
+                    if matched_el:
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", matched_el)
+                        human_like_delay(0.5, 1.0)
+                        try:
+                            ActionChains(self.driver).move_to_element(matched_el).pause(0.2).click().perform()
+                        except Exception:
+                            try:
+                                matched_el.click()
+                            except Exception:
+                                click_element(self.driver, matched_el)
+
+                        for _ in range(8):
+                            cur = getattr(self.driver, "current_url", "") or ""
+                            if vid_id and vid_id in cur:
+                                return True
+                            time.sleep(0.3)
+                except Exception as exc:
+                    emit(self.log_queue, f"Direct recommended video click attempt error: {exc}", logging.DEBUG)
+
+            # 2. Index-based element click (with strict ad check)
             idx = int(card_info.get("index", 0))
             items = self.driver.find_elements(By.CSS_SELECTOR, "yt-lockup-view-model, ytd-compact-video-renderer")
             if 0 <= idx < len(items):
                 item = items[idx]
-                try:
-                    self.driver.execute_script(
-                        "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", item
-                    )
-                    human_like_delay(0.8, 1.5)
-                except Exception:
-                    pass
-
-                clickable = None
-                for selector in (
-                    "a.ytLockupViewModelContentImage",
-                    "a.ytLockupMetadataViewModelTitle",
-                    "h3 a",
-                    "a#thumbnail",
-                    "#video-title",
-                    "span#video-title",
-                    "a.yt-simple-endpoint",
-                    "a[href*='/watch']",
-                ):
-                    els = item.find_elements(By.CSS_SELECTOR, selector)
-                    if els and els[0].is_displayed():
-                        clickable = els[0]
-                        break
-
-                target = clickable or item
-                try:
-                    ActionChains(self.driver).move_to_element(target).pause(0.2).click().perform()
-                except Exception:
+                is_ad = self.driver.execute_script(r"""
+                    var el = arguments[0];
+                    if (!el) return true;
+                    return !!(el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]') ||
+                              el.querySelector('ad-badge-view-model, feed-ad-metadata-view-model, .ytBadgeShapeAd'));
+                """, item)
+                if not is_ad:
                     try:
-                        target.click()
+                        self.driver.execute_script(
+                            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", item
+                        )
+                        human_like_delay(0.8, 1.5)
                     except Exception:
-                        click_element(self.driver, target)
+                        pass
 
-                # Poll to verify navigation actually started (must contain target vid_id, not just old /watch)
-                for _ in range(8):
-                    cur = getattr(self.driver, "current_url", "") or ""
-                    if vid_id and vid_id in cur:
-                        return True
-                    time.sleep(0.3)
+                    clickable = None
+                    for selector in (
+                        "a.ytLockupViewModelContentImage",
+                        "a.ytLockupMetadataViewModelTitle",
+                        "h3 a",
+                        "a#thumbnail",
+                        "#video-title",
+                        "span#video-title",
+                        "a.yt-simple-endpoint",
+                        "a[href*='/watch']",
+                    ):
+                        els = item.find_elements(By.CSS_SELECTOR, selector)
+                        if els and els[0].is_displayed():
+                            clickable = els[0]
+                            break
 
+                    target = clickable or item
+                    try:
+                        ActionChains(self.driver).move_to_element(target).pause(0.2).click().perform()
+                    except Exception:
+                        try:
+                            target.click()
+                        except Exception:
+                            click_element(self.driver, target)
+
+                    # Poll to verify navigation actually started (must contain target vid_id, not just old /watch)
+                    for _ in range(8):
+                        cur = getattr(self.driver, "current_url", "") or ""
+                        if vid_id and vid_id in cur:
+                            return True
+                        time.sleep(0.3)
+                else:
+                    emit(self.log_queue, "Recommended item at index is an ad element; skipping index click to avoid ad.", logging.WARNING)
+
+            # 3. XPath fallback matching vid_id (with strict ad check)
             if href and vid_id:
                 match_links = self.driver.find_elements(
                     By.XPATH, f"//a[contains(@href, '{vid_id}')]"
                 )
                 for lk in match_links:
                     if lk.is_displayed():
+                        is_ad_lk = self.driver.execute_script(r"""
+                            var el = arguments[0];
+                            if (!el) return true;
+                            return !!el.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ad-slot-renderer, [layout*="ad"]');
+                        """, lk)
+                        if is_ad_lk:
+                            continue
                         try:
                             self.driver.execute_script(
                                 "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", lk
@@ -930,6 +1188,8 @@ class WatchingWorker:
             return None
 
         for item in candidates:
+            if is_candidate_ad(item):
+                continue
             href = item.get("href", "")
             if not href:
                 continue
@@ -976,6 +1236,8 @@ class WatchingWorker:
         target_channels = self.get_target_channels() if exclude_target_channels else []
         valid_candidates = []
         for item in candidates:
+            if is_candidate_ad(item):
+                continue
             href = item.get("href", "")
             if not href:
                 continue
