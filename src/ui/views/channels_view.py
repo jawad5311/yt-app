@@ -610,9 +610,11 @@ class ChannelsView(ctk.CTkFrame):
             def _handle_import(selected_tasks: List[VideoTask]):
                 if not selected_tasks:
                     return
+                prior_len = len(self.app_controller.config_mgr.get_video_queue())
                 new_dicts = [t.to_dict() for t in selected_tasks]
-                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts)
+                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts, deduplicate=True)
                 self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+                added_count = len(updated_raw) - prior_len
 
                 self.refresh_list()
                 queue = self._queue_view()
@@ -624,9 +626,16 @@ class ChannelsView(ctk.CTkFrame):
                 if on_imported:
                     on_imported()
 
+                if added_count == len(selected_tasks):
+                    msg = f"Successfully imported {added_count} video(s) for channel '{channel.name}'."
+                elif added_count > 0:
+                    msg = f"Imported {added_count} video(s) for channel '{channel.name}' ({len(selected_tasks) - added_count} duplicate(s) skipped)."
+                else:
+                    msg = f"All {len(selected_tasks)} selected video(s) were already in the queue."
+
                 messagebox.showinfo(
                     "Import Complete",
-                    f"Successfully imported {len(selected_tasks)} video(s) for channel '{channel.name}'.",
+                    msg,
                     parent=self,
                 )
 
@@ -747,9 +756,11 @@ class ChannelsView(ctk.CTkFrame):
             def _handle_import(selected_tasks: List[VideoTask]):
                 if not selected_tasks:
                     return
+                prior_len = len(self.app_controller.config_mgr.get_video_queue())
                 new_dicts = [t.to_dict() for t in selected_tasks]
-                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts)
+                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts, deduplicate=True)
                 self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+                added_count = len(updated_raw) - prior_len
 
                 self.refresh_list()
                 q = self._queue_view()
@@ -759,9 +770,16 @@ class ChannelsView(ctk.CTkFrame):
                 if callable(update_dash):
                     update_dash()
 
+                if added_count == len(selected_tasks):
+                    msg = f"Successfully imported {added_count} video(s) for channel '{channel.name}'."
+                elif added_count > 0:
+                    msg = f"Imported {added_count} video(s) for channel '{channel.name}' ({len(selected_tasks) - added_count} duplicate(s) skipped)."
+                else:
+                    msg = f"All {len(selected_tasks)} selected video(s) were already in the queue."
+
                 messagebox.showinfo(
                     "Import Complete",
-                    f"Successfully imported {len(selected_tasks)} video(s) for channel '{channel.name}'.",
+                    msg,
                     parent=self,
                 )
 

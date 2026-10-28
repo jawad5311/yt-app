@@ -523,13 +523,46 @@ class ConfigManager:
                 raise
             return copy.deepcopy(new_queue)
 
-    def append_video_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Atomically append tasks to the video queue under lock."""
+    def append_video_tasks(self, tasks: List[Dict[str, Any]], deduplicate: bool = True) -> List[Dict[str, Any]]:
+        """Atomically append tasks to the video queue under lock, preventing duplicate video tasks."""
         if not tasks:
             return self.get_video_queue()
         with self._lock:
             current_queue = list(self.data.get("videos", []))
-            current_queue.extend(copy.deepcopy(tasks))
+            if deduplicate:
+                from ..utils.helpers import extract_video_id
+
+                def _canonical_key(v: Dict[str, Any]) -> str:
+                    u = str(v.get("url", "") or "").strip()
+                    vid = extract_video_id(u)
+                    if vid:
+                        return f"id:{vid}"
+                    if u:
+                        return f"url:{u.lower()}"
+                    lbl = str(v.get("title", "") or v.get("keywords", "") or "").strip().lower()
+                    return f"label:{lbl}" if lbl else ""
+
+                existing_keys: Set[str] = set()
+                for item in current_queue:
+                    if isinstance(item, dict):
+                        k = _canonical_key(item)
+                        if k:
+                            existing_keys.add(k)
+
+                to_add: List[Dict[str, Any]] = []
+                for item in copy.deepcopy(tasks):
+                    if not isinstance(item, dict):
+                        continue
+                    k = _canonical_key(item)
+                    if k:
+                        if k in existing_keys:
+                            continue
+                        existing_keys.add(k)
+                    to_add.append(item)
+                current_queue.extend(to_add)
+            else:
+                current_queue.extend(copy.deepcopy(tasks))
+
             old_videos = self.data.get("videos")
             self.data["videos"] = current_queue
             try:
