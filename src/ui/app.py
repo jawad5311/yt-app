@@ -90,6 +90,7 @@ class YTBotApp(ctk.CTk):
         self.current_mode = "idle"
         self.current_view_name = "dashboard"
         self._queue_needs_refresh = False
+        self._shorts_queue_needs_refresh = False
         self._channels_needs_refresh = False
         self.session_manager_thread: Optional[threading.Thread] = None
         self._session_counter: int = 0
@@ -116,7 +117,7 @@ class YTBotApp(ctk.CTk):
         # Navigation Sidebar
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(7, weight=1)
+        self.sidebar.grid_rowconfigure(8, weight=1)
 
         ctk.CTkLabel(
             self.sidebar,
@@ -130,6 +131,7 @@ class YTBotApp(ctk.CTk):
             ("accounts", "👤 Accounts"),
             ("channels", "📺 Channels"),
             ("queue", "🎥 Video Queue"),
+            ("shorts_queue", "⚡ Shorts Queue"),
             ("settings", "⚙ Settings"),
             ("logs", "📋 Logs"),
         ]
@@ -159,7 +161,8 @@ class YTBotApp(ctk.CTk):
             "dashboard": DashboardView(self.container, self),
             "accounts": AccountsView(self.container, self),
             "channels": ChannelsView(self.container, self),
-            "queue": QueueView(self.container, self),
+            "queue": QueueView(self.container, self, shorts_only=False),
+            "shorts_queue": QueueView(self.container, self, shorts_only=True),
             "settings": SettingsView(self.container, self),
             "logs": LogsView(self.container, self),
         }
@@ -224,7 +227,7 @@ class YTBotApp(ctk.CTk):
         if not hasattr(self, "views"):
             return
         cur_view = getattr(self, "current_view_name", "dashboard")
-        for name in ("queue", "channels"):
+        for name in ("queue", "shorts_queue", "channels"):
             view = self.views.get(name)
             if view is not None and hasattr(view, "refresh_list"):
                 if cur_view == name:
@@ -232,6 +235,8 @@ class YTBotApp(ctk.CTk):
                 else:
                     if name == "queue":
                         self._queue_needs_refresh = True
+                    elif name == "shorts_queue":
+                        self._shorts_queue_needs_refresh = True
                     elif name == "channels":
                         self._channels_needs_refresh = True
         dashboard = self.views.get("dashboard")
@@ -250,6 +255,9 @@ class YTBotApp(ctk.CTk):
                 if name == "queue" and getattr(self, "_queue_needs_refresh", False):
                     view_widget.refresh_list()
                     self._queue_needs_refresh = False
+                elif name == "shorts_queue" and getattr(self, "_shorts_queue_needs_refresh", False):
+                    view_widget.refresh_list()
+                    self._shorts_queue_needs_refresh = False
                 elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False
@@ -281,6 +289,17 @@ class YTBotApp(ctk.CTk):
 
     def on_queue_changed(self, tasks: List[VideoTask]):
         self.queued_video_tasks = tasks
+        for name in ("queue", "shorts_queue"):
+            view = getattr(self, "views", {}).get(name)
+            if view is not None and getattr(view, "video_tasks", None) is not tasks:
+                view.video_tasks = tasks
+                if getattr(self, "current_view_name", "") == name:
+                    view.refresh_list()
+                else:
+                    if name == "queue":
+                        self._queue_needs_refresh = True
+                    elif name == "shorts_queue":
+                        self._shorts_queue_needs_refresh = True
         self.update_dashboard_stats()
 
     def start_automation(self):
@@ -725,6 +744,13 @@ class YTBotApp(ctk.CTk):
                     queue_view.refresh_list()
                 else:
                     self._queue_needs_refresh = True
+                shorts_view = self.views.get("shorts_queue")
+                if shorts_view is not None:
+                    shorts_view.video_tasks = queue_view.video_tasks
+                    if getattr(self, "current_view_name", "") == "shorts_queue":
+                        shorts_view.refresh_list()
+                    else:
+                        self._shorts_queue_needs_refresh = True
                 self.queued_video_tasks = queue_view.video_tasks
             self.refresh_watch_stats()
         elif kind == "update_video_duration" and len(event) == 3:
@@ -744,6 +770,13 @@ class YTBotApp(ctk.CTk):
                     queue_view.refresh_list()
                 else:
                     self._queue_needs_refresh = True
+                shorts_view = self.views.get("shorts_queue")
+                if shorts_view is not None:
+                    shorts_view.video_tasks = queue_view.video_tasks
+                    if getattr(self, "current_view_name", "") == "shorts_queue":
+                        shorts_view.refresh_list()
+                    else:
+                        self._shorts_queue_needs_refresh = True
             self.refresh_watch_stats()
         elif kind == "channel_watch_time_updated":
             self.refresh_watch_stats()

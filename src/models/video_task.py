@@ -183,6 +183,11 @@ class VideoTask:
             duration_text=duration_text_val,
         )
 
+    @property
+    def is_short(self) -> bool:
+        """Return True if this task represents a YouTube Short."""
+        return "/shorts/" in (self.url or "")
+
     def is_run_limit_reached(self, current_runs: int) -> bool:
         """Return True if positive max_runs limit is reached or exceeded."""
         return self.max_runs > 0 and current_runs >= self.max_runs

@@ -54,16 +54,19 @@ def extract_video_id(url: Optional[str]) -> Optional[str]:
     return None
 
 
-def clean_youtube_url(url: Optional[str]) -> str:
+def clean_youtube_url(url: Optional[str], as_short: bool = False) -> str:
     """Clean a YouTube video URL by stripping timestamps, playlists, and tracking parameters.
 
-    Returns canonical https://www.youtube.com/watch?v={video_id} if a video ID is detected.
+    Returns canonical https://www.youtube.com/watch?v={video_id} (or /shorts/{video_id} if as_short)
+    if a video ID is detected.
     """
     if not url:
         return ""
     cleaned = url.strip()
     vid = extract_video_id(cleaned)
     if vid:
+        if as_short:
+            return f"https://www.youtube.com/shorts/{vid}"
         return f"https://www.youtube.com/watch?v={vid}"
     return cleaned
 

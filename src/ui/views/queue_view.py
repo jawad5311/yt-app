@@ -8,12 +8,16 @@ from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_video
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
 from ...models.watch_stats import format_totals_line, format_watch_line, format_watch_multiplier, resolve_video_key
 from ...utils.helpers import clean_youtube_url
+from ...utils.scroll_helper import setup_smooth_scrolling
 
 
 class QueueView(ctk.CTkFrame):
-    def __init__(self, parent, app_controller):
+    shorts_only: bool = False
+
+    def __init__(self, parent, app_controller, shorts_only: bool = False):
         super().__init__(parent, corner_radius=10)
         self.app_controller = app_controller
+        self.shorts_only = shorts_only
         self.video_tasks: List[VideoTask] = []
         self.collapsed_groups: set = set()
 
@@ -24,9 +28,10 @@ class QueueView(ctk.CTkFrame):
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
+        header_title = "Shorts Automation Queue" if getattr(self, "shorts_only", False) else "Video Automation Queue"
         ctk.CTkLabel(
             header_frame,
-            text="Video Automation Queue",
+            text=header_title,
             font=ctk.CTkFont(size=22, weight="bold"),
         ).pack(side="left")
 
@@ -34,9 +39,10 @@ class QueueView(ctk.CTkFrame):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
 
+        add_btn_text = "+ Add Target Short" if getattr(self, "shorts_only", False) else "+ Add Target Video"
         ctk.CTkButton(
             btn_frame,
-            text="+ Add Target Video",
+            text=add_btn_text,
             command=lambda: self.open_video_modal(),
         ).pack(side="left", padx=(0, 10))
 
@@ -65,7 +71,8 @@ class QueueView(ctk.CTkFrame):
         ).pack(side="right")
 
         # Scrollable Task List
-        self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="Queued Target Videos")
+        scroll_label = "Queued Target Shorts" if getattr(self, "shorts_only", False) else "Queued Target Videos"
+        self.scroll_frame = ctk.CTkScrollableFrame(self, label_text=scroll_label)
         self.scroll_frame.grid(row=2, column=0, padx=20, pady=(10, 20), sticky="nsew")
         self.scroll_frame.grid_columnconfigure(0, weight=1)
         self._setup_fast_scrolling()
@@ -73,54 +80,8 @@ class QueueView(ctk.CTkFrame):
         self.load_initial_queue()
 
     def _setup_fast_scrolling(self):
-        """Install smooth, responsive, batched mouse wheel scrolling on the scroll frame."""
-        canvas = self.scroll_frame._parent_canvas
-        canvas_str = str(canvas)
-
-        self._wheel_accum = 0
-        self._wheel_job = None
-
-        def _flush_wheel():
-            self._wheel_job = None
-            delta = self._wheel_accum
-            self._wheel_accum = 0
-            if delta == 0:
-                return
-            try:
-                if abs(delta) < 10:
-                    step = -int(delta * 25)
-                else:
-                    step = -int(delta / 2)
-                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
-                    canvas.yview("scroll", step, "units")
-            except Exception:
-                pass
-
-        def _on_mousewheel(event):
-            w_str = str(event.widget)
-            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
-                self._wheel_accum += event.delta
-                if self._wheel_job is None:
-                    self._wheel_job = canvas.after_idle(_flush_wheel)
-                return "break"
-
-        def _on_linux_scroll_up(event):
-            w_str = str(event.widget)
-            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
-                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
-                    canvas.yview("scroll", -60, "units")
-                return "break"
-
-        def _on_linux_scroll_down(event):
-            w_str = str(event.widget)
-            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
-                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
-                    canvas.yview("scroll", 60, "units")
-                return "break"
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+")
-        canvas.bind_all("<Button-4>", _on_linux_scroll_up, add="+")
-        canvas.bind_all("<Button-5>", _on_linux_scroll_down, add="+")
+        """Install smooth, responsive, animated mouse wheel scrolling on the scroll frame."""
+        setup_smooth_scrolling(self.scroll_frame, notch_pixels=120.0, damping=0.35)
 
     def _default_watch_duration(self) -> str:
         """Default duration for newly created tasks (Settings -> Default Watch Duration)."""
@@ -263,19 +224,25 @@ class QueueView(ctk.CTkFrame):
             )
 
         modal = ctk.CTkToplevel(self)
-        modal.title("Edit Target Video Task" if is_editing else "Add Target Video Task")
+        if is_editing:
+            modal_title = "Edit Target Short Task" if getattr(self, "shorts_only", False) else "Edit Target Video Task"
+        else:
+            modal_title = "Add Target Short Task" if getattr(self, "shorts_only", False) else "Add Target Video Task"
+        modal.title(modal_title)
         modal.geometry("520x700")
         modal.grab_set()
 
-        ctk.CTkLabel(modal, text="Video URL:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
-        url_entry = ctk.CTkEntry(modal, placeholder_text="https://www.youtube.com/watch?v=...", width=460)
+        url_label_text = "Short URL:" if getattr(self, "shorts_only", False) else "Video URL:"
+        url_placeholder = "https://www.youtube.com/shorts/..." if getattr(self, "shorts_only", False) else "https://www.youtube.com/watch?v=..."
+        ctk.CTkLabel(modal, text=url_label_text, font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(15, 2))
+        url_entry = ctk.CTkEntry(modal, placeholder_text=url_placeholder, width=460)
         url_entry.insert(0, target_task.url)
         url_entry.pack(padx=20, pady=(0, 10))
 
         def _auto_clean_url(*_):
             raw = url_entry.get().strip()
             if raw:
-                cleaned = clean_youtube_url(raw)
+                cleaned = clean_youtube_url(raw, as_short=getattr(self, "shorts_only", False))
                 if cleaned and cleaned != raw:
                     url_entry.delete(0, "end")
                     url_entry.insert(0, cleaned)
@@ -286,18 +253,24 @@ class QueueView(ctk.CTkFrame):
         url_entry.bind("<Control-v>", lambda e: modal.after(50, _auto_clean_url))
         url_entry.bind("<Control-V>", lambda e: modal.after(50, _auto_clean_url))
 
-        ctk.CTkLabel(modal, text="Video Title 1 (Primary):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        title1_entry = ctk.CTkEntry(modal, placeholder_text="Primary video title or query (Attempt 1)", width=460)
+        title1_label = "Short Title 1 (Primary):" if getattr(self, "shorts_only", False) else "Video Title 1 (Primary):"
+        title1_placeholder = "Primary short title or query (Attempt 1)" if getattr(self, "shorts_only", False) else "Primary video title or query (Attempt 1)"
+        ctk.CTkLabel(modal, text=title1_label, font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        title1_entry = ctk.CTkEntry(modal, placeholder_text=title1_placeholder, width=460)
         title1_entry.insert(0, target_task.title)
         title1_entry.pack(padx=20, pady=(0, 6))
 
-        ctk.CTkLabel(modal, text="Video Title 2 (Retry 2 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        title2_entry = ctk.CTkEntry(modal, placeholder_text="Alternative title or variation (Attempt 2 if 1 fails)", width=460)
+        title2_label = "Short Title 2 (Retry 2 - Optional):" if getattr(self, "shorts_only", False) else "Video Title 2 (Retry 2 - Optional):"
+        title2_placeholder = "Alternative title or variation (Attempt 2 if 1 fails)"
+        ctk.CTkLabel(modal, text=title2_label, font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        title2_entry = ctk.CTkEntry(modal, placeholder_text=title2_placeholder, width=460)
         title2_entry.insert(0, target_task.title_2)
         title2_entry.pack(padx=20, pady=(0, 6))
 
-        ctk.CTkLabel(modal, text="Video Title 3 (Retry 3 - Optional):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        title3_entry = ctk.CTkEntry(modal, placeholder_text="Alternative title or variation (Attempt 3 if 2 fails)", width=460)
+        title3_label = "Short Title 3 (Retry 3 - Optional):" if getattr(self, "shorts_only", False) else "Video Title 3 (Retry 3 - Optional):"
+        title3_placeholder = "Alternative title or variation (Attempt 3 if 2 fails)"
+        ctk.CTkLabel(modal, text=title3_label, font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        title3_entry = ctk.CTkEntry(modal, placeholder_text=title3_placeholder, width=460)
         title3_entry.insert(0, target_task.title_3)
         title3_entry.pack(padx=20, pady=(0, 10))
 
@@ -358,12 +331,13 @@ class QueueView(ctk.CTkFrame):
         max_runs_entry.pack(padx=20, pady=(0, 10))
 
         def on_submit():
-            url = clean_youtube_url(url_entry.get().strip())
+            url = clean_youtube_url(url_entry.get().strip(), as_short=getattr(self, "shorts_only", False))
             t1 = title1_entry.get().strip()
             t2 = title2_entry.get().strip()
             t3 = title3_entry.get().strip()
             if not url and not t1 and not t2 and not t3:
-                messagebox.showerror("Error", "Please provide at least a URL or Video Title!", parent=modal)
+                err_msg = "Please provide at least a Short URL or Title!" if getattr(self, "shorts_only", False) else "Please provide at least a URL or Video Title!"
+                messagebox.showerror("Error", err_msg, parent=modal)
                 return
 
             raw_mult = target_multiplier_entry.get().strip()
@@ -406,7 +380,7 @@ class QueueView(ctk.CTkFrame):
             if on_saved is not None:
                 on_saved(updated_task)
 
-        btn_text = "Save Changes" if is_editing else "Add Task"
+        btn_text = "Save Changes" if is_editing else ("Add Short Task" if getattr(self, "shorts_only", False) else "Add Task")
         btn_color = "#1F6AA5" if is_editing else "#2FA572"
         btn_hover = "#144870" if is_editing else "#1E7B52"
 
@@ -430,7 +404,10 @@ class QueueView(ctk.CTkFrame):
             self.refresh_list()
 
     def clear_queue(self):
-        self.video_tasks.clear()
+        if getattr(self, "shorts_only", False):
+            self.video_tasks = [t for t in self.video_tasks if not getattr(t, "is_short", False)]
+        else:
+            self.video_tasks = [t for t in self.video_tasks if getattr(t, "is_short", False)]
         self.save_queue()
         self.refresh_list()
 
@@ -459,16 +436,35 @@ class QueueView(ctk.CTkFrame):
         for child in self.scroll_frame.winfo_children():
             child.destroy()
 
-        if not self.video_tasks:
+        matching_tasks = [
+            t for t in self.video_tasks
+            if (t.is_short if getattr(self, "shorts_only", False) else not t.is_short)
+        ]
+
+        if not matching_tasks:
+            empty_msg = (
+                "Shorts queue is empty. Click '+ Add Target Short' to add tasks."
+                if getattr(self, "shorts_only", False)
+                else "Queue is empty. Click '+ Add Target Video' to add tasks."
+            )
             ctk.CTkLabel(
                 self.scroll_frame,
-                text="Queue is empty. Click '+ Add Target Video' to add tasks.",
+                text=empty_msg,
                 font=ctk.CTkFont(size=14, slant="italic"),
             ).pack(pady=30)
             return
 
         for group in group_videos_by_channel(self.video_tasks, self._channels(), include_archived=False):
-            self._render_group(group)
+            if getattr(self, "shorts_only", False):
+                filtered_videos = [(idx, t) for (idx, t) in group.videos if t.is_short]
+            else:
+                filtered_videos = [(idx, t) for (idx, t) in group.videos if not t.is_short]
+
+            if not filtered_videos:
+                continue
+
+            filtered_group = VideoGroup(channel=group.channel, videos=filtered_videos)
+            self._render_group(filtered_group)
 
     def _render_group(self, group: VideoGroup):
         """Render one channel section (header + its video cards)."""
@@ -538,7 +534,8 @@ class QueueView(ctk.CTkFrame):
             title += " [DISABLED]"
         elif not group.is_uncategorized and group.channel.target_achieved:
             title += " [TARGET ACHIEVED]"
-        title += f"  •  {group.count} video(s)"
+        item_word = "short(s)" if getattr(self, "shorts_only", False) else "video(s)"
+        title += f"  •  {group.count} {item_word}"
 
         totals_line = self._group_totals_line(group)
         if totals_line:
@@ -620,9 +617,11 @@ class QueueView(ctk.CTkFrame):
             return
 
         if not group.videos:
+            item_noun = "shorts" if getattr(self, "shorts_only", False) else "videos"
+            add_btn = "+ Add Target Short" if getattr(self, "shorts_only", False) else "+ Add Target Video"
             ctk.CTkLabel(
                 container,
-                text="No videos in this channel yet. Click '+ Add Target Video' to add one.",
+                text=f"No {item_noun} in this channel yet. Click '{add_btn}' to add one.",
                 font=ctk.CTkFont(size=13, slant="italic"),
                 anchor="w",
             ).grid(row=1, column=0, padx=14, pady=(0, 8), sticky="w")
