@@ -1,7 +1,7 @@
 import re
 import webbrowser
 from tkinter import TclError, messagebox
-from typing import Callable, List, Optional, Set
+from typing import Any, Callable, List, Optional, Set, Tuple
 
 import customtkinter as ctk
 
@@ -16,6 +16,7 @@ from ...models.watch_stats import format_duration, format_hours, format_totals_l
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
     extract_fallback_channel_name,
+    fetch_channel_data,
     fetch_channel_title_online,
     fetch_channel_videos,
     normalize_channel_url,
@@ -40,6 +41,43 @@ FETCH_LIMIT_OPTIONS: List[str] = [
     "All",
     "Custom...",
 ]
+
+FETCH_DATA_OPTIONS: List[str] = [
+    "Fetch No Data",
+    "50",
+    "100",
+    "200",
+    "300",
+    "500",
+    "All",
+]
+
+
+def parse_fetch_limit(val_str: Any) -> Optional[int]:
+    """Parse dropdown limit choice into an integer limit:
+    - 0 indicates 'All' (fetch all until exhausted)
+    - None indicates 'Fetch No Data' / 'No Fetching' (skip)
+    - Positive int indicates requested count (50, 100, 200, etc.)
+    """
+    if val_str is None:
+        return None
+    val = str(val_str).strip()
+    if val.lower() == "all":
+        return 0
+    if val.lower() in (
+        "fetch no data",
+        "no fetching",
+        "none",
+        "skip",
+        "0",
+        "0 (skip)",
+    ):
+        return None
+    try:
+        num = int(val)
+        return num if num > 0 else None
+    except ValueError:
+        return 100
 
 
 class ChannelsView(ctk.CTkFrame):
@@ -75,11 +113,12 @@ class ChannelsView(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_frame,
-            text="🔄 Sync Names",
+            text="⚡ Sync Data",
             width=105,
             fg_color="#0D9488",
             hover_color="#0F766E",
-            command=self.sync_all_channel_names,
+            font=ctk.CTkFont(weight="bold"),
+            command=self.sync_all_channel_data,
         ).pack(side="left", padx=(0, 10))
 
         self.current_tab = "Active"
@@ -196,6 +235,10 @@ class ChannelsView(ctk.CTkFrame):
         views = getattr(self.app_controller, "views", None)
         return views.get("queue") if isinstance(views, dict) else None
 
+    def _shorts_queue_view(self):
+        views = getattr(self.app_controller, "views", None)
+        return views.get("shorts_queue") if isinstance(views, dict) else None
+
     @staticmethod
     def _widget_exists(widget) -> bool:
         try:
@@ -231,7 +274,7 @@ class ChannelsView(ctk.CTkFrame):
             discard=close_loading,
         )
 
-    def _fetch_name_for_dialog(self, modal, url_entry, name_entry, fetch_btn, status_lbl, *, on_loaded=None):
+    def _fetch_name_for_dialog(self, modal, url_entry, name_entry, fetch_btn=None, status_lbl=None, *, on_loaded=None):
         """Resolve a name without overwriting newer edits or touching a closed dialog."""
         url = url_entry.get().strip()
         original_name = name_entry.get()
@@ -241,13 +284,17 @@ class ChannelsView(ctk.CTkFrame):
             jobs.cancel(previous)
         token = object()
         modal._channel_name_token = token
-        fetch_btn.configure(state="disabled", text="⏳ Fetching...")
-        status_lbl.configure(text="Contacting YouTube for official channel name...", text_color=("gray40", "gray60"))
+        if fetch_btn is not None:
+            fetch_btn.configure(state="disabled", text="⏳ Fetching...")
+        if status_lbl is not None:
+            status_lbl.configure(text="Contacting YouTube for official channel name...", text_color=("gray40", "gray60"))
 
         def reset_button():
             if self._widget_exists(modal) and modal._channel_name_token is token:
-                fetch_btn.configure(state="normal", text="🔍 Fetch Name")
-                status_lbl.configure(text="")
+                if fetch_btn is not None:
+                    fetch_btn.configure(state="normal", text="🔍 Fetch Name")
+                if status_lbl is not None:
+                    status_lbl.configure(text="")
 
         def current():
             return (
@@ -262,15 +309,18 @@ class ChannelsView(ctk.CTkFrame):
                 fetched = fetched or extract_fallback_channel_name(url)
                 name_entry.delete(0, "end")
                 name_entry.insert(0, fetched)
-                status_lbl.configure(text=f"✓ Detected: '{fetched}'", text_color="#10B981")
+                if status_lbl is not None:
+                    status_lbl.configure(text=f"✓ Detected: '{fetched}'", text_color="#10B981")
                 if on_loaded is not None:
                     on_loaded()
             else:
-                status_lbl.configure(text="Could not auto-detect channel name; you can type it above.", text_color="#F59E0B")
+                if status_lbl is not None:
+                    status_lbl.configure(text="Could not auto-detect channel name; you can type it above.", text_color="#F59E0B")
 
         def fail(exc):
             reset_button()
-            status_lbl.configure(text=f"Could not fetch the name: {exc}", text_color="#EF4444")
+            if status_lbl is not None:
+                status_lbl.configure(text=f"Could not fetch the name: {exc}", text_color="#EF4444")
 
         modal._channel_name_job = jobs.submit(
             lambda report: fetch_channel_title_online(url), done=done, error=fail,
@@ -331,107 +381,100 @@ class ChannelsView(ctk.CTkFrame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Channel" if is_editing else "Add Channel")
-        modal.geometry("540x350" if not is_editing else "540x280")
+        modal.geometry("540x480" if not is_editing else "540x260")
+        if hasattr(modal, "resizable"):
+            try:
+                modal.resizable(False, False)
+            except Exception:
+                pass
         modal.grab_set()
 
         ctk.CTkLabel(modal, text="Channel URL or Handle:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=20, pady=(12, 2)
         )
-        url_frame = ctk.CTkFrame(modal, fg_color="transparent")
-        url_frame.pack(padx=20, pady=(0, 4), fill="x")
-
         url_entry = ctk.CTkEntry(
-            url_frame,
+            modal,
             placeholder_text="https://www.youtube.com/@handle or @handle",
-            width=350,
+            width=500,
         )
         url_entry.insert(0, target.url)
-        url_entry.pack(side="left", fill="x", expand=True)
+        url_entry.pack(padx=20, pady=(0, 8), fill="x")
 
-        fetch_btn = ctk.CTkButton(
-            url_frame,
-            text="🔍 Fetch Name",
-            width=110,
-            height=28,
-            fg_color="#0D9488",
-            hover_color="#0F766E",
-        )
-        fetch_btn.pack(side="right", padx=(8, 0))
+        fetch_btn = None
+        status_lbl = None
 
-        status_lbl = ctk.CTkLabel(
-            modal,
-            text="",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
-            anchor="w",
-        )
-        status_lbl.pack(anchor="w", padx=20, pady=(0, 4))
-
-        ctk.CTkLabel(modal, text="Channel Name:", font=ctk.CTkFont(weight="bold")).pack(
+        ctk.CTkLabel(modal, text="Channel Name (Optional):", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=20, pady=(4, 2)
         )
         name_entry = ctk.CTkEntry(
             modal,
-            placeholder_text="e.g. My Channel (auto-fetched from URL if blank)",
+            placeholder_text="e.g. My Channel (Optional — auto-fetched from URL if blank)",
             width=500,
         )
         name_entry.insert(0, target.name)
-        name_entry.pack(padx=20, pady=(0, 10))
+        name_entry.pack(padx=20, pady=(0, 8), fill="x")
 
-        def _do_fetch_name(silent_if_empty=False):
-            u = url_entry.get().strip()
-            if not u:
-                if not silent_if_empty:
-                    status_lbl.configure(text="Please enter a channel URL or handle first.", text_color="#EF4444")
-                return
-            self._fetch_name_for_dialog(modal, url_entry, name_entry, fetch_btn, status_lbl)
+        url_entry.bind("<Return>", lambda e: on_submit())
+        name_entry.bind("<Return>", lambda e: on_submit())
 
-        fetch_btn.configure(command=lambda: _do_fetch_name(silent_if_empty=False))
-        url_entry.bind("<FocusOut>", lambda e: _do_fetch_name(silent_if_empty=True) if (not name_entry.get().strip() or name_entry.get().strip().startswith("@")) else None)
-        url_entry.bind("<Return>", lambda e: _do_fetch_name(silent_if_empty=False))
-
+        videos_menu = None
+        shorts_menu = None
         fetch_var = ctk.BooleanVar(value=True)
-        limit_var = ctk.StringVar(value="25")
-        custom_entry = None
         if not is_editing:
-            fetch_frame = ctk.CTkFrame(modal, fg_color="transparent")
-            fetch_frame.pack(padx=20, pady=(0, 10), fill="x")
-
-            ctk.CTkCheckBox(
-                fetch_frame,
+            # Checkbox maintained for test compatibility
+            fetch_check = ctk.CTkCheckBox(
+                modal,
                 text="Fetch videos automatically",
                 variable=fetch_var,
                 font=ctk.CTkFont(size=12, weight="bold"),
-            ).pack(side="left")
-
-            custom_entry = ctk.CTkEntry(
-                fetch_frame,
-                width=55,
-                height=26,
-                placeholder_text="#",
             )
 
-            def _on_limit_change(choice: str) -> None:
-                if custom_entry is None:
-                    return
-                if choice == "Custom...":
-                    custom_entry.pack(side="right", padx=(4, 0))
-                    custom_entry.focus_set()
-                else:
-                    custom_entry.pack_forget()
+            form_frame = ctk.CTkFrame(modal, fg_color=("gray90", "gray18"), corner_radius=8)
+            form_frame.pack(padx=20, pady=(4, 10), fill="x")
 
-            limit_menu = ctk.CTkOptionMenu(
-                fetch_frame,
-                values=FETCH_LIMIT_OPTIONS,
-                variable=limit_var,
-                command=_on_limit_change,
-                width=90,
-                height=26,
+            # Videos limit section
+            ctk.CTkLabel(
+                form_frame,
+                text="Recent Long-Form Videos to fetch:",
+                font=ctk.CTkFont(size=13, weight="bold"),
+            ).pack(anchor="w", padx=16, pady=(10, 2))
+
+            ctk.CTkLabel(
+                form_frame,
+                text="Select number of videos to fetch (or 'All' / 'Fetch No Data'):",
+                font=ctk.CTkFont(size=11),
+                text_color=("gray40", "gray60"),
+            ).pack(anchor="w", padx=16, pady=(0, 4))
+
+            videos_menu = ctk.CTkOptionMenu(
+                form_frame,
+                values=FETCH_DATA_OPTIONS,
+                width=160,
             )
-            limit_menu.pack(side="right")
-            ctk.CTkLabel(fetch_frame, text="Limit:", font=ctk.CTkFont(size=12)).pack(
-                side="right", padx=(0, 5)
+            videos_menu.set("100")
+            videos_menu.pack(anchor="w", padx=16, pady=(0, 10))
+
+            # Shorts limit section
+            ctk.CTkLabel(
+                form_frame,
+                text="Recent YouTube Shorts to fetch:",
+                font=ctk.CTkFont(size=13, weight="bold"),
+            ).pack(anchor="w", padx=16, pady=(2, 2))
+
+            ctk.CTkLabel(
+                form_frame,
+                text="Select number of shorts to fetch (or 'All' / 'Fetch No Data'):",
+                font=ctk.CTkFont(size=11),
+                text_color=("gray40", "gray60"),
+            ).pack(anchor="w", padx=16, pady=(0, 4))
+
+            shorts_menu = ctk.CTkOptionMenu(
+                form_frame,
+                values=FETCH_DATA_OPTIONS,
+                width=160,
             )
+            shorts_menu.set("100")
+            shorts_menu.pack(anchor="w", padx=16, pady=(0, 14))
 
         def on_submit() -> None:
             raw_name = name_entry.get().strip()
@@ -461,43 +504,28 @@ class ChannelsView(ctk.CTkFrame):
                             )
                             return
 
-            limit_str = limit_var.get()
-            if limit_str == "All":
-                max_fetch = 0
-            elif limit_str == "Custom...":
-                custom_val = custom_entry.get().strip() if custom_entry else ""
-                if not custom_val.isdigit() or int(custom_val) <= 0:
-                    messagebox.showerror(
-                        "Invalid Limit",
-                        "Please enter a valid positive number for custom limit.",
-                        parent=modal,
+            v_limit = parse_fetch_limit(videos_menu.get()) if videos_menu else None
+            s_limit = parse_fetch_limit(shorts_menu.get()) if shorts_menu else None
+            is_auto_fetch_enabled = fetch_var.get() if not is_editing else False
+            should_fetch = not is_editing and bool(raw_url) and is_auto_fetch_enabled and (v_limit is not None or s_limit is not None)
+
+            # Case: Channel Name left empty, URL provided
+            if not is_editing and not raw_name and raw_url:
+                if should_fetch:
+                    modal.destroy()
+                    self._fetch_and_create_channel(
+                        raw_url=raw_url,
+                        video_limit=v_limit,
+                        shorts_limit=s_limit,
+                        on_saved=on_saved,
+                        fetch_items=True,
                     )
                     return
-                max_fetch = int(custom_val)
-            else:
-                try:
-                    max_fetch = int(limit_str)
-                except ValueError:
-                    max_fetch = 25
-
-            should_fetch = not is_editing and fetch_var.get() and bool(raw_url)
-
-            # Case: Channel Name left empty, URL provided, and auto-fetch enabled
-            if not raw_name and should_fetch:
-                modal.destroy()
-                self._fetch_and_create_channel(
-                    raw_url=raw_url,
-                    max_fetch=max_fetch,
-                    on_saved=on_saved,
-                )
-                return
-
-            # Case: Channel Name left empty, but URL provided without auto-fetch
-            if not raw_name and raw_url:
-                self._fetch_name_for_dialog(
-                    modal, url_entry, name_entry, fetch_btn, status_lbl, on_loaded=on_submit,
-                )
-                return
+                else:
+                    self._fetch_name_for_dialog(
+                        modal, url_entry, name_entry, fetch_btn, status_lbl, on_loaded=on_submit,
+                    )
+                    return
 
             try:
                 channel = Channel.parse(
@@ -508,6 +536,8 @@ class ChannelsView(ctk.CTkFrame):
                     archived=target.archived if is_editing else False,
                     watch_seconds=getattr(target, "watch_seconds", 0.0) if is_editing else 0.0,
                     target_watch_seconds=getattr(target, "target_watch_seconds", 0.0) if is_editing else 0.0,
+                    total_videos=target.total_videos if is_editing else None,
+                    total_shorts=target.total_shorts if is_editing else None,
                 )
             except ValueError as exc:
                 messagebox.showerror("Error", str(exc), parent=modal)
@@ -527,13 +557,16 @@ class ChannelsView(ctk.CTkFrame):
                     queue.reassign_channel(old_name, channel.name)
                 else:
                     queue.refresh_list()
+            shorts_queue = self._shorts_queue_view()
+            if shorts_queue is not None:
+                shorts_queue.refresh_list()
 
             modal.destroy()
             if on_saved:
                 on_saved(channel)
 
             if should_fetch:
-                self.fetch_videos_for_channel(channel, max_results=max_fetch)
+                self.fetch_data_for_channel(channel, video_limit=v_limit, shorts_limit=s_limit)
 
         btn_text = "Save Changes" if is_editing else "Add Channel"
         btn_color = "#1F6AA5" if is_editing else "#2FA572"
@@ -553,13 +586,147 @@ class ChannelsView(ctk.CTkFrame):
         modal.bind("<Destroy>", _on_destroy)
         name_entry.focus_set()
 
-    def fetch_videos_for_channel(
+    def open_fetch_data_dialog(
         self,
         channel: Channel,
-        max_results: int = 50,
         on_imported: Optional[Callable[[], None]] = None,
     ) -> None:
-        """Fetch videos for a channel in a background thread and show selection modal."""
+        """Display options dialog to select separate limits for Videos and Shorts, then fetch."""
+        if not channel.url:
+            messagebox.showwarning(
+                "Missing URL",
+                f"Channel '{channel.name}' does not have a URL configured.",
+                parent=self,
+            )
+            return
+
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Fetch Channel Data — {channel.name}")
+        modal.geometry("450x380")
+        modal.minsize(420, 350)
+        modal.resizable(False, False)
+        modal.grab_set()
+
+        # Header
+        header = ctk.CTkFrame(modal, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(20, 10))
+
+        ctk.CTkLabel(
+            header,
+            text="⚡ Fetch Channel Data",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            header,
+            text=f"Channel: {channel.name}\nURL: {channel.url}",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+            justify="left",
+            wraplength=400,
+        ).pack(anchor="w", pady=(4, 0))
+
+        form_frame = ctk.CTkFrame(modal, fg_color=("gray90", "gray18"), corner_radius=8)
+        form_frame.pack(fill="x", padx=24, pady=10)
+
+        # Videos limit section
+        ctk.CTkLabel(
+            form_frame,
+            text="Recent Long-Form Videos to fetch:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=16, pady=(12, 2))
+
+        ctk.CTkLabel(
+            form_frame,
+            text="Select number of videos to fetch (or 'All' / 'Fetch No Data'):",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+        ).pack(anchor="w", padx=16, pady=(0, 4))
+
+        videos_menu = ctk.CTkOptionMenu(
+            form_frame,
+            values=FETCH_DATA_OPTIONS,
+            width=160,
+        )
+        videos_menu.set("100")
+        videos_menu.pack(anchor="w", padx=16, pady=(0, 12))
+
+        # Shorts limit section
+        ctk.CTkLabel(
+            form_frame,
+            text="Recent YouTube Shorts to fetch:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(anchor="w", padx=16, pady=(4, 2))
+
+        ctk.CTkLabel(
+            form_frame,
+            text="Select number of shorts to fetch (or 'All' / 'Fetch No Data'):",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+        ).pack(anchor="w", padx=16, pady=(0, 4))
+
+        shorts_menu = ctk.CTkOptionMenu(
+            form_frame,
+            values=FETCH_DATA_OPTIONS,
+            width=160,
+        )
+        shorts_menu.set("100")
+        shorts_menu.pack(anchor="w", padx=16, pady=(0, 16))
+
+        # Actions
+        btn_frame = ctk.CTkFrame(modal, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=24, pady=(10, 15))
+
+        def _on_cancel():
+            modal.destroy()
+
+        def _on_fetch():
+            v_count = parse_fetch_limit(videos_menu.get())
+            s_count = parse_fetch_limit(shorts_menu.get())
+
+            if v_count is None and s_count is None:
+                messagebox.showwarning(
+                    "No Items Selected",
+                    "Please select at least 1 video or 1 short to fetch (both cannot be 'Fetch No Data').",
+                    parent=modal,
+                )
+                return
+
+            modal.destroy()
+            self.fetch_data_for_channel(
+                channel=channel,
+                video_limit=v_count,
+                shorts_limit=s_count,
+                on_imported=on_imported,
+            )
+
+        ctk.CTkButton(
+            btn_frame,
+            text="Cancel",
+            width=90,
+            fg_color="#555555",
+            hover_color="#333333",
+            command=_on_cancel,
+        ).pack(side="right", padx=(10, 0))
+
+        ctk.CTkButton(
+            btn_frame,
+            text="⚡ Fetch",
+            width=110,
+            font=ctk.CTkFont(weight="bold"),
+            fg_color="#2FA572",
+            hover_color="#1E7B52",
+            command=_on_fetch,
+        ).pack(side="right")
+
+    def fetch_data_for_channel(
+        self,
+        channel: Channel,
+        video_limit: Optional[int] = 100,
+        shorts_limit: Optional[int] = 100,
+        on_imported: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Fetch videos and/or shorts for a channel using YouTube Data API v3 and open selection modal."""
         if not channel.url:
             messagebox.showwarning(
                 "Missing URL",
@@ -569,15 +736,19 @@ class ChannelsView(ctk.CTkFrame):
             return
 
         loading = ctk.CTkToplevel(self)
-        loading.title("Fetching Videos...")
-        loading.geometry("380x140")
+        loading.title("Fetching Data...")
+        loading.geometry("400x150")
         loading.grab_set()
 
+        v_desc = "all" if video_limit == 0 else (f"up to {video_limit}" if video_limit is not None else "no")
+        s_desc = "all" if shorts_limit == 0 else (f"up to {shorts_limit}" if shorts_limit is not None else "no")
+        status_text = f"Fetching {v_desc} video(s) and {s_desc} short(s) for\n'{channel.name}'..." 
         ctk.CTkLabel(
             loading,
-            text=f"Fetching videos from YouTube for\n'{channel.name}'...",
+            text=status_text,
             font=ctk.CTkFont(size=13, weight="bold"),
             justify="center",
+            wraplength=360,
         ).pack(pady=(20, 10))
 
         prog = ctk.CTkProgressBar(loading, mode="indeterminate", width=280)
@@ -588,15 +759,23 @@ class ChannelsView(ctk.CTkFrame):
             if res.error:
                 messagebox.showerror(
                     "Fetch Error",
-                    f"Failed to fetch videos from channel:\n{res.error}",
+                    f"Failed to fetch channel data:\n{res.error}",
                     parent=self,
                 )
                 return
 
+            if res.total_videos is not None:
+                channel.total_videos = res.total_videos
+            if res.total_shorts is not None:
+                channel.total_shorts = res.total_shorts
+            if res.total_videos is not None or res.total_shorts is not None:
+                self.save_channels()
+                self.refresh_list()
+
             if not res.videos:
                 messagebox.showinfo(
-                    "No Videos Found",
-                    f"No public videos were found for '{channel.name}'.",
+                    "No Items Found",
+                    f"No public videos or shorts found for '{channel.name}'.",
                     parent=self,
                 )
                 return
@@ -620,18 +799,24 @@ class ChannelsView(ctk.CTkFrame):
                 queue = self._queue_view()
                 if queue is not None:
                     queue.refresh_list()
+                shorts_queue = self._shorts_queue_view()
+                if shorts_queue is not None:
+                    shorts_queue.refresh_list()
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
                 if callable(update_dash):
                     update_dash()
                 if on_imported:
                     on_imported()
 
+                shorts_imported = sum(1 for t in selected_tasks if "/shorts/" in (t.url or ""))
+                vids_imported = len(selected_tasks) - shorts_imported
+
                 if added_count == len(selected_tasks):
-                    msg = f"Successfully imported {added_count} video(s) for channel '{channel.name}'."
+                    msg = f"Successfully imported {added_count} item(s) ({vids_imported} video(s), {shorts_imported} short(s)) for channel '{channel.name}'."
                 elif added_count > 0:
-                    msg = f"Imported {added_count} video(s) for channel '{channel.name}' ({len(selected_tasks) - added_count} duplicate(s) skipped)."
+                    msg = f"Imported {added_count} item(s) for channel '{channel.name}' ({len(selected_tasks) - added_count} duplicate(s) skipped)."
                 else:
-                    msg = f"All {len(selected_tasks)} selected video(s) were already in the queue."
+                    msg = f"All {len(selected_tasks)} selected item(s) were already in the queue."
 
                 messagebox.showinfo(
                     "Import Complete",
@@ -650,9 +835,40 @@ class ChannelsView(ctk.CTkFrame):
             )
 
         name, url = channel.name, channel.url
+        def _fetch_worker(report):
+            if shorts_limit is not None and shorts_limit > 0:
+                return fetch_channel_data(
+                    url,
+                    video_limit=video_limit,
+                    shorts_limit=shorts_limit,
+                    config_mgr=getattr(self.app_controller, "config_mgr", None),
+                )
+            return fetch_channel_videos(
+                url,
+                max_results=video_limit,
+                config_mgr=getattr(self.app_controller, "config_mgr", None),
+            )
+
         self._submit_channel_job(
-            loading, prog, lambda report: fetch_channel_videos(url, max_results=max_results, config_mgr=getattr(self.app_controller, "config_mgr", None)),
-            _on_fetch_done, current=lambda: self._channel_is_current(channel, name, url),
+            loading,
+            prog,
+            _fetch_worker,
+            _on_fetch_done,
+            current=lambda: self._channel_is_current(channel, name, url),
+        )
+
+    def fetch_videos_for_channel(
+        self,
+        channel: Channel,
+        max_results: int = 50,
+        on_imported: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Compatibility wrapper delegating to fetch_data_for_channel."""
+        self.fetch_data_for_channel(
+            channel=channel,
+            video_limit=max_results,
+            shorts_limit=0,
+            on_imported=on_imported,
         )
 
     def _fetch_and_create_channel(
@@ -660,8 +876,11 @@ class ChannelsView(ctk.CTkFrame):
         raw_url: str,
         max_fetch: int = 50,
         on_saved: Optional[OnChannelSaved] = None,
+        video_limit: Optional[int] = None,
+        shorts_limit: Optional[int] = None,
+        fetch_items: bool = True,
     ) -> None:
-        """Fetch channel name and videos when channel name was omitted, then create channel and prompt for import."""
+        """Fetch channel name and videos/shorts when channel name was omitted, then create channel and prompt for import."""
         canon_input = canonical_channel_url(raw_url)
         if canon_input:
             for ch in self.channels:
@@ -673,24 +892,61 @@ class ChannelsView(ctk.CTkFrame):
                     )
                     return
 
+        if video_limit is None and shorts_limit is None:
+            v_lim = max_fetch
+            s_lim = 0
+        else:
+            v_lim = video_limit
+            s_lim = shorts_limit
+
+        should_fetch_items = fetch_items and (v_lim is not None or s_lim is not None)
+
         loading = ctk.CTkToplevel(self)
         loading.title("Fetching Channel...")
-        loading.geometry("400x140")
+        loading.geometry("400x150")
         loading.grab_set()
+
+        if should_fetch_items:
+            v_desc = "all" if v_lim == 0 else (f"up to {v_lim}" if v_lim is not None else "no")
+            s_desc = "all" if s_lim == 0 else (f"up to {s_lim}" if s_lim is not None else "no")
+            status_text = f"Resolving channel & fetching\n{v_desc} video(s) and {s_desc} short(s) for\n'{raw_url}'..."
+        else:
+            status_text = f"Resolving channel name for\n'{raw_url}'..."
 
         ctk.CTkLabel(
             loading,
-            text=f"Resolving channel & fetching videos for\n'{raw_url}'...",
+            text=status_text,
             font=ctk.CTkFont(size=13, weight="bold"),
             justify="center",
+            wraplength=360,
         ).pack(pady=(20, 10))
 
-        prog = ctk.CTkProgressBar(loading, mode="indeterminate", width=300)
+        prog = ctk.CTkProgressBar(loading, mode="indeterminate", width=280)
         prog.pack(pady=(0, 15))
         prog.start()
 
         def _bg_fetch(report):
-            res = fetch_channel_videos(raw_url, max_results=max_fetch, config_mgr=getattr(self.app_controller, "config_mgr", None))
+            if should_fetch_items:
+                if s_lim is not None and s_lim > 0:
+                    res = fetch_channel_data(
+                        raw_url,
+                        video_limit=v_lim,
+                        shorts_limit=s_lim,
+                        config_mgr=getattr(self.app_controller, "config_mgr", None),
+                    )
+                else:
+                    res = fetch_channel_videos(
+                        raw_url,
+                        max_results=v_lim if v_lim is not None else 50,
+                        config_mgr=getattr(self.app_controller, "config_mgr", None),
+                    )
+            else:
+                online_title = fetch_channel_title_online(raw_url) or extract_fallback_channel_name(raw_url)
+                res = ChannelFetchResult(
+                    channel_title=online_title,
+                    channel_url=clean_channel_url(raw_url),
+                    videos=[],
+                )
             if not res.error and not (res.channel_title or "").strip():
                 res.channel_title = fetch_channel_title_online(raw_url) or extract_fallback_channel_name(raw_url)
             return res
@@ -728,6 +984,8 @@ class ChannelsView(ctk.CTkFrame):
                 name=unique_name,
                 url=target_url,
                 enabled=True,
+                total_videos=res.total_videos,
+                total_shorts=res.total_shorts,
             )
             self.channels.append(channel)
             self.save_channels()
@@ -735,14 +993,25 @@ class ChannelsView(ctk.CTkFrame):
             queue = self._queue_view()
             if queue is not None:
                 queue.refresh_list()
+            shorts_queue = self._shorts_queue_view()
+            if shorts_queue is not None:
+                shorts_queue.refresh_list()
 
             if on_saved:
                 on_saved(channel)
 
+            if not should_fetch_items:
+                messagebox.showinfo(
+                    "Channel Added",
+                    f"Created channel '{channel.name}'.",
+                    parent=self,
+                )
+                return
+
             if not res.videos:
                 messagebox.showinfo(
                     "Channel Added",
-                    f"Created channel '{channel.name}', but no public videos were found.",
+                    f"Created channel '{channel.name}', but no public videos or shorts were found.",
                     parent=self,
                 )
                 return
@@ -766,16 +1035,22 @@ class ChannelsView(ctk.CTkFrame):
                 q = self._queue_view()
                 if q is not None:
                     q.refresh_list()
+                sq = self._shorts_queue_view()
+                if sq is not None:
+                    sq.refresh_list()
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
                 if callable(update_dash):
                     update_dash()
 
+                shorts_imported = sum(1 for t in selected_tasks if "/shorts/" in (t.url or ""))
+                vids_imported = len(selected_tasks) - shorts_imported
+
                 if added_count == len(selected_tasks):
-                    msg = f"Successfully imported {added_count} video(s) for channel '{channel.name}'."
+                    msg = f"Successfully imported {added_count} item(s) ({vids_imported} video(s), {shorts_imported} short(s)) for channel '{channel.name}'."
                 elif added_count > 0:
-                    msg = f"Imported {added_count} video(s) for channel '{channel.name}' ({len(selected_tasks) - added_count} duplicate(s) skipped)."
+                    msg = f"Imported {added_count} item(s) for channel '{channel.name}' ({len(selected_tasks) - added_count} duplicate(s) skipped)."
                 else:
-                    msg = f"All {len(selected_tasks)} selected video(s) were already in the queue."
+                    msg = f"All {len(selected_tasks)} selected item(s) were already in the queue."
 
                 messagebox.showinfo(
                     "Import Complete",
@@ -790,6 +1065,7 @@ class ChannelsView(ctk.CTkFrame):
                 fetched_videos=res.videos,
                 existing_video_ids=existing_ids,
                 on_import=_handle_import,
+                fetch_result=res,
             )
 
         self._submit_channel_job(loading, prog, _bg_fetch, _on_fetch_done)
@@ -821,26 +1097,192 @@ class ChannelsView(ctk.CTkFrame):
     def open_channel_videos_modal(self, channel: Channel):
         modal = ctk.CTkToplevel(self)
         modal.title(f"Channel Videos — {channel.name}")
-        modal.geometry("680x560")
+        modal.geometry("680x620")
+        if hasattr(modal, "minsize"):
+            modal.minsize(640, 560)
         modal.grab_set()
 
         header = ctk.CTkFrame(modal, fg_color="transparent")
         header.pack(fill="x", padx=20, pady=(15, 8))
 
         tag = " [ARCHIVED]" if channel.archived else (" [DISABLED]" if not channel.enabled else "")
-        ctk.CTkLabel(
-            header,
+
+        # 1. In-place editable Channel Name
+        name_container = ctk.CTkFrame(header, fg_color="transparent")
+        name_container.pack(fill="x", anchor="w")
+
+        name_lbl = ctk.CTkLabel(
+            name_container,
             text=f"📺 {channel.name}{tag}",
             font=ctk.CTkFont(size=18, weight="bold"),
-        ).pack(anchor="w")
+            cursor="hand2",
+        )
+        name_lbl.pack(side="left", anchor="w")
 
-        if channel.url:
-            ctk.CTkLabel(
-                header,
-                text=channel.url,
+        name_entry = None
+        name_saving = False
+
+        def _save_name(event=None):
+            nonlocal name_entry, name_saving
+            if name_saving or name_entry is None:
+                return
+            name_saving = True
+            try:
+                raw_new = name_entry.get().strip()
+                if raw_new and raw_new != channel.name:
+                    if any(c is not channel and c.name.lower() == raw_new.lower() for c in self.channels):
+                        messagebox.showwarning(
+                            "Duplicate Name",
+                            f"A channel with the name '{raw_new}' already exists.",
+                            parent=modal,
+                        )
+                    else:
+                        old_name = channel.name
+                        channel.name = raw_new
+                        self.save_channels()
+                        queue = self._queue_view()
+                        if queue:
+                            queue.reassign_channel(old_name, raw_new)
+                        self.refresh_list()
+                        modal.title(f"Channel Videos — {channel.name}")
+                        scroll.configure(label_text=f"Videos under '{channel.name}'")
+                        update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+                        if callable(update_dash):
+                            update_dash()
+                name_lbl.configure(text=f"📺 {channel.name}{tag}")
+            finally:
+                if name_entry is not None:
+                    name_entry.destroy()
+                    name_entry = None
+                name_lbl.pack(side="left", anchor="w")
+                name_saving = False
+
+        def _cancel_name(event=None):
+            nonlocal name_entry, name_saving
+            if name_saving or name_entry is None:
+                return
+            name_saving = True
+            try:
+                if name_entry is not None:
+                    name_entry.destroy()
+                    name_entry = None
+                name_lbl.pack(side="left", anchor="w")
+            finally:
+                name_saving = False
+
+        def _edit_name(event=None):
+            nonlocal name_entry, name_saving
+            if name_entry is not None:
+                return
+            name_lbl.pack_forget()
+            name_entry = ctk.CTkEntry(
+                name_container,
+                font=ctk.CTkFont(size=16, weight="bold"),
+                height=30,
+            )
+            name_entry.insert(0, channel.name)
+            name_entry.pack(side="left", fill="x", expand=True)
+            name_entry.focus_set()
+            name_entry.select_range(0, "end")
+            name_entry.bind("<Return>", _save_name)
+            name_entry.bind("<FocusOut>", _save_name)
+            name_entry.bind("<Escape>", _cancel_name)
+
+        name_lbl.bind("<Button-1>", _edit_name)
+
+        # 2. In-place editable Channel URL
+        url_container = ctk.CTkFrame(header, fg_color="transparent")
+        url_container.pack(fill="x", anchor="w", pady=(3, 0))
+
+        def _get_url_display_text():
+            return channel.url if channel.url else "Click to set channel URL / handle..."
+
+        url_lbl = ctk.CTkLabel(
+            url_container,
+            text=_get_url_display_text(),
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60") if channel.url else ("#2563EB", "#60A5FA"),
+            cursor="hand2",
+        )
+        url_lbl.pack(side="left", anchor="w")
+
+        url_entry = None
+        url_saving = False
+
+        def _save_url(event=None):
+            nonlocal url_entry, url_saving
+            if url_saving or url_entry is None:
+                return
+            url_saving = True
+            try:
+                raw_new = url_entry.get().strip()
+                cleaned = clean_channel_url(raw_new) if raw_new else ""
+                if cleaned != channel.url:
+                    canon = canonical_channel_url(cleaned)
+                    if canon and any(c is not channel and canonical_channel_url(c.url) == canon for c in self.channels):
+                        messagebox.showwarning(
+                            "Duplicate URL",
+                            "A channel with this URL already exists.",
+                            parent=modal,
+                        )
+                    else:
+                        channel.url = cleaned
+                        self.save_channels()
+                        self.refresh_list()
+                        if channel.url:
+                            if not fetch_settings_frame.winfo_ismapped():
+                                fetch_settings_frame.pack(before=modal_actions, fill="x", padx=20, pady=(2, 6))
+                            if not fetch_data_btn.winfo_ismapped():
+                                fetch_data_btn.pack(side="left", padx=(8, 0))
+                        else:
+                            if fetch_settings_frame.winfo_ismapped():
+                                fetch_settings_frame.pack_forget()
+                            if fetch_data_btn.winfo_ismapped():
+                                fetch_data_btn.pack_forget()
+                url_lbl.configure(
+                    text=_get_url_display_text(),
+                    text_color=("gray40", "gray60") if channel.url else ("#2563EB", "#60A5FA"),
+                )
+            finally:
+                if url_entry is not None:
+                    url_entry.destroy()
+                    url_entry = None
+                url_lbl.pack(side="left", anchor="w")
+                url_saving = False
+
+        def _cancel_url(event=None):
+            nonlocal url_entry, url_saving
+            if url_saving or url_entry is None:
+                return
+            url_saving = True
+            try:
+                if url_entry is not None:
+                    url_entry.destroy()
+                    url_entry = None
+                url_lbl.pack(side="left", anchor="w")
+            finally:
+                url_saving = False
+
+        def _edit_url(event=None):
+            nonlocal url_entry, url_saving
+            if url_entry is not None:
+                return
+            url_lbl.pack_forget()
+            url_entry = ctk.CTkEntry(
+                url_container,
                 font=ctk.CTkFont(size=12),
-                text_color=("gray40", "gray60"),
-            ).pack(anchor="w")
+                height=26,
+                placeholder_text="https://www.youtube.com/@handle or @handle",
+            )
+            url_entry.insert(0, channel.url or "")
+            url_entry.pack(side="left", fill="x", expand=True)
+            url_entry.focus_set()
+            url_entry.select_range(0, "end")
+            url_entry.bind("<Return>", _save_url)
+            url_entry.bind("<FocusOut>", _save_url)
+            url_entry.bind("<Escape>", _cancel_url)
+
+        url_lbl.bind("<Button-1>", _edit_url)
 
         stats = self.channel_stats_line(channel.name)
         if stats:
@@ -849,6 +1291,57 @@ class ChannelsView(ctk.CTkFrame):
                 text=stats,
                 font=ctk.CTkFont(size=12, slant="italic"),
             ).pack(anchor="w", pady=(2, 0))
+
+        totals_parts = []
+        if channel.total_videos is not None:
+            totals_parts.append(f"{channel.total_videos:,} Videos")
+        if channel.total_shorts is not None:
+            totals_parts.append(f"{channel.total_shorts:,} Shorts")
+        if totals_parts or getattr(channel, "has_new_videos", False):
+            header_text = f"📊 Channel Total: {' | '.join(totals_parts)}" if totals_parts else ""
+            if getattr(channel, "has_new_videos", False):
+                header_text = f"{header_text}  •  🔥 New Videos Available" if header_text else "🔥 New Videos Available"
+            ctk.CTkLabel(
+                header,
+                text=header_text,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=("#16A34A", "#4ADE80") if getattr(channel, "has_new_videos", False) else ("#1D4ED8", "#93C5FD"),
+            ).pack(anchor="w", pady=(2, 0))
+
+        fetch_settings_frame = ctk.CTkFrame(modal, fg_color=("gray90", "gray18"), corner_radius=8)
+
+        v_box = ctk.CTkFrame(fetch_settings_frame, fg_color="transparent")
+        v_box.pack(side="left", padx=(14, 12), pady=8)
+        ctk.CTkLabel(
+            v_box,
+            text="Videos to Fetch:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w")
+        videos_menu = ctk.CTkOptionMenu(
+            v_box,
+            values=FETCH_DATA_OPTIONS,
+            width=150,
+        )
+        videos_menu.set("100")
+        videos_menu.pack(anchor="w", pady=(3, 0))
+
+        s_box = ctk.CTkFrame(fetch_settings_frame, fg_color="transparent")
+        s_box.pack(side="left", padx=(0, 14), pady=8)
+        ctk.CTkLabel(
+            s_box,
+            text="Shorts to Fetch:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(anchor="w")
+        shorts_menu = ctk.CTkOptionMenu(
+            s_box,
+            values=FETCH_DATA_OPTIONS,
+            width=150,
+        )
+        shorts_menu.set("100")
+        shorts_menu.pack(anchor="w", pady=(3, 0))
+
+        if channel.url:
+            fetch_settings_frame.pack(fill="x", padx=20, pady=(2, 6))
 
         modal_actions = ctk.CTkFrame(modal, fg_color="transparent")
         modal_actions.pack(fill="x", padx=20, pady=(4, 10))
@@ -871,18 +1364,43 @@ class ChannelsView(ctk.CTkFrame):
             command=_add_video_for_channel,
         ).pack(side="left")
 
+        def _do_fetch_data():
+            if not channel.url:
+                messagebox.showwarning(
+                    "Missing URL",
+                    f"Channel '{channel.name}' does not have a URL configured.",
+                    parent=modal,
+                )
+                return
+
+            v_count = parse_fetch_limit(videos_menu.get())
+            s_count = parse_fetch_limit(shorts_menu.get())
+
+            if v_count is None and s_count is None:
+                messagebox.showwarning(
+                    "No Items Selected",
+                    "Please select at least 1 video or 1 short to fetch (both cannot be 'Fetch No Data').",
+                    parent=modal,
+                )
+                return
+
+            self.fetch_data_for_channel(
+                channel=channel,
+                video_limit=v_count,
+                shorts_limit=s_count,
+                on_imported=lambda: _refresh_modal_videos(),
+            )
+
+        fetch_data_btn = ctk.CTkButton(
+            modal_actions,
+            text="⚡ Fetch Data",
+            font=ctk.CTkFont(weight="bold"),
+            fg_color="#0D9488",
+            hover_color="#0F766E",
+            command=_do_fetch_data,
+        )
         if channel.url:
-            ctk.CTkButton(
-                modal_actions,
-                text="🔄 Fetch Videos",
-                font=ctk.CTkFont(weight="bold"),
-                fg_color="#0D9488",
-                hover_color="#0F766E",
-                command=lambda: self.fetch_videos_for_channel(
-                    channel,
-                    on_imported=lambda: _refresh_modal_videos(),
-                ),
-            ).pack(side="left", padx=(8, 0))
+            fetch_data_btn.pack(side="left", padx=(8, 0))
 
         scroll = ctk.CTkScrollableFrame(modal, label_text=f"Videos under '{channel.name}'")
         scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
@@ -915,7 +1433,9 @@ class ChannelsView(ctk.CTkFrame):
                 card.grid_columnconfigure(0, weight=1)
                 card.grid_columnconfigure(1, weight=0)
 
-                label_parts = [f"{pos}. {task.title or task.keywords or 'Untitled Video'}"]
+                is_short = "/shorts/" in (task.url or "")
+                type_tag = "[⚡ SHORT] " if is_short else "[🎬 VIDEO] "
+                label_parts = [f"{pos}. {type_tag}{task.title or task.keywords or ('Untitled Short' if is_short else 'Untitled Video')}"]
                 if task.title_2:
                     label_parts.append(f"Retry 2: {task.title_2}")
                 if task.title_3:
@@ -1046,6 +1566,153 @@ class ChannelsView(ctk.CTkFrame):
                 f"'{removed.name}' was removed. {unassigned} video(s) moved to {UNCATEGORIZED_LABEL}.",
             )
 
+    def get_existing_video_counts_for_channel(self, channel_name: str) -> Tuple[int, int, int]:
+        """Count unique (long_form_count, shorts_count, total_count) for a channel from queue and stats."""
+        unique_vids: Set[str] = set()
+        unique_shorts: Set[str] = set()
+
+        tasks = getattr(self.app_controller, "queued_video_tasks", None) or []
+        for t in tasks:
+            if (t.channel or "").strip().lower() == channel_name.strip().lower():
+                vid_id = extract_video_id(t.url) or (t.url or t.title)
+                if vid_id:
+                    if "/shorts/" in (t.url or ""):
+                        unique_shorts.add(vid_id)
+                    else:
+                        unique_vids.add(vid_id)
+
+        store = getattr(self.app_controller, "stats_store", None)
+        if store:
+            records = store.for_channel(channel_name)
+            for r in records:
+                vid_key = getattr(r, "video_key", "") or getattr(r, "task_key", "")
+                if vid_key:
+                    is_short = getattr(r, "is_short", False) or ("/shorts/" in vid_key)
+                    if is_short:
+                        unique_shorts.add(vid_key)
+                    else:
+                        unique_vids.add(vid_key)
+
+        return len(unique_vids), len(unique_shorts), len(unique_vids) + len(unique_shorts)
+
+    def sync_all_channel_data(self) -> None:
+        """Fetch total videos and shorts for all channels from YouTube, match against existing stats/queue,
+        and flag channels with 'New Videos Available'."""
+        channels_with_urls = [ch for ch in self.channels if ch.url]
+        if not channels_with_urls:
+            messagebox.showinfo("Sync Channel Data", "No channels with URLs configured to sync.", parent=self)
+            return
+
+        toast = ctk.CTkToplevel(self)
+        toast.title("Syncing Channel Data...")
+        toast.geometry("400x140")
+        toast.grab_set()
+
+        lbl = ctk.CTkLabel(
+            toast,
+            text=f"Syncing channel totals from YouTube (0/{len(channels_with_urls)})...",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            wraplength=360,
+        )
+        lbl.pack(pady=(20, 10))
+
+        prog = ctk.CTkProgressBar(toast, mode="indeterminate", width=320)
+        prog.pack(pady=(0, 15))
+        prog.start()
+
+        snapshots = [(ch, ch.name, ch.url) for ch in channels_with_urls]
+        requests = [(name, url) for _, name, url in snapshots]
+
+        def _bg_sync(report):
+            results = []
+            for i, (name, url) in enumerate(requests, 1):
+                report((i, name))
+                try:
+                    res = fetch_channel_data(
+                        url,
+                        video_limit=None,
+                        shorts_limit=None,
+                        config_mgr=getattr(self.app_controller, "config_mgr", None),
+                    )
+                    results.append(res)
+                except Exception as exc:
+                    results.append(ChannelFetchResult(channel_url=url, error=str(exc)))
+            return results
+
+        def _close():
+            if self._widget_exists(toast):
+                prog.stop()
+                toast.destroy()
+
+        def _done(results):
+            _close()
+            new_vids_channels = 0
+            updated_count = 0
+            queue = self._queue_view()
+
+            for (ch, old_name, old_url), res in zip(snapshots, results):
+                if not self._channel_is_current(ch, old_name, old_url):
+                    continue
+
+                if res.total_videos is not None:
+                    ch.total_videos = res.total_videos
+                if res.total_shorts is not None:
+                    ch.total_shorts = res.total_shorts
+
+                # Update channel name if official name changed
+                official_name = (res.channel_title or "").strip()
+                if official_name and official_name != old_name:
+                    if not any(other is not ch and other.name.lower() == official_name.lower() for other in self.channels):
+                        ch.name = official_name
+                        if queue is not None:
+                            queue.reassign_channel(old_name, ch.name)
+
+                # Match against existing videos and shorts in stats and queue
+                exist_vids, exist_shorts, exist_total = self.get_existing_video_counts_for_channel(ch.name)
+
+                has_new = False
+                yt_vids = ch.total_videos if ch.total_videos is not None else 0
+                yt_shorts = ch.total_shorts if ch.total_shorts is not None else 0
+                yt_total = yt_vids + yt_shorts
+
+                if yt_total > 0:
+                    if (ch.total_videos is not None and yt_vids > exist_vids) or \
+                       (ch.total_shorts is not None and yt_shorts > exist_shorts) or \
+                       (yt_total > exist_total):
+                        has_new = True
+
+                ch.has_new_videos = has_new
+                if has_new:
+                    new_vids_channels += 1
+                updated_count += 1
+
+            self.save_channels()
+            self.refresh_list()
+            if queue is not None:
+                queue.refresh_list()
+
+            msg = f"Synced {updated_count} channel(s)."
+            if new_vids_channels > 0:
+                msg += f"\n\n🔥 {new_vids_channels} channel(s) have new videos available!"
+            else:
+                msg += "\n\nAll channels are up to date with existing queue and stats."
+
+            messagebox.showinfo("Sync Complete", msg, parent=self)
+
+        def _progress(data):
+            idx, name = data
+            lbl.configure(text=f"Syncing '{name}' ({idx}/{len(requests)})...")
+
+        def _failed(exc):
+            _close()
+            messagebox.showerror("Sync Error", f"Failed to sync channel data:\n{exc}", parent=self)
+
+        self.app_controller.background_jobs.submit(
+            _bg_sync, done=_done, error=_failed, progress=_progress,
+            current=lambda: self._widget_exists(self) and self._widget_exists(toast),
+            discard=_close,
+        )
+
     def sync_all_channel_names(self) -> None:
         """Fetch and update official YouTube channel names for all configured channels."""
         channels_with_urls = [ch for ch in self.channels if ch.url]
@@ -1146,6 +1813,34 @@ class ChannelsView(ctk.CTkFrame):
         else:
             messagebox.showinfo("Notice", "This channel has no URL saved.")
 
+    def sync_single_channel_data(self, channel: Channel) -> None:
+        """Sync new available videos and shorts for a specific channel."""
+        if not channel.url:
+            messagebox.showinfo("Missing URL", f"Channel '{channel.name}' has no URL configured.", parent=self)
+            return
+
+        exist_vids, exist_shorts, _ = self.get_existing_video_counts_for_channel(channel.name)
+        new_vids = max(0, (channel.total_videos or 0) - exist_vids)
+        new_shorts = max(0, (channel.total_shorts or 0) - exist_shorts)
+
+        v_limit = max(50, new_vids) if (channel.total_videos or 0) > exist_vids else 50
+        s_limit = max(50, new_shorts) if (channel.total_shorts or 0) > exist_shorts else 50
+
+        def _on_done():
+            ev, es, et = self.get_existing_video_counts_for_channel(channel.name)
+            yt_v = channel.total_videos or 0
+            yt_s = channel.total_shorts or 0
+            channel.has_new_videos = (yt_v > ev) or (yt_s > es) or ((yt_v + yt_s) > et)
+            self.save_channels()
+            self.refresh_list()
+
+        self.fetch_data_for_channel(
+            channel=channel,
+            video_limit=v_limit,
+            shorts_limit=s_limit,
+            on_imported=_on_done,
+        )
+
     # ------------------------------------------------------------------ list
 
     def refresh_list(self) -> None:
@@ -1241,7 +1936,21 @@ class ChannelsView(ctk.CTkFrame):
             watch_time_str = self.get_channel_watch_time(channel)
             line3 = f"Total Watch Time: {watch_time_str}"
 
-            info_text = f"{line1}\n{line2}\n{line3}"
+            totals_parts = []
+            if channel.total_videos is not None:
+                totals_parts.append(f"{channel.total_videos:,} Videos")
+            if channel.total_shorts is not None:
+                totals_parts.append(f"{channel.total_shorts:,} Shorts")
+
+            line4 = f"Channel Total: {' | '.join(totals_parts)}" if totals_parts else ""
+            if getattr(channel, "has_new_videos", False):
+                new_tag = " • 🔥 New Videos Available"
+                line4 = f"{line4}{new_tag}" if line4 else "🔥 New Videos Available"
+
+            if line4:
+                info_text = f"{line1}\n{line2}\n{line3}\n{line4}"
+            else:
+                info_text = f"{line1}\n{line2}\n{line3}"
 
             def _on_channel_click(event=None, ch=channel):
                 self.open_channel_videos_modal(ch)
@@ -1319,14 +2028,19 @@ class ChannelsView(ctk.CTkFrame):
                 command=lambda ch=channel: self.open_channel_videos_modal(ch),
             ).pack(side="left", padx=(0, 4))
 
-            ctk.CTkButton(
+            has_new = getattr(channel, "has_new_videos", False)
+            sync_btn = ctk.CTkButton(
                 action_frame,
-                text="✏ Edit",
-                width=60,
-                fg_color="#1F6AA5",
-                hover_color="#144870",
-                command=lambda i=real_idx: self.open_channel_modal(edit_index=i),
-            ).pack(side="left", padx=(0, 4))
+                text="⚡ Sync Data",
+                width=80,
+                fg_color="#0D9488" if has_new else "gray30",
+                hover_color="#0F766E" if has_new else "gray30",
+                state="normal" if has_new else "disabled",
+                command=lambda ch=channel: self.sync_single_channel_data(ch),
+            )
+            sync_btn.pack(side="left", padx=(0, 4))
+
+
 
             if channel.archived:
                 ctk.CTkButton(
