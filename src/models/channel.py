@@ -173,6 +173,9 @@ class Channel:
     archived: bool = False
     watch_seconds: float = 0.0
     target_watch_seconds: float = 0.0
+    total_videos: Optional[int] = None
+    total_shorts: Optional[int] = None
+    has_new_videos: bool = False
 
     @property
     def target_watch_hours(self) -> float:
@@ -196,6 +199,12 @@ class Channel:
             data["watch_seconds"] = round(self.watch_seconds, 3)
         if self.target_watch_seconds > 0.0:
             data["target_watch_seconds"] = round(self.target_watch_seconds, 3)
+        if self.total_videos is not None:
+            data["total_videos"] = self.total_videos
+        if self.total_shorts is not None:
+            data["total_shorts"] = self.total_shorts
+        if self.has_new_videos:
+            data["has_new_videos"] = True
         return data
 
     @classmethod
@@ -210,6 +219,13 @@ class Channel:
             archived_val = archived_val.lower() in ("true", "1", "yes")
         watch_sec_val = safe_float(data.get("watch_seconds"), default=0.0, min_val=0.0)
         target_watch_sec_val = safe_float(data.get("target_watch_seconds"), default=0.0, min_val=0.0)
+        raw_tv = data.get("total_videos")
+        total_videos = safe_int(raw_tv, default=-1) if raw_tv is not None else -1
+        raw_ts = data.get("total_shorts")
+        total_shorts = safe_int(raw_ts, default=-1) if raw_ts is not None else -1
+        raw_hnv = data.get("has_new_videos", False)
+        if isinstance(raw_hnv, str):
+            raw_hnv = raw_hnv.lower() in ("true", "1", "yes")
         return cls(
             name=str(data.get("name") or "").strip(),
             url=normalize_channel_url(str(data.get("url") or "")),
@@ -217,6 +233,9 @@ class Channel:
             archived=bool(archived_val),
             watch_seconds=watch_sec_val,
             target_watch_seconds=target_watch_sec_val,
+            total_videos=total_videos if total_videos >= 0 else None,
+            total_shorts=total_shorts if total_shorts >= 0 else None,
+            has_new_videos=bool(raw_hnv),
         )
 
     @classmethod
@@ -229,6 +248,9 @@ class Channel:
         archived: bool = False,
         watch_seconds: float = 0.0,
         target_watch_seconds: float = 0.0,
+        total_videos: Optional[int] = None,
+        total_shorts: Optional[int] = None,
+        has_new_videos: bool = False,
     ) -> "Channel":
         """Build a validated channel. Raises ValueError with a user-facing message."""
         clean_name = (name or "").strip()
@@ -254,6 +276,9 @@ class Channel:
             archived=archived,
             watch_seconds=watch_seconds,
             target_watch_seconds=target_watch_seconds,
+            total_videos=total_videos,
+            total_shorts=total_shorts,
+            has_new_videos=has_new_videos,
         )
 
 
