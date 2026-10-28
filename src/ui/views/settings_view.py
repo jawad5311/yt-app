@@ -5,6 +5,7 @@ from typing import Any, Dict
 import customtkinter as ctk
 
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS
+from ...utils.scroll_helper import setup_smooth_scrolling
 
 APPEARANCE_OPTIONS = ["Dark", "Light", "System"]
 QUALITY_OPTIONS = ["360p", "480p", "Random (360p / 480p)"]
@@ -27,8 +28,10 @@ class SettingsView(ctk.CTkFrame):
         ).grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
 
         # Container
-        container = ctk.CTkScrollableFrame(self)
-        container.grid(row=1, column=0, padx=20, pady=(10, 20), sticky="nsew")
+        self.container = ctk.CTkScrollableFrame(self)
+        self.container.grid(row=1, column=0, padx=20, pady=(10, 20), sticky="nsew")
+        setup_smooth_scrolling(self.container, notch_pixels=120.0, damping=0.35)
+        container = self.container
 
         # Direct Link Fallback Toggle
         self.fallback_switch = ctk.CTkSwitch(
