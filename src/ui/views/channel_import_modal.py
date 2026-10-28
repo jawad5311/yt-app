@@ -54,10 +54,12 @@ class ChannelImportModal(ctk.CTkToplevel):
             font=ctk.CTkFont(size=20, weight="bold"),
         ).pack(anchor="w")
 
+        v_count = sum(1 for v in self.fetched_videos if not (getattr(v, "is_short", False) or "/shorts/" in (v.url or "")))
+        s_count = len(self.fetched_videos) - v_count
         new_count = sum(1 for v in self.fetched_videos if v.video_id not in self.existing_video_ids)
         existing_count = len(self.fetched_videos) - new_count
         status_text = (
-            f"Found {len(self.fetched_videos)} videos · "
+            f"Found {len(self.fetched_videos)} items ({v_count} videos, {s_count} shorts) · "
             f"{new_count} new, {existing_count} already in queue"
         )
         if self.fetch_result:
@@ -115,6 +117,26 @@ class ChannelImportModal(ctk.CTkToplevel):
             fg_color="#2FA572",
             hover_color="#1E7B52",
             command=self._select_new_only,
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            toolbar,
+            text="Videos Only",
+            width=90,
+            height=28,
+            fg_color="#3B82F6",
+            hover_color="#2563EB",
+            command=self._select_videos_only,
+        ).pack(side="left", padx=(0, 6))
+
+        ctk.CTkButton(
+            toolbar,
+            text="Shorts Only",
+            width=90,
+            height=28,
+            fg_color="#EC4899",
+            hover_color="#DB2777",
+            command=self._select_shorts_only,
         ).pack(side="left")
 
         # 3. Scrollable List of Videos
@@ -248,6 +270,23 @@ class ChannelImportModal(ctk.CTkToplevel):
                 )
             status_badge.pack(side="left")
 
+            is_short = getattr(video, "is_short", False) or ("/shorts/" in (video.url or ""))
+            if is_short:
+                type_badge = ctk.CTkLabel(
+                    meta_frame,
+                    text="⚡ SHORT",
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color="#EC4899",
+                )
+            else:
+                type_badge = ctk.CTkLabel(
+                    meta_frame,
+                    text="🎬 VIDEO",
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color="#3B82F6",
+                )
+            type_badge.pack(side="left", padx=(10, 0))
+
     def _select_all(self):
         for var in self.selected_vars.values():
             var.set(True)
@@ -263,6 +302,22 @@ class ChannelImportModal(ctk.CTkToplevel):
             var = self.selected_vars.get(video.video_id)
             if var is not None:
                 var.set(video.video_id not in self.existing_video_ids)
+        self._update_selection_counter()
+
+    def _select_videos_only(self):
+        for video in self.fetched_videos:
+            var = self.selected_vars.get(video.video_id)
+            if var is not None:
+                is_short = getattr(video, "is_short", False) or ("/shorts/" in (video.url or ""))
+                var.set(not is_short)
+        self._update_selection_counter()
+
+    def _select_shorts_only(self):
+        for video in self.fetched_videos:
+            var = self.selected_vars.get(video.video_id)
+            if var is not None:
+                is_short = getattr(video, "is_short", False) or ("/shorts/" in (video.url or ""))
+                var.set(is_short)
         self._update_selection_counter()
 
     def _update_selection_counter(self):
