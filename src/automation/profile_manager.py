@@ -63,9 +63,20 @@ def resolve_profile_dir(
 
     if legacy_path.exists():
         if known_accounts:
+            # Normalize known accounts to Account instances
+            norm_accounts: List[Account] = []
+            for item in known_accounts:
+                if isinstance(item, Account):
+                    norm_accounts.append(item)
+                elif isinstance(item, dict) and "email" in item:
+                    try:
+                        norm_accounts.append(Account(email=item["email"], password=item.get("password", "")))
+                    except Exception:
+                        pass
+
             # Check how many known accounts map to this legacy folder
             matching = [
-                a for a in known_accounts
+                a for a in norm_accounts
                 if a.get_legacy_profile_dir_name() == legacy_name
             ]
             if len(matching) == 1 and matching[0].email == account.email:

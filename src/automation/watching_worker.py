@@ -1698,7 +1698,8 @@ class WatchingWorker:
 
         try:
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
-            known = self.config_mgr.get_accounts() if self.config_mgr else None
+            known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
+            known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
             self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
 
             if self.stop_event.is_set():

@@ -227,3 +227,35 @@ def test_issue_8_scratch_ignored():
 
     spec = (repo_root / "yt_tool.spec").read_text(encoding="utf-8")
     assert '"scratch"' in spec
+
+def test_legacy_profile_with_dictionary_accounts_no_attribute_error(tmp_path):
+    acc = Account(email="single.user@gmail.com", password="pw")
+    legacy_dir = tmp_path / acc.get_legacy_profile_dir_name()
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+
+    # ConfigManager.get_accounts() returns dictionaries
+    dict_accounts = [{"email": "single.user@gmail.com", "password": "pw"}]
+
+    # Must resolve legacy profile without AttributeError: 'dict' object has no attribute 'get_legacy_profile_dir_name'
+    resolved = resolve_profile_dir(acc, known_accounts=dict_accounts, runtime_dir=tmp_path)
+    assert resolved == legacy_dir
+
+
+def test_legacy_profile_collision_with_dictionary_accounts(tmp_path):
+    acc1 = Account(email="john.doe@gmail.com", password="pw1")
+    acc2 = Account(email="john_doe@gmail.com", password="pw2")
+
+    # If legacy directory exists and both accounts are dicts, it must not crash and assign safe dir
+    legacy_dir = tmp_path / acc1.get_legacy_profile_dir_name()
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+
+    dict_accounts = [
+        {"email": "john.doe@gmail.com", "password": "pw1"},
+        {"email": "john_doe@gmail.com", "password": "pw2"},
+    ]
+
+    resolved = resolve_profile_dir(acc1, known_accounts=dict_accounts, runtime_dir=tmp_path)
+    assert resolved != legacy_dir
+    assert resolved == (tmp_path / acc1.get_profile_dir_name()).resolve()
+
+

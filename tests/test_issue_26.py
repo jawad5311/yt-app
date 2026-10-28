@@ -35,15 +35,18 @@ def test_duplicate_manual_account_entry_is_rejected():
     view.save_accounts = MagicMock()
     view.refresh_list = MagicMock()
 
-    with patch("customtkinter.CTkInputDialog.get_input", return_value="TEST@gmail.com:password123"), \
+    mock_dialog_inst = MagicMock()
+    with patch("customtkinter.CTkInputDialog", return_value=mock_dialog_inst), \
          patch("tkinter.messagebox.showwarning") as mock_warn:
+        mock_dialog_inst.get_input.return_value = "TEST@gmail.com:password123"
         view.add_account_dialog()
         mock_warn.assert_called_once()
         assert len(view.accounts) == 1
         view.save_accounts.assert_not_called()
 
-    with patch("customtkinter.CTkInputDialog.get_input", return_value="test@gmail.com:DIFFERENT_PW"), \
+    with patch("customtkinter.CTkInputDialog", return_value=mock_dialog_inst), \
          patch("tkinter.messagebox.showerror") as mock_err:
+        mock_dialog_inst.get_input.return_value = "test@gmail.com:DIFFERENT_PW"
         view.add_account_dialog()
         mock_err.assert_called_once()
         assert len(view.accounts) == 1

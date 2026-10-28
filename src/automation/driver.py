@@ -7,7 +7,7 @@ import subprocess
 import threading
 import winreg
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import undetected_chromedriver as uc
 
@@ -87,17 +87,29 @@ def setup_driver(
     account: Account,
     log_queue: Optional[queue.Queue] = None,
     adblock_path: Optional[Path] = None,
-    known_accounts: Optional[List[Account]] = None,
+    known_accounts: Optional[Union[List[Account], List[Dict[str, Any]]]] = None,
 ) -> uc.Chrome:
     """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
+    resolved_known: Optional[List[Account]] = None
     if known_accounts is None:
         try:
             from ..config.manager import ConfigManager
-            known_accounts = ConfigManager().get_accounts()
+            raw_accs = ConfigManager().get_accounts()
+            resolved_known = [
+                Account(email=a["email"], password=a.get("password", "")) if isinstance(a, dict) and "email" in a else a
+                for a in raw_accs
+                if a
+            ]
         except Exception:
-            known_accounts = None
+            resolved_known = None
+    elif known_accounts:
+        resolved_known = [
+            Account(email=a["email"], password=a.get("password", "")) if isinstance(a, dict) and "email" in a else a
+            for a in known_accounts
+            if a
+        ]
 
-    profile_dir = resolve_profile_dir(account, known_accounts=known_accounts)
+    profile_dir = resolve_profile_dir(account, known_accounts=resolved_known)
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     profile_lock = ProfileLock(profile_dir)

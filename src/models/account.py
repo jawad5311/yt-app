@@ -1,6 +1,6 @@
 import hashlib
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 def normalize_account_id(email: str) -> str:
@@ -48,6 +48,21 @@ class Account:
         """Return legacy folder name for backwards compatibility."""
         safe_email = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in self.email)
         return f"profile_{safe_email}"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Account":
+        return cls(
+            email=str(data.get("email", "") or ""),
+            password=str(data.get("password", "") or ""),
+            status=str(data.get("status", "Ready") or "Ready"),
+        )
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "email": self.email,
+            "password": self.password,
+            "status": self.status,
+        }
 
     @classmethod
     def parse_line(cls, line: str) -> Optional["Account"]:
