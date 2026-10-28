@@ -1,5 +1,6 @@
 """Selection Preview Modal for importing videos fetched from a YouTube channel."""
 
+from tkinter import messagebox
 from typing import Callable, Dict, List, Optional, Set
 
 import customtkinter as ctk
@@ -292,6 +293,14 @@ class ChannelImportModal(ctk.CTkToplevel):
                 )
                 tasks_to_add.append(task)
 
-        self.destroy()
         if callable(self.on_import):
-            self.on_import(tasks_to_add)
+            try:
+                self.on_import(tasks_to_add)
+            except Exception as exc:
+                messagebox.showerror(
+                    "Import Failed",
+                    f"Failed to import selected videos to queue:\n{exc}",
+                    parent=self,
+                )
+                return
+        self.destroy()

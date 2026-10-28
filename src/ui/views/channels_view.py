@@ -601,19 +601,18 @@ class ChannelsView(ctk.CTkFrame):
                 )
                 return
 
-            tasks: List[VideoTask] = getattr(self.app_controller, "queued_video_tasks", []) or []
-            existing_ids: Set[str] = set()
-            for t in tasks:
-                vid = extract_video_id(t.url)
-                if vid:
-                    existing_ids.add(vid)
+            existing_ids: Set[str] = {
+                extract_video_id(t.url)
+                for t in (getattr(self.app_controller, "queued_video_tasks", []) or [])
+                if extract_video_id(t.url)
+            }
 
             def _handle_import(selected_tasks: List[VideoTask]):
                 if not selected_tasks:
                     return
-                tasks.extend(selected_tasks)
-                self.app_controller.queued_video_tasks = tasks
-                self.app_controller.config_mgr.set_video_queue([t.to_dict() for t in tasks])
+                new_dicts = [t.to_dict() for t in selected_tasks]
+                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts)
+                self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
 
                 self.refresh_list()
                 queue = self._queue_view()
@@ -739,19 +738,18 @@ class ChannelsView(ctk.CTkFrame):
                 )
                 return
 
-            tasks: List[VideoTask] = getattr(self.app_controller, "queued_video_tasks", []) or []
-            existing_ids: Set[str] = set()
-            for t in tasks:
-                vid = extract_video_id(t.url)
-                if vid:
-                    existing_ids.add(vid)
+            existing_ids: Set[str] = {
+                extract_video_id(t.url)
+                for t in (getattr(self.app_controller, "queued_video_tasks", []) or [])
+                if extract_video_id(t.url)
+            }
 
             def _handle_import(selected_tasks: List[VideoTask]):
                 if not selected_tasks:
                     return
-                tasks.extend(selected_tasks)
-                self.app_controller.queued_video_tasks = tasks
-                self.app_controller.config_mgr.set_video_queue([t.to_dict() for t in tasks])
+                new_dicts = [t.to_dict() for t in selected_tasks]
+                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts)
+                self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
 
                 self.refresh_list()
                 q = self._queue_view()

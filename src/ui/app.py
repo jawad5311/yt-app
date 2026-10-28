@@ -505,6 +505,33 @@ class YTBotApp(ctk.CTk):
             )
             return
 
+        dashboard = self.views.get("dashboard")
+        browsing_limit = 1
+        is_unlimited = False
+        if dashboard is not None and hasattr(dashboard, "get_browsing_limit"):
+            try:
+                browsing_limit, is_unlimited = dashboard.get_browsing_limit()
+            except ValueError as err:
+                emit(self.log_queue, str(err), logging.ERROR)
+                if hasattr(dashboard, "set_status"):
+                    dashboard.set_status(str(err), "error")
+                return
+        else:
+            is_unlimited = self.config_mgr.get_bool("BrowsingUnlimited", False)
+            browsing_limit = None if is_unlimited else self.config_mgr.get_int("BrowsingTargetLimit", 1)
+
+        try:
+            self.config_mgr.update_settings({
+                "BrowsingUnlimited": is_unlimited,
+                "BrowsingTargetLimit": browsing_limit if browsing_limit is not None else 1,
+            })
+        except Exception as err:
+            err_msg = f"Failed to save browsing settings: {sanitize_error(err, self.loaded_accounts)}"
+            emit(self.log_queue, err_msg, logging.ERROR)
+            if dashboard is not None and hasattr(dashboard, "set_status"):
+                dashboard.set_status(err_msg, "error")
+            return
+
         self.is_running = True
         self.current_mode = "watching"
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
@@ -521,33 +548,13 @@ class YTBotApp(ctk.CTk):
             except queue.Empty:
                 break
 
-        self.views["dashboard"].set_running_state(True, mode="watching")
-        self.views["dashboard"].reset_progress()
-        self.views["dashboard"].set_status("Starting watch session...", "info")
-
-        dashboard = self.views.get("dashboard")
-        browsing_limit = 1
-        is_unlimited = False
-        if dashboard is not None and hasattr(dashboard, "get_browsing_limit"):
-            try:
-                browsing_limit, is_unlimited = dashboard.get_browsing_limit()
-            except ValueError as err:
-                self.is_running = False
-                self.current_mode = "idle"
-                emit(self.log_queue, str(err), logging.ERROR)
-                if hasattr(dashboard, "set_status"):
-                    dashboard.set_status(str(err), "error")
-                if hasattr(dashboard, "set_running_state"):
-                    dashboard.set_running_state(False)
-                return
-        else:
-            is_unlimited = self.config_mgr.get_bool("BrowsingUnlimited", False)
-            browsing_limit = None if is_unlimited else self.config_mgr.get_int("BrowsingTargetLimit", 1)
-
-        self.config_mgr.update_settings({
-            "BrowsingUnlimited": is_unlimited,
-            "BrowsingTargetLimit": browsing_limit if browsing_limit is not None else 1,
-        })
+        if dashboard is not None:
+            if hasattr(dashboard, "set_running_state"):
+                dashboard.set_running_state(True, mode="watching")
+            if hasattr(dashboard, "reset_progress"):
+                dashboard.reset_progress()
+            if hasattr(dashboard, "set_status"):
+                dashboard.set_status("Starting watch session...", "info")
 
         try:
             self.session_manager_thread = threading.Thread(

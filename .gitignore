@@ -63,6 +63,9 @@ accounts.txt
 *.tmp
 *.backup_*
 
+# Development scratch files and temporary update scripts
+scratch/
+
 # Allow trackable example templates and test fixtures
 !*.example.*
 !*.example

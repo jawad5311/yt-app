@@ -107,8 +107,8 @@ class AutomationWorker:
             "variable_speed": False,
             "toggle_captions": self.config_mgr.get_bool("ToggleCaptions", True),
             "expand_description": self.config_mgr.get_bool("ExpandDescription", True),
-            "like_comments": self.config_mgr.get_bool("LikeComments", True),
-            "like_video": self.config_mgr.get_bool("LikeVideo", True),
+            "like_comments": False,
+            "like_video": False,
             "adjust_quality": self.config_mgr.get_bool("AdjustQuality", True),
             "quality_level": self.config_mgr.get_setting("QualityLevel", "360p"),
             "micro_pauses": self.config_mgr.get_bool("RandomMicroPauses", True),
@@ -400,7 +400,8 @@ class AutomationWorker:
 
         try:
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
-            self.driver = setup_driver(self.account, log_queue=self.log_queue)
+            known = self.config_mgr.get_accounts() if self.config_mgr else None
+            self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
 
             if self.stop_event.is_set():
                 return

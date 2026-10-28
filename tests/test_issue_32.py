@@ -31,8 +31,8 @@ def test_config_defaults_match_documented_settings():
     assert settings["MaxAdWatchSeconds"] == 32
     assert settings["EnableHumanInteractivity"] is True
     assert settings["AppearanceMode"] == "Dark"
-    assert settings["LikeVideo"] is True
-    assert settings["LikeComments"] is True
+    assert "LikeVideo" not in settings
+    assert "LikeComments" not in settings
 
 
 def test_documentation_contains_disclaimers():

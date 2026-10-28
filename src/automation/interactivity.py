@@ -914,8 +914,8 @@ class HumanInteractivitySimulator:
         micro_pauses: bool = True,
         toggle_captions: bool = True,
         expand_description: bool = True,
-        like_comments: bool = True,
-        like_video: bool = True,
+        like_comments: bool = False,
+        like_video: bool = False,
         speed_chance: float = 0.0,          # 0.0 -> no speed changes away from 1x
         quality_chance: float = 0.85,
         caption_chance: float = 0.65,

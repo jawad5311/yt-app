@@ -630,8 +630,8 @@ class WatchingWorker:
             "variable_speed": False,
             "toggle_captions": self.config_mgr.get_bool("ToggleCaptions", True),
             "expand_description": self.config_mgr.get_bool("ExpandDescription", True),
-            "like_comments": self.config_mgr.get_bool("LikeComments", True),
-            "like_video": self.config_mgr.get_bool("LikeVideo", True),
+            "like_comments": False,
+            "like_video": False,
             "adjust_quality": self.config_mgr.get_bool("AdjustQuality", True),
             "quality_level": self.config_mgr.get_setting("QualityLevel", "360p"),
             "micro_pauses": self.config_mgr.get_bool("RandomMicroPauses", True),
@@ -1087,33 +1087,36 @@ class WatchingWorker:
             emit(self.log_queue, f"Could not record watching stats: {exc}", logging.WARNING)
 
     def _ensure_video_in_queue(self, task: VideoTask) -> VideoTask:
-        """Register the video in settings.json video queue and emit UI event."""
+        """Register the video in settings.json video queue atomically and emit UI event."""
         try:
-            raw_queue = self.config_mgr.get_video_queue()
             vid_key = resolve_video_key(task, task.url)
-            for item in raw_queue:
-                existing_t = VideoTask.from_dict(item)
-                if resolve_video_key(existing_t, existing_t.url) == vid_key:
-                    changed = False
-                    if not existing_t.channel and task.channel:
-                        existing_t.channel = task.channel
-                        item["channel"] = task.channel
-                        changed = True
-                    if existing_t.max_runs == 0 and task.max_runs > 0:
-                        existing_t.max_runs = task.max_runs
-                        item["max_runs"] = task.max_runs
-                        changed = True
-                    if getattr(existing_t, "target_multiplier", 0.0) == 0.0 and getattr(task, "target_multiplier", 0.0) > 0.0:
-                        existing_t.target_multiplier = task.target_multiplier
-                        item["target_multiplier"] = task.target_multiplier
-                        changed = True
-                    if changed:
-                        self.config_mgr.set_video_queue(raw_queue)
-                    self._emit_event(("add_video_task", existing_t.to_dict()))
-                    return existing_t
+            matched_existing: List[VideoTask] = []
 
-            raw_queue.append(task.to_dict())
-            self.config_mgr.set_video_queue(raw_queue)
+            def _updater(raw_queue: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                for item in raw_queue:
+                    existing_t = VideoTask.from_dict(item)
+                    if resolve_video_key(existing_t, existing_t.url) == vid_key:
+                        if not existing_t.channel and task.channel:
+                            existing_t.channel = task.channel
+                            item["channel"] = task.channel
+                        if existing_t.max_runs == 0 and task.max_runs > 0:
+                            existing_t.max_runs = task.max_runs
+                            item["max_runs"] = task.max_runs
+                        if getattr(existing_t, "target_multiplier", 0.0) == 0.0 and getattr(task, "target_multiplier", 0.0) > 0.0:
+                            existing_t.target_multiplier = task.target_multiplier
+                            item["target_multiplier"] = task.target_multiplier
+                        matched_existing.append(existing_t)
+                        return raw_queue
+
+                raw_queue.append(task.to_dict())
+                return raw_queue
+
+            self.config_mgr.update_video_queue(_updater)
+            if matched_existing:
+                res_task = matched_existing[0]
+                self._emit_event(("add_video_task", res_task.to_dict()))
+                return res_task
+
             self._emit_event(("add_video_task", task.to_dict()))
             return task
         except Exception as exc:
@@ -1121,20 +1124,23 @@ class WatchingWorker:
             return task
 
     def _update_task_duration(self, task: VideoTask, duration_seconds: float) -> None:
-        """Update video duration text and seconds in settings.json video queue."""
+        """Update video duration text and seconds in settings.json video queue atomically."""
         if duration_seconds <= 0:
             return
         try:
-            raw_queue = self.config_mgr.get_video_queue()
             vid_key = resolve_video_key(task, task.url)
-            for v in raw_queue:
-                if resolve_video_key(VideoTask.from_dict(v), v.get("url", "")) == vid_key:
-                    v["duration_seconds"] = int(duration_seconds)
-                    m, s = divmod(int(duration_seconds), 60)
-                    h, m = divmod(m, 60)
-                    v["duration_text"] = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-                    break
-            self.config_mgr.set_video_queue(raw_queue)
+
+            def _updater(raw_queue: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                for v in raw_queue:
+                    if resolve_video_key(VideoTask.from_dict(v), v.get("url", "")) == vid_key:
+                        v["duration_seconds"] = int(duration_seconds)
+                        m, s = divmod(int(duration_seconds), 60)
+                        h, m = divmod(m, 60)
+                        v["duration_text"] = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+                        break
+                return raw_queue
+
+            self.config_mgr.update_video_queue(_updater)
             self._emit_event(("update_video_duration", task.to_dict(), duration_seconds))
         except Exception:
             pass
@@ -1692,7 +1698,8 @@ class WatchingWorker:
 
         try:
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
-            self.driver = setup_driver(self.account, log_queue=self.log_queue)
+            known = self.config_mgr.get_accounts() if self.config_mgr else None
+            self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
 
             if self.stop_event.is_set():
                 return

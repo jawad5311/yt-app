@@ -7,7 +7,7 @@ import subprocess
 import threading
 import winreg
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import undetected_chromedriver as uc
 
@@ -87,9 +87,17 @@ def setup_driver(
     account: Account,
     log_queue: Optional[queue.Queue] = None,
     adblock_path: Optional[Path] = None,
+    known_accounts: Optional[List[Account]] = None,
 ) -> uc.Chrome:
     """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
-    profile_dir = resolve_profile_dir(account)
+    if known_accounts is None:
+        try:
+            from ..config.manager import ConfigManager
+            known_accounts = ConfigManager().get_accounts()
+        except Exception:
+            known_accounts = None
+
+    profile_dir = resolve_profile_dir(account, known_accounts=known_accounts)
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     profile_lock = ProfileLock(profile_dir)
@@ -167,9 +175,12 @@ def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None)
     """Safely quit driver session and terminate lingering browser processes."""
     if driver is not None:
         profile_lock = getattr(driver, "_profile_lock", None)
+        browser_pid = getattr(driver, "browser_pid", None)
         try:
-            browser_pid = getattr(driver, "browser_pid", None)
             driver.quit()
+        except Exception as exc:
+            logging.debug(f"driver.quit() exception: {exc}")
+        finally:
             if browser_pid and os.name == "nt":
                 try:
                     subprocess.run(
@@ -179,9 +190,6 @@ def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None)
                     )
                 except Exception:
                     pass
-        except Exception:
-            pass
-        finally:
             if profile_lock:
                 try:
                     profile_lock.release()

@@ -5,7 +5,8 @@ import math
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+import copy
+from typing import Any, Callable, Dict, List, Optional
 
 from ..models.account import normalize_account_id
 from ..models.channel import Channel
@@ -76,6 +77,8 @@ class ConfigManager:
         "OpenRouterKey",
         "CommentType",
         "AccessKey",
+        "LikeComments",
+        "LikeVideo",
     }
     REMOVED_VIDEO_FIELDS = {"comment_type", "custom_comment", "like"}
 
@@ -100,8 +103,6 @@ class ConfigManager:
             "VariableSpeed": False,
             "ToggleCaptions": True,
             "ExpandDescription": True,
-            "LikeComments": True,
-            "LikeVideo": True,
             "AdjustQuality": True,
             "QualityLevel": "360p",
             "RandomMicroPauses": True,
@@ -489,20 +490,54 @@ class ConfigManager:
         temp_path.replace(self.credentials_file)
 
     def get_video_queue(self) -> List[Dict[str, Any]]:
-        """Return video task dictionary list."""
+        """Return deep copy of video task dictionary list."""
         with self._lock:
-            return list(self.data.get("videos", []))
+            return copy.deepcopy(self.data.get("videos", []))
 
     def set_video_queue(self, video_list: List[Dict[str, Any]]) -> None:
         """Persist video task dictionary list."""
         with self._lock:
             old_videos = self.data.get("videos")
-            self.data["videos"] = video_list
+            self.data["videos"] = copy.deepcopy(video_list)
             try:
                 self._save_unlocked()
             except Exception:
                 self.data["videos"] = old_videos
                 raise
+
+    def update_video_queue(
+        self,
+        updater: Callable[[List[Dict[str, Any]]], Optional[List[Dict[str, Any]]]]
+    ) -> List[Dict[str, Any]]:
+        """Atomically read, mutate, and save the video queue under lock."""
+        with self._lock:
+            current_queue = copy.deepcopy(self.data.get("videos", []))
+            res = updater(current_queue)
+            new_queue = res if res is not None else current_queue
+            old_videos = self.data.get("videos")
+            self.data["videos"] = new_queue
+            try:
+                self._save_unlocked()
+            except Exception:
+                self.data["videos"] = old_videos
+                raise
+            return copy.deepcopy(new_queue)
+
+    def append_video_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Atomically append tasks to the video queue under lock."""
+        if not tasks:
+            return self.get_video_queue()
+        with self._lock:
+            current_queue = list(self.data.get("videos", []))
+            current_queue.extend(copy.deepcopy(tasks))
+            old_videos = self.data.get("videos")
+            self.data["videos"] = current_queue
+            try:
+                self._save_unlocked()
+            except Exception:
+                self.data["videos"] = old_videos
+                raise
+            return copy.deepcopy(current_queue)
 
     def get_channels(self) -> List[Dict[str, Any]]:
         """Return the saved channel list (name + url dictionaries)."""

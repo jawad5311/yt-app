@@ -58,12 +58,12 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
   - Smoothly scrolls back up to the video player while video playback continues without interruption.
 - **Variable Playback Speeds & Bandwidth-Saving Quality**:
   - **Playback Speed**: occasionally sets playback speed to **1.25x** (~35% chance per session) using YouTube's Movie Player API (`setPlaybackRate`) with HTML5 fallback.
-  - **Quality Adjustment**: adjusts quality to **360p** or **720p** to simulate user settings and save immense bandwidth and CPU/GPU usage.
+  - **Quality Adjustment**: adjusts quality to **360p** or **480p** to simulate user settings and save bandwidth and CPU/GPU usage.
 - **Random Micro-Pauses**:
   - Briefly pauses video playback for **2-5 seconds** midway through a long video to simulate realistic human distraction.
   - Resumes playback cleanly without false auto-resume errors or watchtime timeline corruption.
 - **Configurable in Settings**:
-  - Master toggle `EnableHumanInteractivity` with individual switches for scrolling, speed variation, quality adjustment, quality target (360p/720p), and micro-pauses.
+  - Master toggle `EnableHumanInteractivity` with individual switches for scrolling, speed variation, quality adjustment, quality target (360p/480p), and micro-pauses.
 
 ### Ad Handling
 
@@ -228,7 +228,7 @@ Autonomous watching workflow triggered by the **▶ Start Browsing** button on t
   6. **Organic Click & Opening**: When a video matching a stored channel is found, smoothly scrolls the card into viewport and clicks either the title or thumbnail link element to navigate to the watch page.
   7. **Natural Playback Simulation**: Watches the video with the full engagement suite:
      - Auto-skip ads via script-based Skip Ad button detection (5–10s)
-     - Human interactivity: micro-pauses (2–5s), reading scrolls down to comments/description with realistic dwell times, variable playback speeds (1.25x), bandwidth-saving quality adjustments (360p/720p), and occasional video/comment likes
+     - Human interactivity: micro-pauses (2–5s), reading scrolls down to comments/description with realistic dwell times, variable playback speeds (1.25x), bandwidth-saving quality adjustments (360p/480p)
      - Configurable watch duration: follows the app's default duration or watches full video
      - Per-video watch statistics and lifetime watch-time updates (`stats.json`)
   8. **In-Place Up-Next / Recommended Chaining**:
