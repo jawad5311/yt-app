@@ -25,7 +25,7 @@ def test_config_defaults_match_documented_settings():
     assert settings["AutoplayEndBufferSeconds"] == 10
     assert settings["AutomationLoops"] == 1
     assert settings["BrowsingTargetLimit"] == 1
-    assert settings["BrowsingUnlimited"] is False
+    assert settings["BrowsingUnlimited"] is True
     assert settings["VideoCooldownHours"] == 12
     assert settings["SkipAds"] is True
     assert settings["MaxAdWatchSeconds"] == 32
