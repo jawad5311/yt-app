@@ -131,7 +131,7 @@ class SettingsView(ctk.CTkFrame):
             container,
             text="Default Browsing Unlimited (run until stopped or targets achieved)",
         )
-        if self.config_mgr.get_bool("BrowsingUnlimited", False):
+        if self.config_mgr.get_bool("BrowsingUnlimited", True):
             self.browsing_unlimited_switch.select()
         else:
             self.browsing_unlimited_switch.deselect()

@@ -97,7 +97,7 @@ class ConfigManager:
             "AutoplayEndBufferSeconds": 10,
             "AutomationLoops": 1,
             "BrowsingTargetLimit": 1,
-            "BrowsingUnlimited": False,
+            "BrowsingUnlimited": True,
             "EnableHumanInteractivity": True,
             "RandomScrolling": True,
             "VariableSpeed": False,

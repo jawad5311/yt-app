@@ -72,7 +72,7 @@ class DashboardView(ctk.CTkFrame):
         self.browsing_limit_entry.insert(0, str(max(1, initial_browsing_limit)))
         self.browsing_limit_entry.pack(side="left")
 
-        is_unlimited = self.app_controller.config_mgr.get_bool("BrowsingUnlimited", False)
+        is_unlimited = self.app_controller.config_mgr.get_bool("BrowsingUnlimited", True)
         self.browsing_unlimited_cb = ctk.CTkCheckBox(
             self.browsing_limit_frame,
             text="Unlimited browsing",

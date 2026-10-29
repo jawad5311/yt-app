@@ -550,7 +550,7 @@ class WatchingWorker:
             self.is_unlimited = False
             self.target_limit = max(1, total_loops)
         else:
-            unl = self.config_mgr.get_bool("BrowsingUnlimited", False) if self.config_mgr else False
+            unl = self.config_mgr.get_bool("BrowsingUnlimited", True) if self.config_mgr else True
             if unl:
                 self.is_unlimited = True
                 self.target_limit = None

@@ -536,7 +536,7 @@ class YTBotApp(ctk.CTk):
                     dashboard.set_status(str(err), "error")
                 return
         else:
-            is_unlimited = self.config_mgr.get_bool("BrowsingUnlimited", False)
+            is_unlimited = self.config_mgr.get_bool("BrowsingUnlimited", True)
             browsing_limit = None if is_unlimited else self.config_mgr.get_int("BrowsingTargetLimit", 1)
 
         try:
