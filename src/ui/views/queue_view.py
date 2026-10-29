@@ -48,10 +48,10 @@ class QueueView(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_frame,
-            text="📺 Manage Channels",
+            text="⚡ Bulk Apply",
             fg_color="#1F6AA5",
             hover_color="#144870",
-            command=self.open_channels_view,
+            command=self.open_bulk_apply_modal,
         ).pack(side="left", padx=(0, 10))
 
         ctk.CTkButton(
@@ -143,10 +143,24 @@ class QueueView(ctk.CTkFrame):
         """Dropdown values for the task modal: every channel plus '(None)'."""
         return [NO_CHANNEL_VALUE] + [channel.name for channel in self._channels()]
 
-    def open_channels_view(self):
-        show_view = getattr(self.app_controller, "show_view", None)
-        if callable(show_view) and "channels" in getattr(self.app_controller, "views", {}):
-            show_view("channels")
+    def open_bulk_apply_modal(self):
+        """Open modal dialog to bulk configure multiplier and max views for all queue videos."""
+        matching_tasks = [
+            t for t in self.video_tasks
+            if (getattr(t, "is_short", False) if getattr(self, "shorts_only", False) else not getattr(t, "is_short", False))
+        ]
+        if not matching_tasks:
+            queue_name = "shorts" if getattr(self, "shorts_only", False) else "video"
+            messagebox.showinfo("Empty Queue", f"There are no videos in the {queue_name} queue to configure.", parent=self)
+            return
+
+        from .bulk_apply_modal import BulkApplyModal
+        BulkApplyModal(
+            self,
+            tasks=matching_tasks,
+            app_controller=self.app_controller,
+            on_applied=self.refresh_list,
+        )
 
     def open_manage_channel_modal(self, group: Any):
         """Open modal dialog to manage run limits and target watch time for this channel."""
