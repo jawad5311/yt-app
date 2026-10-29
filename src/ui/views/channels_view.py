@@ -1942,32 +1942,59 @@ class ChannelsView(ctk.CTkFrame):
             if channel.total_shorts is not None:
                 totals_parts.append(f"{channel.total_shorts:,} Shorts")
 
-            line4 = f"Channel Total: {' | '.join(totals_parts)}" if totals_parts else ""
-            if getattr(channel, "has_new_videos", False):
-                new_tag = " • 🔥 New Videos Available"
-                line4 = f"{line4}{new_tag}" if line4 else "🔥 New Videos Available"
-
-            if line4:
-                info_text = f"{line1}\n{line2}\n{line3}\n{line4}"
-            else:
-                info_text = f"{line1}\n{line2}\n{line3}"
-
             def _on_channel_click(event=None, ch=channel):
                 self.open_channel_videos_modal(ch)
 
             row.bind("<Button-1>", _on_channel_click)
 
+            info_frame = ctk.CTkFrame(row, fg_color="transparent")
+            info_frame.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+            info_frame.bind("<Button-1>", _on_channel_click)
+
             lbl = ctk.CTkLabel(
-                row,
-                text=info_text,
+                info_frame,
+                text=f"{line1}\n{line2}\n{line3}",
                 font=ctk.CTkFont(size=13),
                 justify="left",
                 anchor="w",
                 cursor="hand2",
                 text_color=("gray50", "gray50") if not channel.enabled else None,
             )
-            lbl.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+            lbl.pack(anchor="w", fill="x")
             lbl.bind("<Button-1>", _on_channel_click)
+
+            has_new = getattr(channel, "has_new_videos", False)
+            if totals_parts or has_new:
+                meta_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+                meta_frame.pack(anchor="w", fill="x", pady=(2, 0))
+                meta_frame.bind("<Button-1>", _on_channel_click)
+
+                if totals_parts:
+                    tot_lbl = ctk.CTkLabel(
+                        meta_frame,
+                        text=f"Channel Total: {' | '.join(totals_parts)}",
+                        font=ctk.CTkFont(size=12),
+                        justify="left",
+                        anchor="w",
+                        cursor="hand2",
+                        text_color=("gray50", "gray50") if not channel.enabled else ("gray40", "gray60"),
+                    )
+                    tot_lbl.pack(side="left")
+                    tot_lbl.bind("<Button-1>", _on_channel_click)
+
+                if has_new:
+                    sep = " • " if totals_parts else ""
+                    new_lbl = ctk.CTkLabel(
+                        meta_frame,
+                        text=f"{sep}🔥 New Videos Available",
+                        font=ctk.CTkFont(size=12, weight="bold"),
+                        justify="left",
+                        anchor="w",
+                        cursor="hand2",
+                        text_color=("gray50", "gray50") if not channel.enabled else ("#16A34A", "#4ADE80"),
+                    )
+                    new_lbl.pack(side="left")
+                    new_lbl.bind("<Button-1>", _on_channel_click)
 
             action_frame = ctk.CTkFrame(row, fg_color="transparent")
             action_frame.grid(row=0, column=2, padx=10, pady=8, sticky="e")

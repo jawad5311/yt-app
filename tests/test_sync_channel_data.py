@@ -92,14 +92,32 @@ def test_sync_channel_data_flags_new_videos_available(ctk_app):
     # Check that 'New Videos Available' appears on the channel card
     cards = [w for w in view.scroll_frame.winfo_children() if isinstance(w, ctk.CTkFrame)]
     labels = []
-    for card in cards:
-        for child in card.winfo_children():
+    def _collect_labels(w):
+        for child in w.winfo_children():
             if isinstance(child, ctk.CTkLabel):
                 labels.append(child.cget("text"))
+            _collect_labels(child)
+
+    for card in cards:
+        _collect_labels(card)
 
     card_text = "\n".join(labels)
     assert "New Videos Available" in card_text
     assert "10 Videos" in card_text
     assert "5 Shorts" in card_text
+
+    # Verify green color styling for New Videos Available
+    new_lbls = []
+    def _collect_new_lbls(w):
+        for child in w.winfo_children():
+            if isinstance(child, ctk.CTkLabel) and "New Videos Available" in child.cget("text"):
+                new_lbls.append(child)
+            _collect_new_lbls(child)
+
+    for card in cards:
+        _collect_new_lbls(card)
+
+    assert len(new_lbls) == 1
+    assert new_lbls[0].cget("text_color") == ("#16A34A", "#4ADE80")
 
     view.destroy()

@@ -98,10 +98,14 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
     cards = [w for w in view.scroll_frame.winfo_children() if isinstance(w, ctk.CTkFrame)]
     assert len(cards) >= 1
     labels = []
-    for card in cards:
-        for child in card.winfo_children():
+    def _collect_labels(w):
+        for child in w.winfo_children():
             if isinstance(child, ctk.CTkLabel):
                 labels.append(child.cget("text"))
+            _collect_labels(child)
+
+    for card in cards:
+        _collect_labels(card)
 
     card_text = "\n".join(labels)
     assert "Channel Total:" in card_text
