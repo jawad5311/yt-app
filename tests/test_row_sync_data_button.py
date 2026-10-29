@@ -68,11 +68,9 @@ def test_row_sync_data_button_enabled_when_new_videos_found_and_clicks_to_sync(c
     # Since has_new_videos is True, button is enabled!
     assert sync_btn.cget("state") == "normal"
 
-    # Clicking it calls fetch_data_for_channel for this channel
-    with patch.object(view, "fetch_data_for_channel") as mock_fetch:
+    # Clicking it calls sync_single_channel_data for this channel
+    with patch.object(view, "sync_single_channel_data") as mock_sync:
         sync_btn._command()
-        mock_fetch.assert_called_once()
-        args, kwargs = mock_fetch.call_args
-        assert kwargs["channel"] == channel
+        mock_sync.assert_called_once_with(channel)
 
     view.destroy()

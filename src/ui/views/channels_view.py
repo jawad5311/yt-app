@@ -1366,15 +1366,16 @@ class ChannelsView(ctk.CTkFrame):
             totals_parts.append(f"{channel.total_videos:,} Videos")
         if channel.total_shorts is not None:
             totals_parts.append(f"{channel.total_shorts:,} Shorts")
-        if totals_parts or getattr(channel, "has_new_videos", False):
+        if totals_parts or getattr(channel, "has_new_content", getattr(channel, "has_new_videos", False)):
             header_text = f"📊 Channel Total: {' | '.join(totals_parts)}" if totals_parts else ""
-            if getattr(channel, "has_new_videos", False):
-                header_text = f"{header_text}  •  🔥 New Videos Available" if header_text else "🔥 New Videos Available"
+            if getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False):
+                badge = getattr(channel, "new_badge_text", "") or "🔥 New Videos Available"
+                header_text = f"{header_text}  •  {badge}" if header_text else badge
             ctk.CTkLabel(
                 header,
                 text=header_text,
                 font=ctk.CTkFont(size=12, weight="bold"),
-                text_color=("#16A34A", "#4ADE80") if getattr(channel, "has_new_videos", False) else ("#1D4ED8", "#93C5FD"),
+                text_color=("#16A34A", "#4ADE80") if (getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False)) else ("#1D4ED8", "#93C5FD"),
             ).pack(anchor="w", pady=(2, 0))
 
         fetch_settings_frame = ctk.CTkFrame(modal, fg_color=("gray90", "gray18"), corner_radius=8)
@@ -1750,19 +1751,24 @@ class ChannelsView(ctk.CTkFrame):
                 # Match against existing videos and shorts in stats and queue
                 exist_vids, exist_shorts, exist_total = self.get_existing_video_counts_for_channel(ch.name)
 
-                has_new = False
                 yt_vids = ch.total_videos if ch.total_videos is not None else 0
                 yt_shorts = ch.total_shorts if ch.total_shorts is not None else 0
                 yt_total = yt_vids + yt_shorts
 
-                if yt_total > 0:
-                    if (ch.total_videos is not None and yt_vids > exist_vids) or \
-                       (ch.total_shorts is not None and yt_shorts > exist_shorts) or \
-                       (yt_total > exist_total):
-                        has_new = True
+                has_new_v = False
+                has_new_s = False
 
-                ch.has_new_videos = has_new
-                if has_new:
+                if yt_total > 0:
+                    if ch.total_videos is not None and yt_vids > exist_vids:
+                        has_new_v = True
+                    if ch.total_shorts is not None and yt_shorts > exist_shorts:
+                        has_new_s = True
+                    if not has_new_v and not has_new_s and yt_total > exist_total:
+                        has_new_v = True
+
+                ch.has_new_videos = has_new_v
+                ch.has_new_shorts = has_new_s
+                if getattr(ch, "has_new_content", False) or has_new_v or has_new_s:
                     new_vids_channels += 1
                 updated_count += 1
 
@@ -1773,7 +1779,7 @@ class ChannelsView(ctk.CTkFrame):
 
             msg = f"Checked {updated_count} channel(s)."
             if new_vids_channels > 0:
-                msg += f"\n\n🔥 {new_vids_channels} channel(s) have new videos available!"
+                msg += f"\n\n🔥 {new_vids_channels} channel(s) have new videos or shorts available!"
             else:
                 msg += "\n\nAll channels are up to date with existing queue and stats."
 
@@ -1894,31 +1900,191 @@ class ChannelsView(ctk.CTkFrame):
             messagebox.showinfo("Notice", "This channel has no URL saved.")
 
     def sync_single_channel_data(self, channel: Channel) -> None:
-        """Sync new available videos and shorts for a specific channel."""
+        """Sync new available videos and/or shorts for a specific channel directly into the queue."""
         if not channel.url:
             messagebox.showinfo("Missing URL", f"Channel '{channel.name}' has no URL configured.", parent=self)
             return
 
-        exist_vids, exist_shorts, _ = self.get_existing_video_counts_for_channel(channel.name)
-        new_vids = max(0, (channel.total_videos or 0) - exist_vids)
-        new_shorts = max(0, (channel.total_shorts or 0) - exist_shorts)
+        has_v = getattr(channel, "has_new_videos", False)
+        has_s = getattr(channel, "has_new_shorts", False)
 
-        v_limit = max(50, new_vids) if (channel.total_videos or 0) > exist_vids else 50
-        s_limit = max(50, new_shorts) if (channel.total_shorts or 0) > exist_shorts else 50
+        # Check availability:
+        # If only video -> only fetch videos
+        # If only shorts -> only fetch shorts
+        # If both (or fallback) -> fetch both
+        if has_v and not has_s:
+            v_limit = 50
+            s_limit = None
+            fetch_desc = "up to 50 recent videos"
+        elif has_s and not has_v:
+            v_limit = None
+            s_limit = 50
+            fetch_desc = "up to 50 recent shorts"
+        else:
+            v_limit = 50
+            s_limit = 50
+            fetch_desc = "up to 50 recent videos and 50 shorts"
 
-        def _on_done():
+        loading = ctk.CTkToplevel(self)
+        loading.title("Syncing Channel...")
+        loading.geometry("420x150")
+        loading.grab_set()
+
+        status_text = f"Syncing {fetch_desc} for\n'{channel.name}'..."
+        ctk.CTkLabel(
+            loading,
+            text=status_text,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            justify="center",
+            wraplength=380,
+        ).pack(pady=(20, 10))
+
+        prog = ctk.CTkProgressBar(loading, mode="indeterminate", width=300)
+        prog.pack(pady=(0, 15))
+        prog.start()
+
+        def _close_loading():
+            try:
+                if loading.winfo_exists():
+                    prog.stop()
+                    loading.destroy()
+            except Exception:
+                pass
+
+        def _on_sync_done(res: ChannelFetchResult):
+            _close_loading()
+            if res.error:
+                messagebox.showerror(
+                    "Sync Error",
+                    f"Failed to sync channel data:\n{res.error}",
+                    parent=self,
+                )
+                return
+
+            if res.total_videos is not None:
+                channel.total_videos = res.total_videos
+            if res.total_shorts is not None:
+                channel.total_shorts = res.total_shorts
+
+            fetched_tasks = res.videos or []
+            if not fetched_tasks:
+                messagebox.showinfo(
+                    "Sync Complete",
+                    f"No public videos or shorts found for '{channel.name}'.",
+                    parent=self,
+                )
+                return
+
+            current_tasks = getattr(self.app_controller, "queued_video_tasks", None)
+            if current_tasks is None:
+                current_tasks = [VideoTask.from_dict(d) for d in self.app_controller.config_mgr.get_video_queue()]
+                self.app_controller.queued_video_tasks = current_tasks
+
+            existing_by_id = {}
+            for t in current_tasks:
+                vid = extract_video_id(t.url)
+                if vid:
+                    existing_by_id[vid] = t
+                elif t.url:
+                    existing_by_id[t.url.strip().lower()] = t
+
+            added_tasks: List[VideoTask] = []
+            updated_count = 0
+
+            for f_task in fetched_tasks:
+                vid = extract_video_id(f_task.url) or (f_task.url.strip().lower() if f_task.url else "")
+                if vid and vid in existing_by_id:
+                    existing_task = existing_by_id[vid]
+                    changed = False
+                    if not existing_task.channel and channel.name:
+                        existing_task.channel = channel.name
+                        changed = True
+                    if (existing_task.duration_seconds <= 0) and f_task.duration_seconds > 0:
+                        existing_task.duration_seconds = f_task.duration_seconds
+                        existing_task.duration_text = f_task.duration_text
+                        changed = True
+                    if changed:
+                        updated_count += 1
+                else:
+                    new_task = VideoTask(
+                        url=f_task.url,
+                        title=f_task.title,
+                        title_2=getattr(f_task, "title_2", "") or "",
+                        title_3=getattr(f_task, "title_3", "") or "",
+                        keywords=f_task.keywords or f_task.title,
+                        channel=channel.name,
+                        target_multiplier=3.0,
+                        max_runs=5,
+                        watchtime_duration="Full Video",
+                        enabled=True,
+                        duration_seconds=getattr(f_task, "duration_seconds", 0.0),
+                        duration_text=getattr(f_task, "duration_text", ""),
+                    )
+                    added_tasks.append(new_task)
+                    if vid:
+                        existing_by_id[vid] = new_task
+
+            if added_tasks:
+                new_dicts = [t.to_dict() for t in added_tasks]
+                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts, deduplicate=True)
+                self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+            elif updated_count > 0:
+                self.app_controller.config_mgr.set_video_queue([t.to_dict() for t in current_tasks])
+
+            queue = self._queue_view()
+            if queue is not None:
+                queue.refresh_list()
+            shorts_queue = self._shorts_queue_view()
+            if shorts_queue is not None:
+                shorts_queue.refresh_list()
+            update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+            if callable(update_dash):
+                update_dash()
+
             ev, es, et = self.get_existing_video_counts_for_channel(channel.name)
-            yt_v = channel.total_videos or 0
-            yt_s = channel.total_shorts or 0
-            channel.has_new_videos = (yt_v > ev) or (yt_s > es) or ((yt_v + yt_s) > et)
+            yt_v = channel.total_videos if channel.total_videos is not None else 0
+            yt_s = channel.total_shorts if channel.total_shorts is not None else 0
+
+            channel.has_new_videos = (channel.total_videos is not None and yt_v > ev)
+            channel.has_new_shorts = (channel.total_shorts is not None and yt_s > es)
+
             self.save_channels()
             self.refresh_list()
 
-        self.fetch_data_for_channel(
-            channel=channel,
-            video_limit=v_limit,
-            shorts_limit=s_limit,
-            on_imported=_on_done,
+            added_shorts = sum(1 for t in added_tasks if "/shorts/" in (t.url or ""))
+            added_vids = len(added_tasks) - added_shorts
+
+            lines = [f"Sync completed for channel '{channel.name}':"]
+            if added_tasks:
+                lines.append(f"• Added {len(added_tasks)} new item(s) to queue ({added_vids} video(s), {added_shorts} short(s)).")
+            else:
+                lines.append("• No new items to add; all fetched items were already in queue.")
+            if updated_count > 0:
+                lines.append(f"• Updated metadata for {updated_count} existing item(s).")
+
+            messagebox.showinfo("Sync Complete", "\n".join(lines), parent=self)
+
+        url = channel.url
+        config_mgr = getattr(self.app_controller, "config_mgr", None)
+
+        def _bg_fetch(report):
+            return fetch_channel_data(
+                url,
+                video_limit=v_limit,
+                shorts_limit=s_limit,
+                config_mgr=config_mgr,
+            )
+
+        def _on_error(exc):
+            _close_loading()
+            messagebox.showerror("Sync Error", f"Failed to sync channel data:\n{exc}", parent=self)
+
+        self.app_controller.background_jobs.submit(
+            _bg_fetch,
+            done=_on_sync_done,
+            error=_on_error,
+            current=lambda: self._widget_exists(self) and self._widget_exists(loading),
+            discard=_close_loading,
         )
 
     # ------------------------------------------------------------------ list
@@ -2044,7 +2210,7 @@ class ChannelsView(ctk.CTkFrame):
             lbl.pack(anchor="w", fill="x")
             lbl.bind("<Button-1>", _on_channel_click)
 
-            has_new = getattr(channel, "has_new_videos", False)
+            has_new = getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False) or getattr(channel, "has_new_shorts", False)
             if totals_parts or has_new:
                 meta_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
                 meta_frame.pack(anchor="w", fill="x", pady=(2, 0))
@@ -2065,9 +2231,10 @@ class ChannelsView(ctk.CTkFrame):
 
                 if has_new:
                     sep = " • " if totals_parts else ""
+                    badge_text = getattr(channel, "new_badge_text", "") or "🔥 New Videos Available"
                     new_lbl = ctk.CTkLabel(
                         meta_frame,
-                        text=f"{sep}🔥 New Videos Available",
+                        text=f"{sep}{badge_text}",
                         font=ctk.CTkFont(size=12, weight="bold"),
                         justify="left",
                         anchor="w",
@@ -2136,7 +2303,7 @@ class ChannelsView(ctk.CTkFrame):
                 command=lambda ch=channel: self.open_channel_videos_modal(ch),
             ).pack(side="left", padx=(0, 4))
 
-            has_new = getattr(channel, "has_new_videos", False)
+            has_new = getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False) or getattr(channel, "has_new_shorts", False)
             sync_btn = ctk.CTkButton(
                 action_frame,
                 text="⚡ Sync Data",

@@ -176,6 +176,23 @@ class Channel:
     total_videos: Optional[int] = None
     total_shorts: Optional[int] = None
     has_new_videos: bool = False
+    has_new_shorts: bool = False
+
+    @property
+    def has_new_content(self) -> bool:
+        """Whether new regular videos or shorts are available for this channel."""
+        return bool(self.has_new_videos or self.has_new_shorts)
+
+    @property
+    def new_badge_text(self) -> str:
+        """User-facing badge text for new content availability."""
+        if self.has_new_videos and self.has_new_shorts:
+            return "🔥 New Videos & Shorts Available"
+        elif self.has_new_videos:
+            return "🔥 New Videos Available"
+        elif self.has_new_shorts:
+            return "🔥 New Shorts Available"
+        return ""
 
     @property
     def target_watch_hours(self) -> float:
@@ -205,6 +222,8 @@ class Channel:
             data["total_shorts"] = self.total_shorts
         if self.has_new_videos:
             data["has_new_videos"] = True
+        if self.has_new_shorts:
+            data["has_new_shorts"] = True
         return data
 
     @classmethod
@@ -226,6 +245,9 @@ class Channel:
         raw_hnv = data.get("has_new_videos", False)
         if isinstance(raw_hnv, str):
             raw_hnv = raw_hnv.lower() in ("true", "1", "yes")
+        raw_hns = data.get("has_new_shorts", False)
+        if isinstance(raw_hns, str):
+            raw_hns = raw_hns.lower() in ("true", "1", "yes")
         return cls(
             name=str(data.get("name") or "").strip(),
             url=normalize_channel_url(str(data.get("url") or "")),
@@ -236,6 +258,7 @@ class Channel:
             total_videos=total_videos if total_videos >= 0 else None,
             total_shorts=total_shorts if total_shorts >= 0 else None,
             has_new_videos=bool(raw_hnv),
+            has_new_shorts=bool(raw_hns),
         )
 
     @classmethod
@@ -251,6 +274,7 @@ class Channel:
         total_videos: Optional[int] = None,
         total_shorts: Optional[int] = None,
         has_new_videos: bool = False,
+        has_new_shorts: bool = False,
     ) -> "Channel":
         """Build a validated channel. Raises ValueError with a user-facing message."""
         clean_name = (name or "").strip()
@@ -279,6 +303,7 @@ class Channel:
             total_videos=total_videos,
             total_shorts=total_shorts,
             has_new_videos=has_new_videos,
+            has_new_shorts=has_new_shorts,
         )
 
 
