@@ -822,10 +822,17 @@ def fetch_channel_data_api(
             is_interrupted = True
         fetched_shorts_list.extend(s_items)
 
-    # Deduplicate in order
+    # Ensure shorts take precedence so they retain is_short=True and /shorts/ URL
+    shorts_ids = {s.video_id for s in fetched_shorts_list if s.video_id}
+    for v in fetched_videos_list:
+        if v.video_id in shorts_ids:
+            v.is_short = True
+            v.url = f"https://www.youtube.com/shorts/{v.video_id}"
+
+    # Deduplicate in order (shorts first to guarantee short URL format)
     combined: List[FetchedVideo] = []
     seen_all_ids: Set[str] = set()
-    for item in fetched_videos_list + fetched_shorts_list:
+    for item in fetched_shorts_list + fetched_videos_list:
         if item.video_id not in seen_all_ids:
             seen_all_ids.add(item.video_id)
             combined.append(item)

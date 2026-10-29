@@ -871,15 +871,21 @@ class ChannelsView(ctk.CTkFrame):
                 prior_len = len(self.app_controller.config_mgr.get_video_queue())
                 new_dicts = [t.to_dict() for t in selected_tasks]
                 updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts, deduplicate=True)
-                self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+                new_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+                self.app_controller.queued_video_tasks = new_tasks
                 added_count = len(updated_raw) - prior_len
+
+                if hasattr(self.app_controller, "on_queue_changed"):
+                    self.app_controller.on_queue_changed(new_tasks)
 
                 self.refresh_list()
                 queue = self._queue_view()
                 if queue is not None:
+                    queue.video_tasks = new_tasks
                     queue.refresh_list()
                 shorts_queue = self._shorts_queue_view()
                 if shorts_queue is not None:
+                    shorts_queue.video_tasks = new_tasks
                     shorts_queue.refresh_list()
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
                 if callable(update_dash):
@@ -1107,15 +1113,21 @@ class ChannelsView(ctk.CTkFrame):
                 prior_len = len(self.app_controller.config_mgr.get_video_queue())
                 new_dicts = [t.to_dict() for t in selected_tasks]
                 updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts, deduplicate=True)
-                self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+                new_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+                self.app_controller.queued_video_tasks = new_tasks
                 added_count = len(updated_raw) - prior_len
+
+                if hasattr(self.app_controller, "on_queue_changed"):
+                    self.app_controller.on_queue_changed(new_tasks)
 
                 self.refresh_list()
                 q = self._queue_view()
                 if q is not None:
+                    q.video_tasks = new_tasks
                     q.refresh_list()
                 sq = self._shorts_queue_view()
                 if sq is not None:
+                    sq.video_tasks = new_tasks
                     sq.refresh_list()
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
                 if callable(update_dash):

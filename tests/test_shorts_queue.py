@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.models.channel import Channel, VideoGroup, group_videos_by_channel
 from src.models.video_task import VideoTask
@@ -70,3 +70,45 @@ def test_channel_grouping_shorts_and_videos():
     assert shorts_by_group["Tech Channel"][0][1].title == "Tech Short 1"
     assert len(shorts_by_group["Gaming Channel"]) == 1
     assert shorts_by_group["Gaming Channel"][0][1].title == "Gaming Short 1"
+
+
+def test_importing_shorts_updates_shorts_queue_view():
+    from src.ui.views.queue_view import QueueView
+
+    mock_app = MagicMock()
+    mock_app.config_mgr = MagicMock()
+    mock_app.config_mgr.get_video_queue.return_value = []
+    mock_app.config_mgr.get_channels.return_value = []
+    mock_app.stats_store = MagicMock()
+    mock_app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+
+    # Instantiate shorts_queue view
+    view = QueueView.__new__(QueueView)
+    view.shorts_only = True
+    view.video_tasks = []
+    view.collapsed_groups = set()
+    view.app_controller = mock_app
+    view.scroll_frame = MagicMock()
+    view.scroll_frame.winfo_children.return_value = []
+    view._channels = MagicMock(return_value=[])
+    view._render_group = MagicMock()
+
+    # Initially empty
+    assert len([t for t in view.video_tasks if t.is_short]) == 0
+
+    # Imported shorts are added to app_controller.queued_video_tasks
+    imported_short = VideoTask(
+        url="https://www.youtube.com/shorts/imported_short1",
+        title="Imported Short 1",
+        channel="MyChannel",
+    )
+    mock_app.queued_video_tasks = [imported_short]
+
+    # Calling refresh_list should sync from app_controller.queued_video_tasks
+    view.refresh_list()
+
+    matching = [t for t in view.video_tasks if t.is_short]
+    assert len(matching) == 1
+    assert matching[0].title == "Imported Short 1"
+    assert matching[0].url == "https://www.youtube.com/shorts/imported_short1"
+    view._render_group.assert_called_once()

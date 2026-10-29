@@ -452,6 +452,9 @@ class QueueView(ctk.CTkFrame):
         for child in self.scroll_frame.winfo_children():
             child.destroy()
 
+        if hasattr(self, "app_controller") and getattr(self.app_controller, "queued_video_tasks", None) is not None:
+            self.video_tasks = self.app_controller.queued_video_tasks
+
         matching_tasks = [
             t for t in self.video_tasks
             if (t.is_short if getattr(self, "shorts_only", False) else not t.is_short)

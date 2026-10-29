@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
 from ...utils.channel_fetcher import FetchedVideo, ChannelFetchResult
+from ...utils.helpers import clean_youtube_url
 
 
 class ChannelImportModal(ctk.CTkToplevel):
@@ -336,8 +337,10 @@ class ChannelImportModal(ctk.CTkToplevel):
         tasks_to_add: List[VideoTask] = []
         for video in self.fetched_videos:
             if video.video_id in selected_ids:
+                is_s = getattr(video, "is_short", False) or ("/shorts/" in (video.url or ""))
+                task_url = clean_youtube_url(video.url, as_short=is_s) if is_s else video.url
                 task = VideoTask(
-                    url=video.url,
+                    url=task_url,
                     title=video.title,
                     keywords=video.title,
                     channel=self.channel_name,

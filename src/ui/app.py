@@ -252,12 +252,14 @@ class YTBotApp(ctk.CTk):
                 view_widget.tkraise()
                 self.nav_buttons[view_name].configure(fg_color=("gray75", "gray25"))
                 # If switching to a view that has pending updates, refresh it smoothly
-                if name == "queue" and getattr(self, "_queue_needs_refresh", False):
-                    view_widget.refresh_list()
-                    self._queue_needs_refresh = False
-                elif name == "shorts_queue" and getattr(self, "_shorts_queue_needs_refresh", False):
-                    view_widget.refresh_list()
-                    self._shorts_queue_needs_refresh = False
+                if name in ("queue", "shorts_queue"):
+                    if getattr(view_widget, "video_tasks", None) is not self.queued_video_tasks:
+                        view_widget.video_tasks = self.queued_video_tasks
+                        view_widget.refresh_list()
+                        setattr(self, f"_{name}_needs_refresh", False)
+                    elif getattr(self, f"_{name}_needs_refresh", False):
+                        view_widget.refresh_list()
+                        setattr(self, f"_{name}_needs_refresh", False)
                 elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False
