@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
-from ...models.watch_stats import format_totals_line, format_watch_line, format_watch_multiplier, resolve_video_key
+from ...models.watch_stats import format_totals_line, format_video_watch_ratio, format_watch_line, format_watch_multiplier, resolve_video_key
 from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
 
@@ -795,10 +795,22 @@ class QueueView(ctk.CTkFrame):
             else:
                 status_prefix = "[MAX VIEWS REACHED] "
 
-        target_suffix = f" | Target: {task.target_multiplier:.1f}x" if getattr(task, "target_multiplier", 0.0) > 0 else ""
-        length_suffix = f" | Length: {max(1, int(round(effective_duration / 60.0)))} min" if effective_duration > 0 else ""
-        watchtime_val = task.watchtime_duration or "Full"
-        stats_second_line = f"Watchtime: {watchtime_val}{length_suffix}{target_suffix}"
+        mult = float(getattr(task, "target_multiplier", 0.0) or 0.0)
+        target_sec = effective_duration * mult if mult > 0 else 0.0
+
+        if effective_duration >= 60.0:
+            length_part = f"Length: {max(1, int(round(effective_duration / 60.0)))} min"
+        elif effective_duration > 0.0:
+            length_part = f"Length: {int(effective_duration)}s"
+        else:
+            length_part = ""
+
+        ratio_part = format_video_watch_ratio(watch_sec, target_sec)
+        if length_part:
+            stats_second_line = f"{length_part} | Watch Time: {ratio_part}"
+        else:
+            stats_second_line = f"Watch Time: {ratio_part}"
+
         info_text = f"#{position}. {status_prefix}{title_text}\n{stats_second_line}"
         lbl = ctk.CTkLabel(
             card,

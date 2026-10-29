@@ -339,3 +339,22 @@ def test_format_watch_line_with_minutes_hours_and_video_length():
     # 3. Video not run yet with known length
     line_unrun = format_watch_line(None, max_runs=5, task_duration=451.4)
     assert line_unrun == "0/5 runs -- 0s watched (0x)"
+
+
+def test_format_video_watch_ratio():
+    from src.models.watch_stats import format_video_watch_ratio
+
+    # 1. 8 min video (480s) with 3x target (1440s), watched 7 min (420s) -> 29%
+    assert format_video_watch_ratio(watch_seconds=420.0, target_seconds=1440.0) == "7 / 24 min (29%)"
+
+    # 2. 16 min video (960s) with 3x target (2880s), watched 5 min (300s) -> 10%
+    assert format_video_watch_ratio(watch_seconds=300.0, target_seconds=2880.0) == "5 / 48 min (10%)"
+
+    # 3. 60 min video with 3x target (180 min / 3.0h), watched 0.5 hours (1800s) -> 17%
+    assert format_video_watch_ratio(watch_seconds=1800.0, target_seconds=10800.0) == "0.5 / 3.0 hours (17%)"
+
+    # 4. Short video under 60s: 30s with 1.5x target (45s), watched 15s -> 33%
+    assert format_video_watch_ratio(watch_seconds=15.0, target_seconds=45.0) == "15 / 45s (33%)"
+
+    # 5. Unlimited target (0.0 target seconds)
+    assert format_video_watch_ratio(watch_seconds=420.0, target_seconds=0.0) == "7 min"

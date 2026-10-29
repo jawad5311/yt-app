@@ -160,7 +160,8 @@ def test_queue_card_title_and_stats_lines_display():
         assert "Titles:" not in lines[1]
         assert "Max Views:" not in lines[1]
         assert "Multiplier:" not in lines[1]
-        assert "Watchtime:" in lines[1]
+        assert "Watchtime:" not in lines[1]
+        assert "Watch Time:" in lines[1]
         assert "Length: 8 min" in lines[1]
 
         # Second label created is stats_lbl (line 3)
@@ -196,6 +197,47 @@ def test_queue_card_title_and_stats_lines_display():
         assert len(lines) == 2
         # Line 1: All titles joined with " | "
         assert lines[0] == "#2. Strategy A | Strategy B | Strategy C"
-        # Line 2: Stats only, no "Titles:" prefix
+        # Line 2: Stats only, no "Titles:" prefix, displays Length and Watch Time ratio
         assert "Titles:" not in lines[1]
-        assert "Watchtime:" in lines[1]
+        assert "Watchtime:" not in lines[1]
+        assert "Length: 5 min" in lines[1]
+        assert "Watch Time:" in lines[1]
+
+
+def test_queue_card_displays_video_watch_time_ratio():
+    from src.models.watch_stats import StatRecord
+    view = QueueView.__new__(QueueView)
+    view.app_controller = MagicMock()
+    view.save_queue = MagicMock()
+    view.refresh_list = MagicMock()
+
+    # 8 min video (480s) with 3x target (1440s), watched 7 min (420s)
+    task = VideoTask(
+        title="Stop Wasting Money on Meta Ads! Try This Strategy",
+        url="https://youtube.com/watch?v=metaads",
+        duration_seconds=480,
+        target_multiplier=3.0,
+        max_runs=5,
+    )
+    rec = StatRecord(runs=1, watch_seconds=420.0, video_duration=480.0)
+    store = MagicMock()
+    store.find_for_task.return_value = rec
+    view._stats = MagicMock(return_value=store)
+
+    with patch("customtkinter.CTkCheckBox"), \
+         patch("customtkinter.CTkLabel") as mock_label_cls, \
+         patch("customtkinter.CTkFrame"), \
+         patch("customtkinter.CTkButton"), \
+         patch("customtkinter.CTkProgressBar"), \
+         patch("customtkinter.CTkFont"), \
+         patch("customtkinter.CTkEntry"):
+
+        mock_parent = MagicMock()
+        view._build_task_card(mock_parent, index=0, position=1, task=task, channel_enabled=True)
+
+        lbl_call = mock_label_cls.call_args_list[0]
+        text_arg = lbl_call[1].get("text")
+        lines = text_arg.split("\n")
+        assert len(lines) == 2
+        assert lines[0] == "#1. Stop Wasting Money on Meta Ads! Try This Strategy"
+        assert lines[1] == "Length: 8 min | Watch Time: 7 / 24 min (29%)"

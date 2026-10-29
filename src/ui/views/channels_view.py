@@ -12,7 +12,7 @@ from ...models.channel import (
     clean_channel_url,
 )
 from ...models.video_task import VideoTask, safe_float
-from ...models.watch_stats import format_duration, format_hours, format_totals_line, format_watch_multiplier
+from ...models.watch_stats import format_duration, format_hours, format_totals_line, format_video_watch_ratio, format_watch_multiplier
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
     extract_fallback_channel_name,
@@ -1511,18 +1511,29 @@ class ChannelsView(ctk.CTkFrame):
                     label_parts.append(f"Retry 3: {task.title_3}")
                 if task.url:
                     label_parts.append(f"URL: {task.url}")
-                status_info = f"Duration: {task.watchtime_duration or 'Full Video'}"
-                if task.max_runs > 0:
-                    status_info += f"  |  Limit: {task.max_runs} runs"
-                label_parts.append(status_info)
-
                 store = getattr(self.app_controller, "stats_store", None)
                 rec = store.find_for_task(task) if store else None
                 v_watch_sec = float(rec.watch_seconds) if rec else 0.0
                 eff_dur = float(rec.video_duration if rec and rec.video_duration > 0 else getattr(task, "duration_seconds", 0.0))
-                mult = format_watch_multiplier(v_watch_sec, eff_dur)
-                mult_info = f" ({mult})" if mult else ""
-                label_parts.append(f"Total Watch Time: {format_hours(v_watch_sec)}{mult_info}")
+
+                v_mult = float(getattr(task, "target_multiplier", 0.0) or 0.0)
+                v_target_sec = eff_dur * v_mult if v_mult > 0 else 0.0
+
+                if eff_dur >= 60.0:
+                    v_len = f"Length: {max(1, int(round(eff_dur / 60.0)))} min"
+                elif eff_dur > 0.0:
+                    v_len = f"Length: {int(eff_dur)}s"
+                else:
+                    v_len = ""
+
+                ratio_display = format_video_watch_ratio(v_watch_sec, v_target_sec)
+                if v_len:
+                    label_parts.append(f"{v_len} | Watch Time: {ratio_display}")
+                else:
+                    label_parts.append(f"Watch Time: {ratio_display}")
+
+                if task.max_runs > 0:
+                    label_parts.append(f"Limit: {task.max_runs} runs")
 
                 ctk.CTkLabel(
                     card,

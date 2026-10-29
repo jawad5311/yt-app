@@ -363,6 +363,32 @@ def format_watch_multiplier(watch_seconds: float, duration_seconds: float) -> st
     return f"{ratio:.1f}x"
 
 
+def format_video_watch_ratio(watch_seconds: float, target_seconds: float) -> str:
+    """Format achieved watch time / target watch time ratio (e.g. '7 / 24 min (29%)' or '1.2 / 3.0 hours (40%)')."""
+    w_sec = max(0.0, float(watch_seconds or 0.0))
+    t_sec = max(0.0, float(target_seconds or 0.0))
+
+    if t_sec <= 0.0:
+        if w_sec >= 3600.0:
+            return f"{w_sec / 3600.0:.1f} hours"
+        mins = int(round(w_sec / 60.0))
+        return f"{mins} min" if mins > 0 else f"{int(w_sec)}s"
+
+    percent = int(round((w_sec / t_sec) * 100))
+    if t_sec >= 3600.0 or w_sec >= 3600.0:
+        w_hrs = w_sec / 3600.0
+        t_hrs = t_sec / 3600.0
+        return f"{w_hrs:.1f} / {t_hrs:.1f} hours ({percent}%)"
+    elif t_sec >= 60.0:
+        w_min = int(round(w_sec / 60.0))
+        t_min = max(1, int(round(t_sec / 60.0)))
+        return f"{w_min} / {t_min} min ({percent}%)"
+    else:
+        w_s = int(round(w_sec))
+        t_s = max(1, int(round(t_sec)))
+        return f"{w_s} / {t_s}s ({percent}%)"
+
+
 def format_watch_time(watch_seconds: float, duration_seconds: float = 0.0) -> str:
     """Format watch time:
     - If total video length > 60 min (> 3600s) OR watch time >= 60 min (>= 3600s): format in hours ('X.X hours watched').
@@ -437,6 +463,7 @@ __all__ = [
     "format_watch_line",
     "format_watch_time",
     "format_watch_multiplier",
+    "format_video_watch_ratio",
     "group_records_by_channel",
     "resolve_video_id",
     "resolve_video_key",
