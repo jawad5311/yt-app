@@ -97,6 +97,18 @@ def test_channel_card_name_and_handle_format(ctk_app):
 
     card_text = "\n".join(labels)
     assert "1 - Tube Begins -- @TUBEbegins" in card_text
-    assert "Total Watch Time:" in card_text
+    assert "Watch Time:" in card_text
+
+    # Test Option C calculation with tasks having duration and multipliers
+    task1 = MagicMock(channel="Tube Begins", duration_seconds=1800, target_multiplier=2.0) # 3600s
+    task2 = MagicMock(channel="@tubebegins", duration_seconds=3600, target_multiplier=1.5) # 5400s
+    # Total target = 9000s = 2.5 hours
+    app.queued_video_tasks = [task1, task2]
+
+    # With 3600s watched (1.0 hour)
+    app.stats_store.channel_totals.return_value = MagicMock(runs=1, watch_seconds=3600.0)
+
+    display = view.get_channel_watch_time_display(channel)
+    assert "Watch Time: 1.0 / 2.5 hours (40%)" in display
 
     view.destroy()

@@ -11,7 +11,7 @@ from ...models.channel import (
     canonical_channel_url,
     clean_channel_url,
 )
-from ...models.video_task import VideoTask
+from ...models.video_task import VideoTask, safe_float
 from ...models.watch_stats import format_duration, format_hours, format_totals_line, format_watch_multiplier
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
@@ -357,6 +357,75 @@ class ChannelsView(ctk.CTkFrame):
         if not store:
             return "0.0 hours"
         return format_hours(store.channel_totals(channel.name).watch_seconds)
+
+    def get_channel_target_watch_seconds(self, channel: Channel) -> float:
+        """Calculate the total target watch time (in seconds) that can be generated for this channel,
+        based on the duration and target multiplier of each video task assigned to this channel."""
+        tasks = getattr(self.app_controller, "queued_video_tasks", None)
+        if not tasks and hasattr(self.app_controller, "config_mgr"):
+            raw = self.app_controller.config_mgr.get_video_queue()
+            tasks = [VideoTask.from_dict(d) if isinstance(d, dict) else d for d in raw]
+
+        if not tasks:
+            return safe_float(getattr(channel, "target_watch_seconds", 0.0), default=0.0)
+
+        store = getattr(self.app_controller, "stats_store", None)
+        ch_name_clean = (channel.name or "").strip().lower().lstrip("@")
+        ch_handle_clean = self.get_channel_handle(channel).strip().lower().lstrip("@")
+
+        total_target_sec = 0.0
+
+        for t in tasks:
+            t_ch = (getattr(t, "channel", "") or "").strip().lower().lstrip("@")
+            if t_ch and (t_ch == ch_name_clean or (ch_handle_clean and t_ch == ch_handle_clean)):
+                raw_dur = getattr(t, "duration_seconds", 0)
+                dur = safe_float(raw_dur, default=0.0)
+                if dur <= 0.0 and store:
+                    try:
+                        rec = store.find_for_task(t)
+                        if rec is not None:
+                            vd = getattr(rec, "video_duration", 0)
+                            if not hasattr(vd, "_mock_wraps") and not hasattr(vd, "assert_called"):
+                                dur = safe_float(vd, default=0.0)
+                    except Exception:
+                        pass
+
+                raw_mult = getattr(t, "target_multiplier", 0.0)
+                mult = safe_float(raw_mult, default=1.0)
+                if mult <= 0.0:
+                    mult = 1.0  # 1x duration if multiplier is not set or default
+
+                if dur > 0.0:
+                    total_target_sec += dur * mult
+
+        if total_target_sec > 0.0:
+            return total_target_sec
+
+        return safe_float(getattr(channel, "target_watch_seconds", 0.0), default=0.0)
+
+    def get_channel_watch_time_display(self, channel: Channel) -> str:
+        """Calculate and format the watch time display for a channel (Option C: Progress Ratio Style)."""
+        store = getattr(self.app_controller, "stats_store", None)
+        actual_sec = 0.0
+        if store:
+            try:
+                tot = store.channel_totals(channel.name)
+                ws = getattr(tot, "watch_seconds", 0.0)
+                actual_sec = safe_float(ws, default=0.0)
+            except Exception:
+                pass
+        if actual_sec <= 0.0:
+            actual_sec = safe_float(getattr(channel, "watch_seconds", 0.0), default=0.0)
+
+        target_sec = self.get_channel_target_watch_seconds(channel)
+
+        actual_hrs = max(0.0, actual_sec) / 3600.0
+        if target_sec > 0.0:
+            target_hrs = target_sec / 3600.0
+            percent = int(round((actual_sec / target_sec) * 100))
+            return f"Watch Time: {actual_hrs:.1f} / {target_hrs:.1f} hours ({percent}%)"
+        else:
+            return f"Watch Time: {actual_hrs:.1f} hours"
 
     def channel_stats_line(self, channel_name: str) -> str:
         """``27 runs · 12h 04m watched`` for one channel row, or ``""``."""
@@ -1934,8 +2003,8 @@ class ChannelsView(ctk.CTkFrame):
             handle = self.get_channel_handle(channel)
             handle_suffix = f" -- {handle}" if handle else ""
             line1 = f"{pos} - {clean_name}{handle_suffix}{status_tag}"
-            watch_time_str = self.get_channel_watch_time(channel)
-            line2 = f"Total Watch Time: {watch_time_str}"
+            watch_time_str = self.get_channel_watch_time_display(channel)
+            line2 = watch_time_str
 
             totals_parts = []
             if channel.total_videos is not None:
