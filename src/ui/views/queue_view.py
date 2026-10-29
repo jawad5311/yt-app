@@ -5,7 +5,7 @@ from typing import Any, Callable, List, Optional
 import customtkinter as ctk
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
-from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
+from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
 from ...models.watch_stats import format_totals_line, format_watch_line, format_watch_multiplier, resolve_video_key
 from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
@@ -221,6 +221,8 @@ class QueueView(ctk.CTkFrame):
             target_task = VideoTask(
                 watchtime_duration=self._default_watch_duration(),
                 channel=preselected_channel or "",
+                target_multiplier=DEFAULT_TARGET_MULTIPLIER,
+                max_runs=DEFAULT_MAX_RUNS,
             )
 
         modal = ctk.CTkToplevel(self)
@@ -317,14 +319,14 @@ class QueueView(ctk.CTkFrame):
             command=open_channel_dialog,
         ).pack(anchor="w", padx=20, pady=(0, 10))
 
-        ctk.CTkLabel(modal, text="Target Multiplier (e.g. 2.0x, 0 or blank = unlimited):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
-        target_multiplier_entry = ctk.CTkEntry(modal, placeholder_text="e.g. 2.0 (0 or blank = unlimited)", width=460)
+        ctk.CTkLabel(modal, text="Target Multiplier (e.g. 3.0x, 0 or blank = unlimited, default 3x):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        target_multiplier_entry = ctk.CTkEntry(modal, placeholder_text="e.g. 3.0 (0 or blank = unlimited)", width=460)
         if getattr(target_task, "target_multiplier", 0.0) > 0:
             mult_val = target_task.target_multiplier
             target_multiplier_entry.insert(0, str(int(mult_val)) if mult_val.is_integer() else f"{mult_val:.1f}")
         target_multiplier_entry.pack(padx=20, pady=(0, 10))
 
-        ctk.CTkLabel(modal, text="Max Views Cap (Full Runs Limit, 0 or blank = unlimited):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
+        ctk.CTkLabel(modal, text="Max Views Cap (Full Runs Limit, 0 or blank = unlimited, default 5):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         max_runs_entry = ctk.CTkEntry(modal, placeholder_text="e.g. 5 (0 or blank = unlimited)", width=460)
         if target_task.max_runs > 0:
             max_runs_entry.insert(0, str(target_task.max_runs))
@@ -342,15 +344,15 @@ class QueueView(ctk.CTkFrame):
 
             raw_mult = target_multiplier_entry.get().strip()
             try:
-                target_mult_val = max(0.0, float(raw_mult)) if raw_mult else 0.0
+                target_mult_val = max(0.0, float(raw_mult)) if raw_mult else (DEFAULT_TARGET_MULTIPLIER if not is_editing else 0.0)
             except ValueError:
-                target_mult_val = 0.0
+                target_mult_val = DEFAULT_TARGET_MULTIPLIER if not is_editing else 0.0
 
             raw_limit = max_runs_entry.get().strip()
             try:
-                max_runs_val = max(0, int(raw_limit)) if raw_limit else 0
+                max_runs_val = max(0, int(raw_limit)) if raw_limit else (DEFAULT_MAX_RUNS if not is_editing else 0)
             except ValueError:
-                max_runs_val = 0
+                max_runs_val = DEFAULT_MAX_RUNS if not is_editing else 0
 
             updated_task = VideoTask(
                 url=url,

@@ -26,7 +26,7 @@ from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
 from ..models.channel import Channel, canonical_channel_url, parse_channel_identity
-from ..models.video_task import VideoTask
+from ..models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, VideoTask
 from ..models.watch_stats import TaskOutcome, WatchResult, resolve_video_key
 from ..utils.helpers import extract_video_id, human_like_delay
 from ..utils.logger import emit
@@ -1494,8 +1494,8 @@ class WatchingWorker:
             f"Channel: {channel_display}\nURL: {full_url}\nTitle: {title}",
         )
 
-        inherited_mult = 0.0
-        inherited_max_runs = 3
+        inherited_mult = DEFAULT_TARGET_MULTIPLIER
+        inherited_max_runs = DEFAULT_MAX_RUNS
         raw_q = self.config_mgr.get_video_queue()
         for q_item in raw_q:
             if (q_item.get("channel") or "").strip().lower() == channel_display.strip().lower():

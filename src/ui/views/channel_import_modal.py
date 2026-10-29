@@ -5,7 +5,7 @@ from typing import Callable, Dict, List, Optional, Set
 
 import customtkinter as ctk
 
-from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
+from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
 from ...utils.channel_fetcher import FetchedVideo, ChannelFetchResult
 
 
@@ -345,6 +345,8 @@ class ChannelImportModal(ctk.CTkToplevel):
                     duration_seconds=video.duration_seconds,
                     duration_text=video.duration_text,
                     enabled=True,
+                    target_multiplier=DEFAULT_TARGET_MULTIPLIER,
+                    max_runs=DEFAULT_MAX_RUNS,
                 )
                 tasks_to_add.append(task)
 

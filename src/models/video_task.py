@@ -55,6 +55,8 @@ WATCHTIME_OPTIONS: List[str] = [
 ]
 
 DEFAULT_WATCHTIME_DURATION = "Full Video"
+DEFAULT_MAX_RUNS: int = 5
+DEFAULT_TARGET_MULTIPLIER: float = 3.0
 
 
 @dataclass
