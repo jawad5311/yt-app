@@ -410,51 +410,54 @@ def sanitize_api_url(url: str) -> str:
     return re.sub(r"key=[^&]+", "key=REDACTED", url)
 
 
-def load_api_key_from_pointer_file() -> Optional[str]:
-    """Load API key from the external file referenced in api_key_path.txt at project root."""
+def load_env_file(env_path: Optional[Any] = None, populate_environ: bool = True) -> Dict[str, str]:
+    """Load key-value pairs from a .env file into a dictionary and populate os.environ if not set."""
     try:
         from pathlib import Path
         from .helpers import get_project_root
         root = get_project_root()
-        # In automated unit tests, skip loading the real pointer file unless explicitly allowed or patched
+        # In automated unit tests, skip loading the real project .env file unless explicitly allowed or patched
         import sys
         if ("pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST")) and not os.environ.get("USE_REAL_API_KEY"):
-            if "site-packages" not in str(root) and (root / "main.py").exists() and (root / ".git").exists():
-                return None
-        pointer_file = root / "api_key_path.txt"
-        if not pointer_file.exists():
-            return None
-        with open(pointer_file, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f.readlines()]
-        target_lines = [l for l in lines if l and not l.startswith("#")]
-        if not target_lines:
-            return None
-        raw_path = target_lines[0].strip().strip('"').strip("'")
-        if not raw_path:
-            return None
-        target_path = Path(raw_path)
-        if not target_path.is_absolute():
-            target_path = (root / target_path).resolve()
-        if target_path.exists() and target_path.is_file():
-            with open(target_path, "r", encoding="utf-8") as f:
-                key = f.read().strip()
-                if key and not key.startswith("#"):
-                    return key
-        elif raw_path.startswith("AIza") or len(raw_path) == 39:
-            return raw_path
+            if env_path is None and "site-packages" not in str(root) and (root / "main.py").exists() and (root / ".git").exists():
+                return {}
+        target = Path(env_path) if env_path is not None else (root / ".env")
+        if not target.exists() or not target.is_file():
+            return {}
+        loaded: Dict[str, str] = {}
+        with open(target, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key:
+                    loaded[key] = val
+                    if populate_environ and key not in os.environ:
+                        os.environ[key] = val
+        return loaded
     except Exception:
-        pass
-    return None
+        return {}
 
 
 def get_configured_youtube_api_key(config_mgr: Optional[Any] = None) -> Optional[str]:
-    """Retrieve YouTube Data API key from pointer file, environment, or configuration without exposing it."""
-    file_key = load_api_key_from_pointer_file()
-    if file_key:
-        return file_key
+    """Retrieve YouTube Data API key from environment, .env file, or configuration without exposing it."""
+    # 1. Process environment variables
     env_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
     if env_key:
         return env_key
+
+    # 2. .env file in project root
+    env_vars = load_env_file()
+    file_key = env_vars.get("YOUTUBE_API_KEY", "").strip()
+    if file_key:
+        return file_key
+
+    # 3. settings.json configuration fallback
     if config_mgr is not None and hasattr(config_mgr, "get_setting"):
         cfg_key = str(config_mgr.get_setting("YouTubeApiKey", "") or "").strip()
         if cfg_key:
@@ -913,7 +916,7 @@ def fetch_channel_data(
     if not api_key:
         return ChannelFetchResult(
             channel_url=normalize_channel_url(channel_input),
-            error="YouTube Data API key is not configured. Please paste your API key file path in 'api_key_path.txt' at the project root.",
+            error="YouTube Data API key is not configured. Please set YOUTUBE_API_KEY in your .env file or environment variables.",
             status="error",
         )
     return fetch_channel_data_api(

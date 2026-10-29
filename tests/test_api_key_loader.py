@@ -1,38 +1,59 @@
-"""Unit tests for loading YouTube API key from pointer file."""
+"""Unit tests for loading YouTube API key from .env file and environment."""
 
+import os
 from pathlib import Path
-from unittest.mock import patch
-from src.utils.channel_fetcher import get_configured_youtube_api_key, load_api_key_from_pointer_file
+from unittest.mock import MagicMock, patch
+from src.utils.channel_fetcher import get_configured_youtube_api_key, load_env_file
 
 
-def test_pointer_file_reads_external_key(tmp_path):
-    # Create external key file
-    key_file = tmp_path / "secret_key.txt"
-    key_file.write_text("AIzaSyTestKeyFromExternalFile1234567\n", encoding="utf-8")
+def test_env_file_loads_youtube_api_key(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("YOUTUBE_API_KEY=AIzaSyTestKeyFromEnv1234567\n", encoding="utf-8")
 
-    # Create pointer file
-    pointer_file = tmp_path / "api_key_path.txt"
-    pointer_file.write_text(f"# My API path\n{str(key_file)}\n", encoding="utf-8")
+    with patch.dict(os.environ, {}, clear=True):
+        loaded = load_env_file(env_file)
+        assert loaded.get("YOUTUBE_API_KEY") == "AIzaSyTestKeyFromEnv1234567"
 
-    with patch("src.utils.helpers.get_project_root", return_value=tmp_path):
-        key = load_api_key_from_pointer_file()
-        assert key == "AIzaSyTestKeyFromExternalFile1234567"
-
-        # Also verify get_configured_youtube_api_key returns it
-        assert get_configured_youtube_api_key() == "AIzaSyTestKeyFromExternalFile1234567"
+    with patch.dict(os.environ, {}, clear=True), patch("src.utils.helpers.get_project_root", return_value=tmp_path):
+        assert get_configured_youtube_api_key() == "AIzaSyTestKeyFromEnv1234567"
 
 
-def test_pointer_file_missing_or_comment_only(tmp_path):
-    pointer_file = tmp_path / "api_key_path.txt"
-    pointer_file.write_text("# Only comments\n\n", encoding="utf-8")
+def test_env_file_handles_comments_empty_lines_and_quotes(tmp_path):
+    env_file = tmp_path / ".env"
+    env_content = (
+        "# This is a comment\n"
+        "\n"
+        'YOUTUBE_API_KEY="AIzaSyQuotedKey123"\n'
+        "ANOTHER_VAR='some_value'\n"
+        "# Another comment\n"
+        "SPACED_VAR = unquoted_val \n"
+    )
+    env_file.write_text(env_content, encoding="utf-8")
 
-    with patch("src.utils.helpers.get_project_root", return_value=tmp_path):
-        assert load_api_key_from_pointer_file() is None
+    loaded = load_env_file(env_file, populate_environ=False)
+    assert loaded.get("YOUTUBE_API_KEY") == "AIzaSyQuotedKey123"
+    assert loaded.get("ANOTHER_VAR") == "some_value"
+    assert loaded.get("SPACED_VAR") == "unquoted_val"
 
 
-def test_pointer_file_target_does_not_exist(tmp_path):
-    pointer_file = tmp_path / "api_key_path.txt"
-    pointer_file.write_text(str(tmp_path / "non_existent_key.txt"), encoding="utf-8")
+def test_process_env_takes_precedence_over_env_file(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("YOUTUBE_API_KEY=AIzaSyFromFile\n", encoding="utf-8")
 
-    with patch("src.utils.helpers.get_project_root", return_value=tmp_path):
-        assert load_api_key_from_pointer_file() is None
+    with patch.dict(os.environ, {"YOUTUBE_API_KEY": "AIzaSyFromProcessEnv"}, clear=True):
+        with patch("src.utils.helpers.get_project_root", return_value=tmp_path):
+            assert get_configured_youtube_api_key() == "AIzaSyFromProcessEnv"
+
+
+def test_settings_json_fallback_when_no_env(tmp_path):
+    mock_mgr = MagicMock()
+    mock_mgr.get_setting.side_effect = lambda k, default=None: "AIzaSyFromSettings" if k == "YouTubeApiKey" else default
+
+    with patch.dict(os.environ, {}, clear=True), patch("src.utils.helpers.get_project_root", return_value=tmp_path):
+        assert get_configured_youtube_api_key(config_mgr=mock_mgr) == "AIzaSyFromSettings"
+
+
+def test_missing_env_file_returns_none(tmp_path):
+    with patch.dict(os.environ, {}, clear=True), patch("src.utils.helpers.get_project_root", return_value=tmp_path):
+        assert load_env_file(tmp_path / ".env") == {}
+        assert get_configured_youtube_api_key() is None
