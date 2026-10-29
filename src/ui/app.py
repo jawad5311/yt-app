@@ -80,7 +80,8 @@ class YTBotApp(ctk.CTk):
         self.worker_progress: dict = {}
 
         self.loaded_accounts: List[Account] = []
-        self.queued_video_tasks: List[VideoTask] = []
+        raw_videos = self.config_mgr.get_video_queue() if hasattr(self, "config_mgr") and self.config_mgr else []
+        self.queued_video_tasks: List[VideoTask] = [VideoTask.from_dict(v) for v in raw_videos]
         self.active_threads: List[threading.Thread] = []
         self.active_workers: List[Any] = []
         self.stop_event = threading.Event()
@@ -260,6 +261,8 @@ class YTBotApp(ctk.CTk):
                     elif getattr(self, f"_{name}_needs_refresh", False):
                         view_widget.refresh_list()
                         setattr(self, f"_{name}_needs_refresh", False)
+                    elif not getattr(view_widget, "scroll_frame", None) or not view_widget.scroll_frame.winfo_children():
+                        view_widget.refresh_list()
                 elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False

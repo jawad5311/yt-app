@@ -112,3 +112,59 @@ def test_importing_shorts_updates_shorts_queue_view():
     assert matching[0].title == "Imported Short 1"
     assert matching[0].url == "https://www.youtube.com/shorts/imported_short1"
     view._render_group.assert_called_once()
+
+
+def test_queue_views_preserve_tasks_on_startup_and_refresh():
+    from src.ui.views.queue_view import QueueView
+
+    mock_app = MagicMock()
+    mock_app.config_mgr = MagicMock()
+    saved_tasks = [
+        VideoTask(url="https://www.youtube.com/watch?v=long1", title="Long Video 1", channel="Chan1"),
+        VideoTask(url="https://www.youtube.com/shorts/short1", title="Short Video 1", channel="Chan1"),
+    ]
+    mock_app.config_mgr.get_video_queue.return_value = [t.to_dict() for t in saved_tasks]
+    mock_app.config_mgr.get_channels.return_value = []
+    mock_app.queued_video_tasks = list(saved_tasks)
+    mock_app.stats_store = MagicMock()
+    mock_app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+
+    # Initialize video queue view
+    video_view = QueueView.__new__(QueueView)
+    video_view.shorts_only = False
+    video_view.video_tasks = []
+    video_view.collapsed_groups = set()
+    video_view.app_controller = mock_app
+    video_view.scroll_frame = MagicMock()
+    video_view.scroll_frame.winfo_children.return_value = []
+    video_view._channels = MagicMock(return_value=[])
+    video_view._render_group = MagicMock()
+
+    video_view.load_initial_queue()
+    assert len(video_view.video_tasks) == 2
+    video_matching = [t for t in video_view.video_tasks if not t.is_short]
+    assert len(video_matching) == 1
+    assert video_matching[0].title == "Long Video 1"
+
+    # Initialize shorts queue view
+    shorts_view = QueueView.__new__(QueueView)
+    shorts_view.shorts_only = True
+    shorts_view.video_tasks = []
+    shorts_view.collapsed_groups = set()
+    shorts_view.app_controller = mock_app
+    shorts_view.scroll_frame = MagicMock()
+    shorts_view.scroll_frame.winfo_children.return_value = []
+    shorts_view._channels = MagicMock(return_value=[])
+    shorts_view._render_group = MagicMock()
+
+    shorts_view.load_initial_queue()
+    assert len(shorts_view.video_tasks) == 2
+    shorts_matching = [t for t in shorts_view.video_tasks if t.is_short]
+    assert len(shorts_matching) == 1
+    assert shorts_matching[0].title == "Short Video 1"
+
+    # Refreshing either view preserves their tasks
+    video_view.refresh_list()
+    assert len(video_view.video_tasks) == 2
+    shorts_view.refresh_list()
+    assert len(shorts_view.video_tasks) == 2

@@ -114,6 +114,10 @@ class QueueView(ctk.CTkFrame):
         return restore
 
     def load_initial_queue(self):
+        if hasattr(self, "app_controller") and getattr(self.app_controller, "queued_video_tasks", None):
+            self.video_tasks = list(self.app_controller.queued_video_tasks)
+            self.refresh_list()
+            return
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
         self.refresh_list()
@@ -453,7 +457,8 @@ class QueueView(ctk.CTkFrame):
             child.destroy()
 
         if hasattr(self, "app_controller") and getattr(self.app_controller, "queued_video_tasks", None) is not None:
-            self.video_tasks = self.app_controller.queued_video_tasks
+            if self.app_controller.queued_video_tasks or not self.video_tasks:
+                self.video_tasks = self.app_controller.queued_video_tasks
 
         matching_tasks = [
             t for t in self.video_tasks

@@ -252,9 +252,11 @@ class ChannelsView(ctk.CTkFrame):
 
     @staticmethod
     def _widget_exists(widget) -> bool:
+        if widget is None:
+            return False
         try:
             return bool(widget.winfo_exists())
-        except TclError:
+        except (TclError, AttributeError):
             return False
 
     def _channel_is_current(self, channel, name, url) -> bool:
