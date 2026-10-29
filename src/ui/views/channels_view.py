@@ -805,17 +805,20 @@ class ChannelsView(ctk.CTkFrame):
         video_limit: Optional[int] = 100,
         shorts_limit: Optional[int] = 100,
         on_imported: Optional[Callable[[], None]] = None,
+        parent_modal: Optional[Any] = None,
     ) -> None:
         """Fetch videos and/or shorts for a channel using YouTube Data API v3 and open selection modal."""
+        active_parent = parent_modal if self._widget_exists(parent_modal) else self
+
         if not channel.url:
             messagebox.showwarning(
                 "Missing URL",
                 f"Channel '{channel.name}' does not have a URL configured.",
-                parent=self,
+                parent=active_parent,
             )
             return
 
-        loading = ctk.CTkToplevel(self)
+        loading = ctk.CTkToplevel(active_parent)
         loading.title("Fetching Data...")
         loading.geometry("400x150")
         loading.grab_set()
@@ -840,7 +843,7 @@ class ChannelsView(ctk.CTkFrame):
                 messagebox.showerror(
                     "Fetch Error",
                     f"Failed to fetch channel data:\n{res.error}",
-                    parent=self,
+                    parent=active_parent if self._widget_exists(active_parent) else self,
                 )
                 return
 
@@ -856,7 +859,7 @@ class ChannelsView(ctk.CTkFrame):
                 messagebox.showinfo(
                     "No Items Found",
                     f"No public videos or shorts found for '{channel.name}'.",
-                    parent=self,
+                    parent=active_parent if self._widget_exists(active_parent) else self,
                 )
                 return
 
@@ -880,19 +883,12 @@ class ChannelsView(ctk.CTkFrame):
                     self.app_controller.on_queue_changed(new_tasks)
 
                 self.refresh_list()
-                queue = self._queue_view()
-                if queue is not None:
-                    queue.video_tasks = new_tasks
-                    queue.refresh_list()
-                shorts_queue = self._shorts_queue_view()
-                if shorts_queue is not None:
-                    shorts_queue.video_tasks = new_tasks
-                    shorts_queue.refresh_list()
+                if on_imported:
+                    on_imported()
+
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
                 if callable(update_dash):
                     update_dash()
-                if on_imported:
-                    on_imported()
 
                 shorts_imported = sum(1 for t in selected_tasks if "/shorts/" in (t.url or ""))
                 vids_imported = len(selected_tasks) - shorts_imported
@@ -907,11 +903,11 @@ class ChannelsView(ctk.CTkFrame):
                 messagebox.showinfo(
                     "Import Complete",
                     msg,
-                    parent=self,
+                    parent=active_parent if self._widget_exists(active_parent) else self,
                 )
 
             ChannelImportModal(
-                parent=self,
+                parent=active_parent,
                 channel_name=channel.name,
                 channel_url=channel.url,
                 fetched_videos=res.videos,
@@ -1122,14 +1118,6 @@ class ChannelsView(ctk.CTkFrame):
                     self.app_controller.on_queue_changed(new_tasks)
 
                 self.refresh_list()
-                q = self._queue_view()
-                if q is not None:
-                    q.video_tasks = new_tasks
-                    q.refresh_list()
-                sq = self._shorts_queue_view()
-                if sq is not None:
-                    sq.video_tasks = new_tasks
-                    sq.refresh_list()
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
                 if callable(update_dash):
                     update_dash()
@@ -1482,6 +1470,7 @@ class ChannelsView(ctk.CTkFrame):
                 video_limit=v_count,
                 shorts_limit=s_count,
                 on_imported=lambda: _refresh_modal_videos(),
+                parent_modal=modal,
             )
 
         fetch_data_btn = ctk.CTkButton(

@@ -110,3 +110,33 @@ def test_fetch_limit_options_and_custom_parsing():
     with pytest.raises(ValueError):
         parse_limit("Custom...", "abc")
 
+
+def test_channel_import_modal_submit_destroys_modal_before_callback(ctk_app):
+    from unittest.mock import MagicMock
+    from src.ui.views.channel_import_modal import ChannelImportModal
+
+    fetched = [
+        FetchedVideo(video_id="s1", url="https://youtube.com/shorts/s1", title="Short 1", is_short=True, duration_seconds=45),
+        FetchedVideo(video_id="s2", url="https://youtube.com/shorts/s2", title="Short 2", is_short=True, duration_seconds=50),
+    ]
+
+    modal_destroyed_at_callback = False
+
+    def on_import(tasks):
+        nonlocal modal_destroyed_at_callback
+        # When on_import runs, the modal should already be destroyed and not grab-locked
+        modal_destroyed_at_callback = not modal.winfo_exists()
+
+    modal = ChannelImportModal(
+        parent=ctk_app,
+        channel_name="Iamcarhacker",
+        channel_url="https://youtube.com/@iamcarhacker",
+        fetched_videos=fetched,
+        existing_video_ids=set(),
+        on_import=on_import,
+    )
+
+    modal._submit_import()
+    assert modal_destroyed_at_callback is True
+    assert not modal.winfo_exists()
+
