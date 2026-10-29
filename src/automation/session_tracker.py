@@ -6,8 +6,11 @@ Tracks per-channel video watch time for each session run:
 - Increments by each minute of video watch time.
 - Checkpoints each measured playback delta, including fractional seconds.
 - Session minute counters are display-only and are never added to totals again.
+- Notes baseline channel watch times at session start and calculates per-channel
+  and combined session watch times for reporting.
 """
 
+from datetime import datetime
 import logging
 import queue
 import threading
@@ -46,10 +49,34 @@ class SessionChannelTracker:
         self._pending_seconds: Dict[str, float] = {}
         self._lock = threading.RLock()
 
-        # Cache known channel names
+        # Session tracking for reports
+        self.session_start_time: datetime = datetime.now()
+        self.session_end_time: Optional[datetime] = None
+        # Baseline watch time noted separately for each channel at session start
+        self.initial_channel_watch_seconds: Dict[str, float] = {}
+        # Exact cumulative watch seconds generated in this session per channel
+        self.session_watch_seconds: Dict[str, float] = {}
+
+        # Cache known channel names and snapshot baseline watch time
         for ch in self.channels:
             if ch.name:
-                self.original_names[self._canon_name(ch.name)] = ch.name
+                key = self._canon_name(ch.name)
+                self.original_names[key] = ch.name
+                self.initial_channel_watch_seconds[key] = float(getattr(ch, "watch_seconds", 0.0) or 0.0)
+                self.session_watch_seconds[key] = 0.0
+
+        if self.config_mgr:
+            try:
+                for c_dict in self.config_mgr.get_channels():
+                    name = c_dict.get("name", "")
+                    if name:
+                        key = self._canon_name(name)
+                        self.original_names.setdefault(key, name)
+                        if key not in self.initial_channel_watch_seconds:
+                            self.initial_channel_watch_seconds[key] = float(c_dict.get("watch_seconds", 0.0) or 0.0)
+                        self.session_watch_seconds.setdefault(key, 0.0)
+            except Exception as e:
+                logging.debug(f"Failed snapshotting initial channel watch times: {e}")
 
     def set_active_channel(self, channel_name: Optional[str]) -> None:
         """Set the channel whose video is currently playing."""
@@ -57,7 +84,11 @@ class SessionChannelTracker:
             self._active_watch_delta = 0.0
             self.active_channel_name = (channel_name or "").strip() if channel_name else None
             if self.active_channel_name:
-                self.original_names[self._canon_name(self.active_channel_name)] = self.active_channel_name
+                key = self._canon_name(self.active_channel_name)
+                self.original_names[key] = self.active_channel_name
+                self.session_watch_seconds.setdefault(key, 0.0)
+                if key not in self.initial_channel_watch_seconds:
+                    self.initial_channel_watch_seconds[key] = self.get_current_total_watch_seconds(self.active_channel_name)
 
     def get_active_watch_delta(self) -> float:
         """Return watch seconds accumulated during current active video playback."""
@@ -81,6 +112,9 @@ class SessionChannelTracker:
             self._active_watch_delta += delta_seconds
             key = active_clean
             self.original_names.setdefault(key, channel_name)
+
+            # Accumulate exact watch seconds for this session
+            self.session_watch_seconds[key] = self.session_watch_seconds.get(key, 0.0) + delta_seconds
 
             sec = self.second_accumulators.get(key, 0.0) + delta_seconds
             mins = int(sec // 60.0)
@@ -111,6 +145,54 @@ class SessionChannelTracker:
                         self.log_queue,
                         f"Target watch time achieved for channel '{channel_name}'! Total watch time reached {total_h:.1f} hours.",
                     )
+
+    def get_session_channel_watch_seconds(self, channel_name: str) -> float:
+        """Return the watch seconds generated for a specific channel during this session."""
+        if not channel_name:
+            return 0.0
+        with self._lock:
+            return float(self.session_watch_seconds.get(self._canon_name(channel_name), 0.0))
+
+    def get_session_total_watch_seconds(self) -> float:
+        """Return combined watch seconds generated across all channels during this session."""
+        with self._lock:
+            return float(sum(self.session_watch_seconds.values()))
+
+    def get_session_report_data(self) -> Dict[str, Any]:
+        """Compile a complete session report with per-channel breakdown and combined totals."""
+        with self._lock:
+            end_t = self.session_end_time or datetime.now()
+            duration = max(0.0, (end_t - self.session_start_time).total_seconds())
+
+            # Gather all channels that either had initial seconds, session seconds, or are known
+            all_keys = set(self.original_names) | set(self.initial_channel_watch_seconds) | set(self.session_watch_seconds)
+            channel_items: List[Dict[str, Any]] = []
+
+            for key in sorted(all_keys):
+                name = self.original_names.get(key, key)
+                session_sec = float(self.session_watch_seconds.get(key, 0.0))
+                initial_sec = float(self.initial_channel_watch_seconds.get(key, 0.0))
+                current_total = self.get_current_total_watch_seconds(name)
+                # If current_total is 0 or less than initial+session, reconcile
+                final_sec = max(current_total, initial_sec + session_sec)
+
+                channel_items.append({
+                    "name": name,
+                    "canon_name": key,
+                    "session_watch_seconds": session_sec,
+                    "initial_watch_seconds": initial_sec,
+                    "final_watch_seconds": final_sec,
+                })
+
+            total_session_sec = float(sum(self.session_watch_seconds.values()))
+
+            return {
+                "start_time": self.session_start_time,
+                "end_time": end_t,
+                "duration_seconds": duration,
+                "total_session_watch_seconds": total_session_sec,
+                "channels": channel_items,
+            }
 
     def get_current_total_watch_seconds(self, channel_name: str) -> float:
         """Return checkpointed time plus any delta awaiting a successful write."""
@@ -154,12 +236,18 @@ class SessionChannelTracker:
             self._pending_seconds.clear()
             self._active_watch_delta = 0.0
             self.active_channel_name = None
+            self.session_watch_seconds.clear()
+            self.initial_channel_watch_seconds.clear()
+            self.session_start_time = datetime.now()
+            self.session_end_time = None
             for ch in self.channels:
                 ch.watch_seconds = 0.0
 
     def on_stop(self) -> None:
         """Retry pending checkpoints without adding already saved session time."""
         with self._lock:
+            if self.session_end_time is None:
+                self.session_end_time = datetime.now()
             keys = set(self.minute_counters) | set(self.second_accumulators) | set(self._pending_seconds)
             for key in keys:
                 self._commit_seconds(self.original_names.get(key, key), 0.0, notify=True)

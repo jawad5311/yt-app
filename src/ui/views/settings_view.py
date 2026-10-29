@@ -4,10 +4,17 @@ from typing import Any, Dict
 
 import customtkinter as ctk
 
+from datetime import datetime
+from ...automation.email_reporter import EmailReporter, SessionReport
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS
 from ...utils.scroll_helper import setup_smooth_scrolling
 
 APPEARANCE_OPTIONS = ["Dark", "Light", "System"]
+EMAIL_METHOD_OPTIONS = [
+    "Auto (Browser Gmail / SMTP Fallback)",
+    "Browser Gmail (Logged-in Account)",
+    "SMTP Connection",
+]
 QUALITY_OPTIONS = ["360p", "480p", "Random (360p / 480p)"]
 
 
@@ -215,6 +222,82 @@ class SettingsView(ctk.CTkFrame):
             self.micro_pause_switch.deselect()
         self.micro_pause_switch.pack(anchor="w", padx=30, pady=(2, 15))
 
+        # Session Watch Time Email Reporting
+        ctk.CTkLabel(
+            container,
+            text="Session Watch Time Email Reporting",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(15, 8))
+
+        self.email_report_switch = ctk.CTkSwitch(
+            container,
+            text="Enable Session Email Reporting (send summary after run completes)",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        if self.config_mgr.get_bool("EmailReportingEnabled", False):
+            self.email_report_switch.select()
+        else:
+            self.email_report_switch.deselect()
+        self.email_report_switch.pack(anchor="w", padx=15, pady=(5, 8))
+
+        ctk.CTkLabel(container, text="Send Report To (Recipient Email):", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        self.recipient_email_entry = ctk.CTkEntry(container, width=320, placeholder_text="e.g. recipient@example.com")
+        self.recipient_email_entry.insert(0, self.config_mgr.get_setting("ReportRecipientEmail", ""))
+        self.recipient_email_entry.pack(anchor="w", padx=15, pady=(0, 10))
+
+        ctk.CTkLabel(container, text="Email Delivery Method:", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        self.email_method_menu = ctk.CTkOptionMenu(container, values=EMAIL_METHOD_OPTIONS, width=320)
+        configured_method = self.config_mgr.get_setting("ReportEmailMethod", EMAIL_METHOD_OPTIONS[0])
+        self.email_method_menu.set(configured_method if configured_method in EMAIL_METHOD_OPTIONS else EMAIL_METHOD_OPTIONS[0])
+        self.email_method_menu.pack(anchor="w", padx=15, pady=(0, 10))
+
+        ctk.CTkLabel(
+            container,
+            text="SMTP Connection Settings (Optional - required if using SMTP method or for test emails):",
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(10, 2))
+
+        smtp_row = ctk.CTkFrame(container, fg_color="transparent")
+        smtp_row.pack(anchor="w", padx=15, pady=(2, 6))
+
+        ctk.CTkLabel(smtp_row, text="Host:").grid(row=0, column=0, padx=(0, 5), sticky="w")
+        self.smtp_host_entry = ctk.CTkEntry(smtp_row, width=160)
+        self.smtp_host_entry.insert(0, self.config_mgr.get_setting("SmtpHost", "smtp.gmail.com"))
+        self.smtp_host_entry.grid(row=0, column=1, padx=(0, 15), sticky="w")
+
+        ctk.CTkLabel(smtp_row, text="Port:").grid(row=0, column=2, padx=(0, 5), sticky="w")
+        self.smtp_port_entry = ctk.CTkEntry(smtp_row, width=80)
+        self.smtp_port_entry.insert(0, str(self.config_mgr.get_int("SmtpPort", 587)))
+        self.smtp_port_entry.grid(row=0, column=3, padx=(0, 10), sticky="w")
+
+        smtp_cred_row = ctk.CTkFrame(container, fg_color="transparent")
+        smtp_cred_row.pack(anchor="w", padx=15, pady=(2, 6))
+
+        ctk.CTkLabel(smtp_cred_row, text="User / Sender:").grid(row=0, column=0, padx=(0, 5), sticky="w")
+        self.smtp_user_entry = ctk.CTkEntry(smtp_cred_row, width=200, placeholder_text="your_account@gmail.com")
+        self.smtp_user_entry.insert(0, self.config_mgr.get_setting("SmtpUsername", ""))
+        self.smtp_user_entry.grid(row=0, column=1, padx=(0, 15), sticky="w")
+
+        ctk.CTkLabel(smtp_cred_row, text="App Password:").grid(row=0, column=2, padx=(0, 5), sticky="w")
+        self.smtp_pass_entry = ctk.CTkEntry(smtp_cred_row, width=160, show="*", placeholder_text="16-character App Password")
+        self.smtp_pass_entry.insert(0, self.config_mgr.get_setting("SmtpPassword", ""))
+        self.smtp_pass_entry.grid(row=0, column=3, padx=(0, 10), sticky="w")
+
+        test_email_btn = ctk.CTkButton(
+            container,
+            text="📧 Send Test Email Report",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#3B82F6",
+            hover_color="#1D4ED8",
+            width=200,
+            command=self.send_test_report,
+        )
+        test_email_btn.pack(anchor="w", padx=15, pady=(6, 18))
+
         # Appearance Mode
         ctk.CTkLabel(container, text="Appearance Mode:", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
@@ -366,7 +449,42 @@ class SettingsView(ctk.CTkFrame):
 
         validated["RandomMicroPauses"] = bool(self.micro_pause_switch.get())
 
-        # 12. Appearance mode
+        # 12. Email Reporting Settings
+        if hasattr(self, "email_report_switch"):
+            email_enabled = bool(self.email_report_switch.get())
+            recipient = self.recipient_email_entry.get().strip() if hasattr(self, "recipient_email_entry") else ""
+            if email_enabled and (not recipient or "@" not in recipient or "." not in recipient):
+                messagebox.showerror("Error", "Please provide a valid Recipient Email address to enable email reporting.")
+                return
+
+            validated["EmailReportingEnabled"] = email_enabled
+            validated["ReportRecipientEmail"] = recipient
+
+            method = self.email_method_menu.get() if hasattr(self, "email_method_menu") else EMAIL_METHOD_OPTIONS[0]
+            if method not in EMAIL_METHOD_OPTIONS:
+                method = EMAIL_METHOD_OPTIONS[0]
+            validated["ReportEmailMethod"] = method
+
+            validated["SmtpHost"] = self.smtp_host_entry.get().strip() if hasattr(self, "smtp_host_entry") else "smtp.gmail.com"
+
+            if hasattr(self, "smtp_port_entry"):
+                raw_port = self.smtp_port_entry.get().strip()
+                try:
+                    port_val = int(raw_port)
+                    if port_val < 1 or port_val > 65535:
+                        raise ValueError
+                    validated["SmtpPort"] = port_val
+                except (ValueError, TypeError):
+                    messagebox.showerror("Error", "SMTP Port must be a valid port integer between 1 and 65535.")
+                    return
+
+            if hasattr(self, "smtp_user_entry"):
+                validated["SmtpUsername"] = self.smtp_user_entry.get().strip()
+                validated["SenderEmail"] = self.smtp_user_entry.get().strip()
+            if hasattr(self, "smtp_pass_entry"):
+                validated["SmtpPassword"] = self.smtp_pass_entry.get().strip()
+
+        # 13. Appearance mode
         selected_appearance = self.appearance_menu.get()
         if selected_appearance not in APPEARANCE_OPTIONS:
             messagebox.showerror("Error", f"Appearance Mode must be one of: {', '.join(APPEARANCE_OPTIONS)}.")
@@ -385,3 +503,60 @@ class SettingsView(ctk.CTkFrame):
             self.app_controller.apply_appearance_mode(selected_appearance, persist=False)
 
         messagebox.showinfo("Success", "Settings saved successfully!")
+
+    def send_test_report(self):
+        """Send an immediate sample report to verify recipient and SMTP connection."""
+        recipient = self.recipient_email_entry.get().strip()
+        if not recipient or "@" not in recipient:
+            messagebox.showerror("Error", "Please enter a valid Recipient Email address first.")
+            return
+
+        now = datetime.now()
+        sender = self.smtp_user_entry.get().strip() or "views-app@noreply.local"
+        sample_report = SessionReport(
+            account_email=sender,
+            session_mode="Test Report Verification",
+            start_time=now,
+            end_time=now,
+            duration_seconds=180.0,
+            total_session_watch_seconds=125.0,
+            channel_reports=[
+                {
+                    "name": "Sample Test Channel",
+                    "session_watch_seconds": 125.0,
+                    "initial_watch_seconds": 0.0,
+                    "final_watch_seconds": 125.0,
+                }
+            ],
+            status="Test Verification Successful",
+        )
+
+        host = self.smtp_host_entry.get().strip() or "smtp.gmail.com"
+        raw_port = self.smtp_port_entry.get().strip() or "587"
+        try:
+            port = int(raw_port)
+        except ValueError:
+            port = 587
+        user = self.smtp_user_entry.get().strip()
+        password = self.smtp_pass_entry.get().strip()
+
+        if not password:
+            messagebox.showinfo(
+                "App Password Required",
+                "To test direct SMTP delivery now, please enter your Gmail App Password in the SMTP field.\n\nNote: Automated session reporting can also send directly from your logged-in Google account in the browser without an App Password.",
+            )
+            return
+
+        ok = EmailReporter.send_via_smtp(
+            report=sample_report,
+            recipient_email=recipient,
+            host=host,
+            port=port,
+            username=user,
+            password=password,
+            sender_email=sender,
+        )
+        if ok:
+            messagebox.showinfo("Success", f"Test report email was successfully sent to '{recipient}'!")
+        else:
+            messagebox.showerror("Delivery Error", "Failed to send test email. Please check your SMTP host, port, username, and App Password.")

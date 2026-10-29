@@ -1,3 +1,4 @@
+from .email_reporter import EmailReporter, SessionReport
 from .session_tracker import SessionChannelTracker
 """Watching Worker.
 
@@ -2152,9 +2153,51 @@ class WatchingWorker:
             emit(self.log_queue, f"Critical error during watching session: {exc}", logging.ERROR)
             self._report_status(f"Watching error: {exc}", "error")
         finally:
+            session_status = "Completed"
+            session_err = None
+            if self.stop_event.is_set():
+                session_status = "Stopped by user"
+            if "exc" in locals() and locals()["exc"] is not None:
+                session_status = "Error"
+                session_err = str(locals()["exc"])
+
             if hasattr(self, "channel_tracker"):
                 self.channel_tracker.on_stop()
+
+            # Send email report before tearing down the browser driver
+            self._send_session_report(status=session_status, error=session_err)
+
             close_driver(self.driver, log_queue=self.log_queue)
+
+    def _send_session_report(self, status: str = "Completed", error: Optional[str] = None) -> None:
+        """Deliver session watch time report if email reporting is enabled."""
+        if not self.config_mgr or not self.config_mgr.get_bool("EmailReportingEnabled", False):
+            return
+        if not hasattr(self, "channel_tracker") or not self.channel_tracker:
+            return
+
+        try:
+            report_data = self.channel_tracker.get_session_report_data()
+            report = SessionReport(
+                account_email=getattr(self.account, "email", "") if self.account else "",
+                session_mode="Continuous Watching / Browsing",
+                start_time=report_data["start_time"],
+                end_time=report_data["end_time"],
+                duration_seconds=report_data["duration_seconds"],
+                total_session_watch_seconds=report_data["total_session_watch_seconds"],
+                channel_reports=report_data["channels"],
+                status=status,
+                error_message=error,
+            )
+            EmailReporter.dispatch_report(
+                report=report,
+                config_mgr=self.config_mgr,
+                driver=self.driver,
+                account=self.account,
+                log_queue=self.log_queue,
+            )
+        except Exception as exc:
+            logging.debug(f"Failed dispatching session email report: {exc}")
 
     def stop(self) -> None:
         """Stop the continuous watching loop and all running tasks."""

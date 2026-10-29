@@ -361,28 +361,13 @@ class ChannelImportModal(ctk.CTkToplevel):
         except Exception:
             pass
 
-        # 2. Release modal grab so UI stays responsive and grab deadlock is prevented
+        # 2. Release modal grab and close dialog immediately so UI stays responsive and grab deadlock is prevented
         try:
             self.grab_release()
         except Exception:
             pass
+        self.destroy()
 
         # 3. Deliver imported tasks to parent callback
         if callable(on_import_cb):
-            try:
-                on_import_cb(tasks_to_add)
-            except Exception as exc:
-                try:
-                    self.grab_set()
-                    if hasattr(self, "import_button") and self.import_button:
-                        self.import_button.configure(text=f"Import ({len(tasks_to_add)}) Videos", state="normal")
-                except Exception:
-                    pass
-                messagebox.showerror(
-                    "Import Failed",
-                    f"Failed to import selected videos to queue:\n{exc}",
-                    parent=self,
-                )
-                return
-
-        self.destroy()
+            on_import_cb(tasks_to_add)
