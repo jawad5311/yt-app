@@ -49,6 +49,29 @@ def test_documentation_contains_disclaimers():
     assert "monetization" in features.lower() or "monetisation" in features.lower()
 
 
+def test_dashboard_unlimited_browsing_checked_by_default_on_app_open(ctk_app):
+    from unittest.mock import MagicMock
+    from src.ui.views.dashboard_view import DashboardView
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    # Even if config manager returned False from older settings
+    app.config_mgr.get_bool.return_value = False
+    app.config_mgr.get_int.return_value = 1
+    app.stats_store = MagicMock()
+    app.stats_store.lifetime_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.start_automation = MagicMock()
+    app.start_watching = MagicMock()
+    app.stop_automation = MagicMock()
+    app.toggle_pause_watching = MagicMock()
+
+    view = DashboardView(app, app)
+    # Checkbox MUST be checked by default
+    assert view.browsing_unlimited_cb.get() == 1
+    assert view.browsing_limit_entry.cget("state") == "disabled"
+    view.destroy()
+
+
 def test_test_suite_module_count():
     repo_root = Path(__file__).resolve().parent.parent
     test_files = list((repo_root / "tests").glob("test_*.py"))
