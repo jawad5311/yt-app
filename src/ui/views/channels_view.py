@@ -121,6 +121,16 @@ class ChannelsView(ctk.CTkFrame):
             command=self.sync_all_channel_data,
         ).pack(side="left", padx=(0, 10))
 
+        ctk.CTkButton(
+            btn_frame,
+            text="⚡ Sync Data All",
+            width=120,
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            font=ctk.CTkFont(weight="bold"),
+            command=self.sync_data_all,
+        ).pack(side="left", padx=(0, 10))
+
         self.current_tab = "Active"
         self.tab_selector = ctk.CTkSegmentedButton(
             btn_frame,
@@ -1898,6 +1908,180 @@ class ChannelsView(ctk.CTkFrame):
             webbrowser.open(url.strip())
         else:
             messagebox.showinfo("Notice", "This channel has no URL saved.")
+
+    def sync_data_all(self) -> None:
+        """Sync new available videos and shorts for all configured channels directly into the queue."""
+        channels_to_sync = [ch for ch in self.channels if ch.url and not ch.archived]
+        if not channels_to_sync:
+            channels_to_sync = [ch for ch in self.channels if ch.url]
+        if not channels_to_sync:
+            messagebox.showinfo("Sync Data All", "No channels with URLs configured to sync.", parent=self)
+            return
+
+        toast = ctk.CTkToplevel(self)
+        toast.title("Syncing All Channels...")
+        toast.geometry("420x150")
+        toast.grab_set()
+
+        lbl = ctk.CTkLabel(
+            toast,
+            text=f"Syncing data for all channels (0/{len(channels_to_sync)})...",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            wraplength=380,
+        )
+        lbl.pack(pady=(20, 10))
+
+        prog = ctk.CTkProgressBar(toast, mode="indeterminate", width=320)
+        prog.pack(pady=(0, 15))
+        prog.start()
+
+        snapshots = [(ch, ch.name, ch.url, getattr(ch, "has_new_videos", False), getattr(ch, "has_new_shorts", False)) for ch in channels_to_sync]
+
+        config_mgr = getattr(self.app_controller, "config_mgr", None)
+
+        def _bg_sync(report):
+            results = []
+            for i, (ch, name, url, has_v, has_s) in enumerate(snapshots, 1):
+                report((i, name))
+                if has_v and not has_s:
+                    v_lim, s_lim = 50, None
+                elif has_s and not has_v:
+                    v_lim, s_lim = None, 50
+                else:
+                    v_lim, s_lim = 50, 50
+
+                try:
+                    res = fetch_channel_data(
+                        url,
+                        video_limit=v_lim,
+                        shorts_limit=s_lim,
+                        config_mgr=config_mgr,
+                    )
+                    results.append((ch, res))
+                except Exception as exc:
+                    results.append((ch, ChannelFetchResult(channel_url=url, error=str(exc))))
+            return results
+
+        def _close():
+            if self._widget_exists(toast):
+                prog.stop()
+                toast.destroy()
+
+        def _done(results):
+            _close()
+            current_tasks = getattr(self.app_controller, "queued_video_tasks", None)
+            if current_tasks is None:
+                current_tasks = [VideoTask.from_dict(d) for d in self.app_controller.config_mgr.get_video_queue()]
+                self.app_controller.queued_video_tasks = current_tasks
+
+            existing_by_id = {}
+            for t in current_tasks:
+                vid = extract_video_id(t.url)
+                if vid:
+                    existing_by_id[vid] = t
+                elif t.url:
+                    existing_by_id[t.url.strip().lower()] = t
+
+            all_added_tasks: List[VideoTask] = []
+            total_updated = 0
+
+            for ch, res in results:
+                if res.error:
+                    continue
+                if res.total_videos is not None:
+                    ch.total_videos = res.total_videos
+                if res.total_shorts is not None:
+                    ch.total_shorts = res.total_shorts
+
+                for f_task in (res.videos or []):
+                    vid = extract_video_id(f_task.url) or (f_task.url.strip().lower() if f_task.url else "")
+                    if vid and vid in existing_by_id:
+                        exist = existing_by_id[vid]
+                        changed = False
+                        if not exist.channel and ch.name:
+                            exist.channel = ch.name
+                            changed = True
+                        if (exist.duration_seconds <= 0) and f_task.duration_seconds > 0:
+                            exist.duration_seconds = f_task.duration_seconds
+                            exist.duration_text = f_task.duration_text
+                            changed = True
+                        if changed:
+                            total_updated += 1
+                    else:
+                        new_task = VideoTask(
+                            url=f_task.url,
+                            title=f_task.title,
+                            title_2=getattr(f_task, "title_2", "") or "",
+                            title_3=getattr(f_task, "title_3", "") or "",
+                            keywords=f_task.keywords or f_task.title,
+                            channel=ch.name,
+                            target_multiplier=3.0,
+                            max_runs=5,
+                            watchtime_duration="Full Video",
+                            enabled=True,
+                            duration_seconds=getattr(f_task, "duration_seconds", 0.0),
+                            duration_text=getattr(f_task, "duration_text", ""),
+                        )
+                        all_added_tasks.append(new_task)
+                        if vid:
+                            existing_by_id[vid] = new_task
+
+                # Re-evaluate channel new videos/shorts
+                ev, es, et = self.get_existing_video_counts_for_channel(ch.name)
+                yt_v = ch.total_videos if ch.total_videos is not None else 0
+                yt_s = ch.total_shorts if ch.total_shorts is not None else 0
+                ch.has_new_videos = (ch.total_videos is not None and yt_v > ev)
+                ch.has_new_shorts = (ch.total_shorts is not None and yt_s > es)
+
+            if all_added_tasks:
+                new_dicts = [t.to_dict() for t in all_added_tasks]
+                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts, deduplicate=True)
+                self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+            elif total_updated > 0:
+                self.app_controller.config_mgr.set_video_queue([t.to_dict() for t in current_tasks])
+
+            self.save_channels()
+            self.refresh_list()
+
+            queue = self._queue_view()
+            if queue is not None:
+                queue.refresh_list()
+            shorts_queue = self._shorts_queue_view()
+            if shorts_queue is not None:
+                shorts_queue.refresh_list()
+            update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+            if callable(update_dash):
+                update_dash()
+
+            added_shorts = sum(1 for t in all_added_tasks if "/shorts/" in (t.url or ""))
+            added_vids = len(all_added_tasks) - added_shorts
+
+            msg = f"Sync Data All completed for {len(channels_to_sync)} channel(s):"
+            if all_added_tasks:
+                msg += f"\n• Added {len(all_added_tasks)} new item(s) to queue ({added_vids} video(s), {added_shorts} short(s))."
+            else:
+                msg += "\n• All channels are up to date; no new items found."
+            if total_updated > 0:
+                msg += f"\n• Updated metadata for {total_updated} existing item(s)."
+
+            messagebox.showinfo("Sync Data All Complete", msg, parent=self)
+
+        def _progress(data):
+            idx, name = data
+            lbl.configure(text=f"Syncing '{name}' ({idx}/{len(channels_to_sync)})...")
+
+        def _failed(exc):
+            _close()
+            messagebox.showerror("Sync Error", f"Failed to sync all channel data:\n{exc}", parent=self)
+
+        self.app_controller.background_jobs.submit(
+            _bg_sync,
+            done=_done,
+            error=_failed,
+            progress=_progress,
+            current=lambda: self._widget_exists(self) and self._widget_exists(toast),
+            discard=_close,
+        )
 
     def sync_single_channel_data(self, channel: Channel) -> None:
         """Sync new available videos and/or shorts for a specific channel directly into the queue."""

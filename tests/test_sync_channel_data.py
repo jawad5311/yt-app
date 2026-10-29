@@ -268,3 +268,88 @@ def test_sync_single_channel_data_fetches_and_adds_to_queue(ctk_app):
     assert appended[1]["max_runs"] == 5
 
     view.destroy()
+
+
+def test_channels_view_has_sync_data_all_button(ctk_app):
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.background_jobs = BackgroundJobs()
+
+    view = ChannelsView(app, app)
+
+    buttons = []
+    for w in view.winfo_children():
+        if isinstance(w, ctk.CTkFrame):
+            for child in w.winfo_children():
+                if isinstance(child, ctk.CTkButton):
+                    buttons.append(child.cget("text"))
+
+    assert "⚡ Sync Data All" in buttons
+    assert "🔍 Check New" in buttons
+    assert "+ Add Channel" in buttons
+
+    view.destroy()
+
+
+def test_sync_data_all_syncs_all_channels(ctk_app):
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    existing_queue = []
+    app.config_mgr.get_video_queue.return_value = existing_queue
+    app.queued_video_tasks = []
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.stats_store.for_channel.return_value = []
+    app.background_jobs = BackgroundJobs()
+
+    view = ChannelsView(app, app)
+    ch1 = Channel(name="ChanOne", url="https://youtube.com/@chan1", total_videos=1, has_new_videos=True, has_new_shorts=False)
+    ch2 = Channel(name="ChanTwo", url="https://youtube.com/@chan2", total_shorts=1, has_new_videos=False, has_new_shorts=True)
+    view.channels = [ch1, ch2]
+    view.refresh_list()
+
+    vid1 = VideoTask(url="https://youtube.com/watch?v=c1v1", title="Chan 1 Video", duration_seconds=100)
+    short2 = VideoTask(url="https://youtube.com/shorts/c2s1", title="Chan 2 Short", duration_seconds=30)
+
+    res1 = ChannelFetchResult(channel_title="ChanOne", channel_url=ch1.url, total_videos=1, total_shorts=0, videos=[vid1])
+    res2 = ChannelFetchResult(channel_title="ChanTwo", channel_url=ch2.url, total_videos=0, total_shorts=1, videos=[short2])
+
+    def _fetch_side_effect(url, **kwargs):
+        if url == ch1.url:
+            return res1
+        return res2
+
+    app.config_mgr.append_video_tasks.side_effect = lambda tasks, deduplicate=True: tasks
+
+    with patch("src.ui.views.channels_view.fetch_channel_data", side_effect=_fetch_side_effect) as mock_fetch, \
+         patch("src.ui.views.channels_view.messagebox.showinfo"):
+        view.sync_data_all()
+
+        import time
+        time.sleep(0.1)
+        app.background_jobs.drain()
+
+        assert mock_fetch.call_count == 2
+        # ch1 only has new videos: video_limit=50, shorts_limit=None
+        mock_fetch.assert_any_call(ch1.url, video_limit=50, shorts_limit=None, config_mgr=app.config_mgr)
+        # ch2 only has new shorts: video_limit=None, shorts_limit=50
+        mock_fetch.assert_any_call(ch2.url, video_limit=None, shorts_limit=50, config_mgr=app.config_mgr)
+
+    app.config_mgr.append_video_tasks.assert_called_once()
+    appended = app.config_mgr.append_video_tasks.call_args[0][0]
+    assert len(appended) == 2
+    assert appended[0]["url"] == "https://youtube.com/watch?v=c1v1"
+    assert appended[0]["channel"] == "ChanOne"
+    assert appended[0]["target_multiplier"] == 3.0
+    assert appended[0]["max_runs"] == 5
+
+    assert appended[1]["url"] == "https://youtube.com/shorts/c2s1"
+    assert appended[1]["channel"] == "ChanTwo"
+    assert appended[1]["target_multiplier"] == 3.0
+    assert appended[1]["max_runs"] == 5
+
+    view.destroy()
