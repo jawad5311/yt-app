@@ -62,3 +62,41 @@ def test_format_watch_line_with_hours():
     rec2 = StatRecord(runs=1, watch_seconds=500.0, last_result="success")
     line2 = format_watch_line(rec2, use_hours=True)
     assert "8 min watched" in line2
+
+
+def test_channel_card_name_and_handle_format(ctk_app):
+    import customtkinter as ctk
+    from src.ui.background_jobs import BackgroundJobs
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.background_jobs = BackgroundJobs()
+
+    view = ChannelsView(app, app)
+    channel = Channel(
+        name="Tube Begins",
+        url="https://www.youtube.com/@TUBEbegins",
+    )
+    view.channels = [channel]
+    view.refresh_list()
+
+    cards = [w for w in view.scroll_frame.winfo_children() if isinstance(w, ctk.CTkFrame)]
+    assert len(cards) == 1
+
+    labels = []
+    def _collect(w):
+        for c in w.winfo_children():
+            if isinstance(c, ctk.CTkLabel):
+                labels.append(c.cget("text"))
+            _collect(c)
+    _collect(cards[0])
+
+    card_text = "\n".join(labels)
+    assert "1 - Tube Begins -- @TUBEbegins" in card_text
+    assert "Total Watch Time:" in card_text
+
+    view.destroy()

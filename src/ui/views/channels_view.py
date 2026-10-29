@@ -1931,10 +1931,11 @@ class ChannelsView(ctk.CTkFrame):
             elif not channel.enabled:
                 status_tag = " [DISABLED]"
 
-            line1 = f"{pos} - {clean_name}{status_tag}"
-            line2 = self.get_channel_handle(channel)
+            handle = self.get_channel_handle(channel)
+            handle_suffix = f" -- {handle}" if handle else ""
+            line1 = f"{pos} - {clean_name}{handle_suffix}{status_tag}"
             watch_time_str = self.get_channel_watch_time(channel)
-            line3 = f"Total Watch Time: {watch_time_str}"
+            line2 = f"Total Watch Time: {watch_time_str}"
 
             totals_parts = []
             if channel.total_videos is not None:
@@ -1953,7 +1954,7 @@ class ChannelsView(ctk.CTkFrame):
 
             lbl = ctk.CTkLabel(
                 info_frame,
-                text=f"{line1}\n{line2}\n{line3}",
+                text=f"{line1}\n{line2}",
                 font=ctk.CTkFont(size=13),
                 justify="left",
                 anchor="w",
