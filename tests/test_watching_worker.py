@@ -294,7 +294,7 @@ class TestWatchingWorker:
         assert len(queue_items) == 1
         assert queue_items[0]["title"] == "First Matched Video"
         assert queue_items[0]["channel"] == "Test Channel"
-        assert queue_items[0]["max_runs"] == 3
+        assert queue_items[0]["max_runs"] == 5
         assert queue_items[0]["duration_seconds"] == 190
         assert queue_items[0]["duration_text"] == "3:10"
 
@@ -630,7 +630,7 @@ class TestWatchingWorker:
         assert f"https://www.youtube.com/watch?v={home_vid}" in queue_urls
         assert f"https://www.youtube.com/watch?v={rec_vid}" in queue_urls
         for q in queue_items:
-            assert q["max_runs"] == 3
+            assert q["max_runs"] == 5
             assert q["duration_seconds"] == 180
 
         # Verify logs

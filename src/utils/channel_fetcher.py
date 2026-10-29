@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Tuple, Any, Dict, List, Optional, Set
+from typing import Tuple, Any, Callable, Dict, List, Optional, Set
 
 
 @dataclass
@@ -561,6 +561,7 @@ def fetch_playlist_items_api(
     is_short: bool,
     timeout: int = 15,
     cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Tuple[List[FetchedVideo], Optional[str], Optional[str], bool, bool, Optional[int]]:
     """Fetch items from a playlist using YouTube Data API v3.
     
@@ -642,6 +643,12 @@ def fetch_playlist_items_api(
         if limit > 0 and len(videos) >= limit:
             break
 
+        if progress_callback:
+            try:
+                progress_callback(len(videos), "shorts" if is_short else "videos")
+            except Exception:
+                pass
+
         next_token = page_data.get("nextPageToken")
         if not next_token:
             break
@@ -664,6 +671,7 @@ def fetch_channel_data_api(
     shorts_limit: Optional[int] = 50,
     timeout: int = 15,
     cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> ChannelFetchResult:
     """Fetch recent long-form videos and/or shorts from a channel via YouTube Data API v3."""
     clean_input = (channel_input or "").strip()
@@ -763,6 +771,7 @@ def fetch_channel_data_api(
             is_short=False,
             timeout=timeout,
             cancel_event=cancel_event,
+            progress_callback=progress_callback,
         )
         if v_err and "404" in v_err and uploads_playlist_id and target_pid != uploads_playlist_id:
             # Fallback to standard uploads playlist
@@ -773,6 +782,7 @@ def fetch_channel_data_api(
                 is_short=False,
                 timeout=timeout,
                 cancel_event=cancel_event,
+                progress_callback=progress_callback,
             )
         if v_err and not v_items:
             return ChannelFetchResult(
@@ -801,6 +811,7 @@ def fetch_channel_data_api(
             is_short=True,
             timeout=timeout,
             cancel_event=cancel_event,
+            progress_callback=progress_callback,
         )
         if s_err and "404" in s_err and uploads_playlist_id and shorts_playlist_id != uploads_playlist_id:
             # Fallback to standard uploads playlist
@@ -811,6 +822,7 @@ def fetch_channel_data_api(
                 is_short=True,
                 timeout=timeout,
                 cancel_event=cancel_event,
+                progress_callback=progress_callback,
             )
         if s_warn:
             warnings.append(s_warn)
@@ -894,6 +906,7 @@ def fetch_channel_data(
     timeout: int = 15,
     config_mgr: Optional[Any] = None,
     cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> ChannelFetchResult:
     """Fetch recent videos and shorts using YouTube Data API v3."""
     api_key = get_configured_youtube_api_key(config_mgr)
@@ -910,6 +923,7 @@ def fetch_channel_data(
         shorts_limit=shorts_limit,
         timeout=timeout,
         cancel_event=cancel_event,
+        progress_callback=progress_callback,
     )
 
 

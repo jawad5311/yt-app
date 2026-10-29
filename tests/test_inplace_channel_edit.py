@@ -31,8 +31,10 @@ def test_channel_row_no_edit_button(ctk_app):
 
     # Edit button is removed from channel card
     assert "✏ Edit" not in action_buttons
-    # Action buttons present: reorder, Videos, Archive, Delete
-    assert "🎬 Videos" in action_buttons
+    # Action buttons present: reorder, Sync All, Sync Recent, Archive, Delete
+    assert "🎬 Videos" not in action_buttons
+    assert "⚡ Sync All" in action_buttons
+    assert "⚡ Sync Recent" in action_buttons
     assert "📁 Archive" in action_buttons
     assert "🗑 Delete" in action_buttons
 
