@@ -113,7 +113,7 @@ class ChannelsView(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_frame,
-            text="⚡ Sync Data",
+            text="🔍 Check New",
             width=105,
             fg_color="#0D9488",
             hover_color="#0F766E",
@@ -1604,13 +1604,13 @@ class ChannelsView(ctk.CTkFrame):
             return
 
         toast = ctk.CTkToplevel(self)
-        toast.title("Syncing Channel Data...")
+        toast.title("Checking for New Videos...")
         toast.geometry("400x140")
         toast.grab_set()
 
         lbl = ctk.CTkLabel(
             toast,
-            text=f"Syncing channel totals from YouTube (0/{len(channels_with_urls)})...",
+            text=f"Checking channel totals from YouTube (0/{len(channels_with_urls)})...",
             font=ctk.CTkFont(size=13, weight="bold"),
             wraplength=360,
         )
@@ -1691,13 +1691,13 @@ class ChannelsView(ctk.CTkFrame):
             if queue is not None:
                 queue.refresh_list()
 
-            msg = f"Synced {updated_count} channel(s)."
+            msg = f"Checked {updated_count} channel(s)."
             if new_vids_channels > 0:
                 msg += f"\n\n🔥 {new_vids_channels} channel(s) have new videos available!"
             else:
                 msg += "\n\nAll channels are up to date with existing queue and stats."
 
-            messagebox.showinfo("Sync Complete", msg, parent=self)
+            messagebox.showinfo("Check Complete", msg, parent=self)
 
         def _progress(data):
             idx, name = data

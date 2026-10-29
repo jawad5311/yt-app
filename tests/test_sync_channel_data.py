@@ -29,7 +29,7 @@ def test_channels_view_has_sync_data_button_and_no_sync_names(ctk_app):
                 if isinstance(child, ctk.CTkButton):
                     buttons.append(child.cget("text"))
 
-    assert "⚡ Sync Data" in buttons
+    assert "🔍 Check New" in buttons
     assert "🔄 Sync Names" not in buttons
     assert "Sync Names" not in "".join(buttons)
 
