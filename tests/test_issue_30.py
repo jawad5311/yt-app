@@ -151,6 +151,13 @@ def test_fractional_cooldown_survives_reopening_and_saving_unchanged(tmp_path):
         app = MagicMock()
         app.config_mgr = mgr
         view = SettingsView(root, app)
+        # Verify sub-tabs layout, anchor, and button sizing
+        assert hasattr(view, "tabview")
+        assert view.tabview._anchor == "w"
+        assert view.tabview._segmented_button.cget("height") == 36
+        for tab_name in ["General", "Playback & Queue", "Ads", "Interactivity", "Email & Reports"]:
+            assert tab_name in view.tabview._tab_dict
+
         # Verify displayed text is preserved as fractional
         assert view.cooldown_entry.get() == "1.75"
 
