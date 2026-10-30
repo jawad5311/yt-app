@@ -1697,6 +1697,9 @@ class WatchingWorker:
         active_channels_msg = ", ".join(f"'{c.name}'" for c in self.channels if c.name)
         emit(self.log_queue, f"Target stored channel(s): {active_channels_msg}")
 
+        # Send start notification in headless browser before launching visible driver
+        self._send_start_notification()
+
         try:
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
             known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
@@ -2164,10 +2167,31 @@ class WatchingWorker:
             if hasattr(self, "channel_tracker"):
                 self.channel_tracker.on_stop()
 
-            # Send email report before tearing down the browser driver
+            # Close main driver first to release profile lock for headless reporting
+            close_driver(self.driver, log_queue=self.log_queue)
+            self.driver = None
+
+            # Deliver session watch time report via headless browser
             self._send_session_report(status=session_status, error=session_err)
 
-            close_driver(self.driver, log_queue=self.log_queue)
+    def _send_start_notification(self) -> None:
+        """Deliver start notification email via headless browser if enabled."""
+        if not self.config_mgr or not self.config_mgr.get_bool("EmailReportingEnabled", False):
+            return
+        try:
+            ch_names = [c.name for c in self.channels if c.name]
+            EmailReporter.send_start_notification(
+                account=self.account,
+                session_mode="Continuous Watching / Browsing",
+                config_mgr=self.config_mgr,
+                log_queue=self.log_queue,
+                extra_details={
+                    "Target Channels": ", ".join(ch_names) if ch_names else "None configured",
+                    "Browsing Limit": "Unlimited" if getattr(self, "is_unlimited", False) else f"{getattr(self, 'target_limit', 1)} videos",
+                },
+            )
+        except Exception as exc:
+            logging.debug(f"Failed dispatching start notification email: {exc}")
 
     def _send_session_report(self, status: str = "Completed", error: Optional[str] = None) -> None:
         """Deliver session watch time report if email reporting is enabled."""

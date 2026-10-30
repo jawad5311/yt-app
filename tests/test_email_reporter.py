@@ -332,3 +332,98 @@ class TestWorkerReportIntegration:
         assert report_arg.account_email == "auto.account@gmail.com"
         assert report_arg.session_mode == "Automation Queue"
         assert report_arg.status == "Completed"
+
+
+    @patch.object(EmailReporter, "send_start_notification")
+    def test_watching_worker_sends_start_notification_at_launch(self, mock_start, tmp_path):
+        from src.automation.watching_worker import WatchingWorker
+
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "EmailReportingEnabled": True,
+            "ReportRecipientEmail": "boss@company.com",
+        })
+        account = Account(email="worker.account@gmail.com", password="pwd")
+        ch = Channel(name="TestChannel", url="https://youtube.com/@test")
+
+        worker = WatchingWorker(
+            account=account,
+            channels=[ch],
+            config_mgr=cfg,
+        )
+
+        worker._send_start_notification()
+        mock_start.assert_called_once()
+        assert mock_start.call_args[1]["account"] == account
+        assert mock_start.call_args[1]["session_mode"] == "Continuous Watching / Browsing"
+
+    @patch.object(EmailReporter, "send_start_notification")
+    def test_automation_worker_sends_start_notification_at_launch(self, mock_start, tmp_path):
+        from src.automation.worker import AutomationWorker
+
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "EmailReportingEnabled": True,
+            "ReportRecipientEmail": "boss@company.com",
+        })
+        account = Account(email="auto.account@gmail.com", password="pwd")
+
+        worker = AutomationWorker(
+            account=account,
+            video_tasks=[],
+            config_mgr=cfg,
+            worker_id=0,
+        )
+
+        worker._send_start_notification()
+        mock_start.assert_called_once()
+        assert mock_start.call_args[1]["account"] == account
+        assert mock_start.call_args[1]["session_mode"] == "Automation Queue"
+
+
+class TestHeadlessEmailDelivery:
+    @patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=True)
+    def test_send_start_notification_dispatches_headless(self, mock_headless, tmp_path):
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "EmailReportingEnabled": True,
+            "ReportRecipientEmail": "user@example.com",
+            "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
+        })
+        account = Account(email="active@gmail.com", password="123")
+
+        ok = EmailReporter.send_start_notification(
+            account=account,
+            session_mode="Continuous Watching / Browsing",
+            config_mgr=cfg,
+        )
+
+        assert ok is True
+        mock_headless.assert_called_once()
+        args = mock_headless.call_args[1]
+        assert args["account"] == account
+        assert "[Browsing Started]" in args["subject"]
+        assert args["recipient_email"] == "user@example.com"
+        assert "YOUTUBE VIEWS APP - AUTOMATION STARTED" in args["body_text"]
+
+    @patch("src.automation.driver.setup_driver")
+    @patch("src.automation.driver.close_driver")
+    @patch.object(EmailReporter, "_deliver_via_gmail_compose", return_value=True)
+    def test_send_via_headless_browser_gmail_flow(self, mock_deliver, mock_close, mock_setup):
+        account = Account(email="test@gmail.com", password="pwd")
+        mock_driver = MagicMock()
+        mock_setup.return_value = mock_driver
+
+        log_q = queue.Queue()
+        ok = EmailReporter.send_via_headless_browser_gmail(
+            account=account,
+            subject="Test Subject",
+            body_text="Test Body",
+            recipient_email="recipient@gmail.com",
+            log_queue=log_q,
+        )
+
+        assert ok is True
+        mock_setup.assert_called_once_with(account=account, log_queue=log_q, headless=True)
+        mock_deliver.assert_called_once()
+        mock_close.assert_called_once_with(mock_driver, log_queue=log_q)

@@ -88,6 +88,7 @@ def setup_driver(
     log_queue: Optional[queue.Queue] = None,
     adblock_path: Optional[Path] = None,
     known_accounts: Optional[Union[List[Account], List[Dict[str, Any]]]] = None,
+    headless: bool = False,
 ) -> uc.Chrome:
     """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
     resolved_known: Optional[List[Account]] = None
@@ -131,6 +132,8 @@ def setup_driver(
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--window-size=1280,800")
         options.add_argument("--lang=en-US,en")
+        if headless:
+            options.add_argument("--headless=new")
 
         chrome_version = get_chrome_version()
         chrome_major = None

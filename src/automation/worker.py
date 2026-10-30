@@ -391,6 +391,10 @@ class AutomationWorker:
         emit(self.log_queue, f"Starting automation session for account: {self.account.email}")
         direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", False)
 
+        # Send start notification in headless browser for the primary worker thread
+        if self.worker_id == 0:
+            self._send_start_notification()
+
         if self.dispatcher is not None:
             total = self.dispatcher.register_worker(self.worker_id)
         else:
@@ -519,10 +523,30 @@ class AutomationWorker:
             if hasattr(self, "channel_tracker"):
                 self.channel_tracker.on_stop()
 
-            # Send email report before tearing down the browser driver
+            # Close main driver first to release profile lock for headless reporting
+            close_driver(self.driver, log_queue=self.log_queue)
+            self.driver = None
+
+            # Deliver session watch time report via headless browser
             self._send_session_report(status=session_status, error=session_err)
 
-            close_driver(self.driver, log_queue=self.log_queue)
+    def _send_start_notification(self) -> None:
+        """Deliver start notification email via headless browser if enabled."""
+        if not self.config_mgr or not self.config_mgr.get_bool("EmailReportingEnabled", False):
+            return
+        try:
+            EmailReporter.send_start_notification(
+                account=self.account,
+                session_mode="Automation Queue",
+                config_mgr=self.config_mgr,
+                log_queue=self.log_queue,
+                extra_details={
+                    "Queued Videos": len(self.video_tasks),
+                    "Loops": self.config_mgr.get_int("AutomationLoops", 1),
+                },
+            )
+        except Exception as exc:
+            logging.debug(f"Failed dispatching start notification email: {exc}")
 
     def _send_session_report(self, status: str = "Completed", error: Optional[str] = None) -> None:
         """Deliver session watch time report if email reporting is enabled."""

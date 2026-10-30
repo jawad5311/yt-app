@@ -1,10 +1,11 @@
 """Session Watch Time Email Reporter.
 
-Generates and delivers detailed session watch time reports:
+Generates and delivers detailed session watch time reports and start notifications:
+- Sends 'Automation Started' email notification in a headless browser when automation begins.
 - Notes baseline channel watch times at session start.
 - Calculates per-channel watch times and combined total session watch time.
-- Supports delivery via the logged-in Google account in the active Chrome browser
-  profile (mail.google.com) or via standard SMTP (smtp.gmail.com).
+- Supports delivery via the logged-in Google account in a headless Chrome browser
+  profile (mail.google.com), the active browser, or via standard SMTP (smtp.gmail.com).
 """
 
 from dataclasses import dataclass, field
@@ -237,7 +238,7 @@ class SessionReport:
 
 
 class EmailReporter:
-    """Manages report delivery via logged-in Chrome Gmail or SMTP."""
+    """Manages report and notification delivery via headless Chrome Gmail, active browser, or SMTP."""
 
     @staticmethod
     def send_via_smtp(
@@ -304,32 +305,26 @@ class EmailReporter:
                 emit(log_queue, f"SMTP email delivery failed: {exc}", logging.ERROR)
             return False
 
-    @staticmethod
-    def send_via_browser_gmail(
+    @classmethod
+    def _deliver_via_gmail_compose(
+        cls,
         driver: Any,
-        report: SessionReport,
+        subject: str,
+        plain_text: str,
         recipient_email: str,
         log_queue: Optional[queue.Queue] = None,
+        email_description: str = "report",
     ) -> bool:
-        """Deliver report email using the logged-in Gmail session in the active Chrome browser."""
+        """Core Gmail compose automation in Chrome (works for visible and headless Chrome)."""
         if not driver:
             if log_queue:
-                emit(log_queue, "Browser Gmail delivery failed: browser driver is unavailable.", logging.WARNING)
+                emit(log_queue, f"Gmail {email_description} delivery failed: browser driver is unavailable.", logging.WARNING)
             return False
-
-        if not recipient_email or "@" not in recipient_email:
-            if log_queue:
-                emit(log_queue, f"Browser Gmail delivery skipped: invalid recipient '{recipient_email}'.", logging.WARNING)
-            return False
-
-        subject = report.generate_subject()
-        plain_text = report.generate_plain_text()
 
         try:
             if log_queue:
-                emit(log_queue, f"Opening logged-in Gmail web session to send report to '{recipient_email}'...")
+                emit(log_queue, f"Navigating to Gmail web compose to send {email_description} to '{recipient_email}'...")
 
-            # Direct Gmail compose URL with prefilled recipient and subject
             compose_url = (
                 f"https://mail.google.com/mail/?view=cm&fs=1"
                 f"&to={quote(recipient_email)}"
@@ -338,35 +333,26 @@ class EmailReporter:
             driver.get(compose_url)
             time.sleep(3.5)
 
-            # Wait for compose window to load
-            wait = WebDriverWait(driver, 15)
-
-            # Check if Gmail redirected to sign-in (not logged in)
             current_url = driver.current_url or ""
             if "accounts.google.com" in current_url:
                 if log_queue:
-                    emit(log_queue, "Browser Gmail delivery failed: Google account is not signed in.", logging.ERROR)
+                    emit(log_queue, f"Gmail {email_description} delivery failed: Google account is not signed in for this profile.", logging.ERROR)
                 return False
 
-            # 1. Ensure Recipient is populated
-            to_field = None
+            # Ensure Recipient is populated if not auto-filled
             try:
                 to_field = driver.find_element(By.XPATH, "//input[@name='to' or @aria-label='To' or @aria-label='To recipients']")
-            except Exception:
-                pass
-
-            if to_field:
-                try:
+                if to_field:
                     val = to_field.get_attribute("value") or ""
                     if recipient_email.lower() not in val.lower():
                         to_field.click()
                         to_field.clear()
                         to_field.send_keys(recipient_email)
                         to_field.send_keys(Keys.ENTER)
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
-            # 2. Locate the compose message body (with wait retry for Gmail to render)
+            # Locate the compose message body (with wait retry for Gmail to render)
             body_element = None
             body_selectors = [
                 "//div[@role='textbox' and (contains(@aria-label, 'Message Body') or contains(@aria-label, 'Body'))]",
@@ -393,23 +379,20 @@ class EmailReporter:
 
             if not body_element:
                 if log_queue:
-                    emit(log_queue, "Browser Gmail delivery failed: could not locate Gmail compose text area.", logging.ERROR)
+                    emit(log_queue, f"Gmail delivery failed: could not locate Gmail compose text area.", logging.ERROR)
                 return False
 
             # Focus and write the body content
             body_element.click()
             time.sleep(0.5)
 
-            # Write text cleanly into the contenteditable div
             try:
-                # Use execute_script for clean multiline formatting without key simulation delays
                 driver.execute_script(
                     "arguments[0].innerText = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
                     body_element,
                     plain_text,
                 )
             except Exception:
-                # Fallback to character chunk typing
                 lines = plain_text.split("\n")
                 for line in lines:
                     body_element.send_keys(line)
@@ -417,10 +400,8 @@ class EmailReporter:
 
             time.sleep(1.0)
 
-            # 3. Trigger Send
+            # Trigger Send
             sent = False
-
-            # Option A: Send button click
             send_btn_selectors = [
                 "//div[@role='button' and @data-tooltip and contains(@data-tooltip, 'Send')]",
                 "//div[@role='button' and @aria-label and contains(@aria-label, 'Send')]",
@@ -440,7 +421,6 @@ class EmailReporter:
                 except Exception:
                     continue
 
-            # Option B: Shortcut fallback (Ctrl+Enter)
             if not sent:
                 try:
                     body_element.send_keys(Keys.CONTROL, Keys.ENTER)
@@ -450,18 +430,197 @@ class EmailReporter:
 
             if not sent:
                 if log_queue:
-                    emit(log_queue, "Browser Gmail delivery failed: could not trigger Send button.", logging.ERROR)
+                    emit(log_queue, f"Gmail delivery failed: could not trigger Send button.", logging.ERROR)
                 return False
 
-            # Wait briefly to confirm send
             time.sleep(2.5)
             if log_queue:
-                emit(log_queue, f"Session watch time report successfully sent to '{recipient_email}' via logged-in Gmail browser.")
+                emit(log_queue, f"Successfully sent {email_description} to '{recipient_email}' via Gmail.")
             return True
 
         except Exception as exc:
             if log_queue:
-                emit(log_queue, f"Browser Gmail delivery error: {exc}", logging.ERROR)
+                emit(log_queue, f"Gmail {email_description} delivery error: {exc}", logging.ERROR)
+            return False
+
+    @classmethod
+    def send_via_browser_gmail(
+        cls,
+        driver: Any,
+        report: SessionReport,
+        recipient_email: str,
+        log_queue: Optional[queue.Queue] = None,
+    ) -> bool:
+        """Deliver report email using an active, visible Chrome browser session."""
+        return cls._deliver_via_gmail_compose(
+            driver=driver,
+            subject=report.generate_subject(),
+            plain_text=report.generate_plain_text(),
+            recipient_email=recipient_email,
+            log_queue=log_queue,
+            email_description="session watch time report",
+        )
+
+    @classmethod
+    def send_via_headless_browser_gmail(
+        cls,
+        account: Account,
+        subject: str,
+        body_text: str,
+        recipient_email: str,
+        log_queue: Optional[queue.Queue] = None,
+        email_description: str = "email notification",
+    ) -> bool:
+        """Launch headless Chrome with account profile, send email via Gmail web, and close."""
+        from .driver import setup_driver, close_driver
+
+        if not account or not getattr(account, "email", None):
+            if log_queue:
+                emit(log_queue, f"Headless Gmail delivery failed: no account specified.", logging.WARNING)
+            return False
+
+        if not recipient_email or "@" not in recipient_email:
+            if log_queue:
+                emit(log_queue, f"Headless Gmail delivery skipped: invalid recipient '{recipient_email}'.", logging.WARNING)
+            return False
+
+        if log_queue:
+            emit(log_queue, f"Opening headless browser for account '{account.email}' to send {email_description} to '{recipient_email}'...")
+
+        driver = None
+        try:
+            driver = setup_driver(
+                account=account,
+                log_queue=log_queue,
+                headless=True,
+            )
+            return cls._deliver_via_gmail_compose(
+                driver=driver,
+                subject=subject,
+                plain_text=body_text,
+                recipient_email=recipient_email,
+                log_queue=log_queue,
+                email_description=email_description,
+            )
+        except Exception as exc:
+            if log_queue:
+                emit(log_queue, f"Headless Gmail {email_description} delivery error: {exc}", logging.ERROR)
+            return False
+        finally:
+            if driver is not None:
+                close_driver(driver, log_queue=log_queue)
+
+    @classmethod
+    def send_start_notification(
+        cls,
+        account: Account,
+        session_mode: str,
+        config_mgr: Any,
+        log_queue: Optional[queue.Queue] = None,
+        extra_details: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Send an email notification when automation or continuous watching starts."""
+        if not config_mgr or not config_mgr.get_bool("EmailReportingEnabled", False):
+            return False
+
+        recipient = (config_mgr.get_setting("ReportRecipientEmail", "") or "").strip()
+        if not recipient or "@" not in recipient:
+            return False
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        email_addr = getattr(account, "email", "N/A")
+        mode_label = "Browsing" if "watch" in session_mode.lower() or "brows" in session_mode.lower() else "Automation"
+
+        subject = f"[{mode_label} Started] Session started for {email_addr}"
+
+        lines = [
+            "=" * 65,
+            "           YOUTUBE VIEWS APP - AUTOMATION STARTED               ",
+            "=" * 65,
+            f"Account:              {email_addr}",
+            f"Session Mode:         {session_mode}",
+            f"Started At:           {now_str}",
+            f"Recipient:            {recipient}",
+            "-" * 65,
+            "SESSION CONFIGURATION:",
+        ]
+        if extra_details:
+            for k, v in extra_details.items():
+                lines.append(f"  - {k}: {v}")
+        lines.extend([
+            "-" * 65,
+            "The YouTube automation session has successfully started in the background.",
+            "A full summary report will be sent to this email when the session",
+            "completes or is stopped.",
+            "=" * 65,
+            "Notification automatically generated by YouTube Views App.",
+        ])
+        plain_text = "\n".join(lines)
+
+        method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip()
+        smtp_pass = config_mgr.get_setting("SmtpPassword", "")
+
+        # If SMTP is explicitly chosen and password provided, use SMTP
+        if "smtp" in method.lower() and "browser" not in method.lower() and smtp_pass:
+            return cls._send_plain_smtp(
+                recipient=recipient,
+                subject=subject,
+                text=plain_text,
+                config_mgr=config_mgr,
+                account=account,
+                log_queue=log_queue,
+            )
+
+        # Default: Headless Browser Gmail
+        return cls.send_via_headless_browser_gmail(
+            account=account,
+            subject=subject,
+            body_text=plain_text,
+            recipient_email=recipient,
+            log_queue=log_queue,
+            email_description="start notification email",
+        )
+
+    @staticmethod
+    def _send_plain_smtp(
+        recipient: str,
+        subject: str,
+        text: str,
+        config_mgr: Any,
+        account: Optional[Account] = None,
+        log_queue: Optional[queue.Queue] = None,
+    ) -> bool:
+        host = config_mgr.get_setting("SmtpHost", "smtp.gmail.com")
+        port = config_mgr.get_int("SmtpPort", 587)
+        user = config_mgr.get_setting("SmtpUsername", "") or (account.email if account else "")
+        pwd = config_mgr.get_setting("SmtpPassword", "") or (account.password if account else "")
+        sender = config_mgr.get_setting("SenderEmail", "") or user
+
+        if not pwd or not sender:
+            return False
+
+        msg = MIMEText(text, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = sender
+        msg["To"] = recipient
+
+        try:
+            if port == 465:
+                server = smtplib.SMTP_SSL(host, port, timeout=25)
+            else:
+                server = smtplib.SMTP(host, port, timeout=25)
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+            server.login(user, pwd)
+            server.sendmail(sender, [recipient], msg.as_string())
+            server.quit()
+            if log_queue:
+                emit(log_queue, f"Start notification successfully emailed to '{recipient}' via SMTP.")
+            return True
+        except Exception as exc:
+            if log_queue:
+                emit(log_queue, f"SMTP start notification delivery failed: {exc}", logging.ERROR)
             return False
 
     @classmethod
@@ -514,50 +673,29 @@ class EmailReporter:
                 log_queue=log_queue,
             )
 
-        # 2. Explicit Browser Gmail method
-        if "browser" in method.lower() and "auto" not in method.lower():
-            if driver is not None:
-                return cls.send_via_browser_gmail(driver, report, recipient, log_queue=log_queue)
-            elif has_smtp_creds:
-                if log_queue:
-                    emit(log_queue, "Browser driver unavailable; falling back to SMTP.", logging.WARNING)
-                return cls.send_via_smtp(
-                    report=report,
-                    recipient_email=recipient,
-                    host=smtp_host,
-                    port=smtp_port,
-                    username=smtp_user,
-                    password=smtp_pass,
-                    sender_email=sender,
-                    log_queue=log_queue,
-                )
-            else:
-                if log_queue:
-                    emit(log_queue, "Browser driver unavailable and SMTP credentials not configured.", logging.ERROR)
-                return False
+        # 2. If an active browser driver is supplied and explicit visible browser requested:
+        if driver is not None and "active" in method.lower():
+            return cls.send_via_browser_gmail(driver, report, recipient, log_queue=log_queue)
 
-        # 3. Auto Mode:
-        # Prefer browser Gmail if driver is open and ready; fallback to SMTP if needed.
-        # Or if SMTP credentials are provided and driver is not present, use SMTP.
-        if driver is not None:
-            browser_ok = cls.send_via_browser_gmail(driver, report, recipient, log_queue=log_queue)
-            if browser_ok:
+        # 3. Headless Browser Gmail (Default / Auto):
+        # Uses headless browser with the account profile if account is available.
+        if account is not None:
+            headless_ok = cls.send_via_headless_browser_gmail(
+                account=account,
+                subject=report.generate_subject(),
+                body_text=report.generate_plain_text(),
+                recipient_email=recipient,
+                log_queue=log_queue,
+                email_description="session watch time report",
+            )
+            if headless_ok:
                 return True
-            if has_smtp_creds:
-                if log_queue:
-                    emit(log_queue, "Browser Gmail send did not succeed; retrying via SMTP fallback...", logging.INFO)
-                return cls.send_via_smtp(
-                    report=report,
-                    recipient_email=recipient,
-                    host=smtp_host,
-                    port=smtp_port,
-                    username=smtp_user,
-                    password=smtp_pass,
-                    sender_email=sender,
-                    log_queue=log_queue,
-                )
-            return False
 
+        # Fallback to driver if driver is available
+        if driver is not None:
+            return cls.send_via_browser_gmail(driver, report, recipient, log_queue=log_queue)
+
+        # Fallback to SMTP if creds available
         if has_smtp_creds:
             return cls.send_via_smtp(
                 report=report,
@@ -573,7 +711,7 @@ class EmailReporter:
         if log_queue:
             emit(
                 log_queue,
-                "Email reporting could not dispatch: no active browser session and no SMTP credentials configured.",
+                "Email reporting could not dispatch: no account profile or browser available, and no SMTP credentials configured.",
                 logging.WARNING,
             )
         return False

@@ -108,7 +108,7 @@ class ConfigManager:
             "RandomMicroPauses": True,
             "EmailReportingEnabled": False,
             "ReportRecipientEmail": "",
-            "ReportEmailMethod": "Auto (Browser Gmail / SMTP Fallback)",
+            "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
             "SmtpHost": "smtp.gmail.com",
             "SmtpPort": 587,
             "SmtpUsername": "",

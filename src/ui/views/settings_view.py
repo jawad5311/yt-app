@@ -11,8 +11,8 @@ from ...utils.scroll_helper import setup_smooth_scrolling
 
 APPEARANCE_OPTIONS = ["Dark", "Light", "System"]
 EMAIL_METHOD_OPTIONS = [
-    "Auto (Browser Gmail / SMTP Fallback)",
-    "Browser Gmail (Logged-in Account)",
+    "Headless Browser Gmail (Recommended)",
+    "Active Browser Gmail",
     "SMTP Connection",
 ]
 QUALITY_OPTIONS = ["360p", "480p", "Random (360p / 480p)"]
