@@ -77,8 +77,6 @@ class ConfigManager:
         "OpenRouterKey",
         "CommentType",
         "AccessKey",
-        "LikeComments",
-        "LikeVideo",
     }
     REMOVED_VIDEO_FIELDS = {"comment_type", "custom_comment", "like"}
 
@@ -103,6 +101,8 @@ class ConfigManager:
             "VariableSpeed": False,
             "ToggleCaptions": True,
             "ExpandDescription": True,
+            "LikeVideo": True,
+            "LikeComments": True,
             "AdjustQuality": True,
             "QualityLevel": "360p",
             "RandomMicroPauses": True,
