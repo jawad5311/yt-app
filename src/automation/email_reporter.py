@@ -366,7 +366,7 @@ class EmailReporter:
                 except Exception:
                     pass
 
-            # 2. Locate the compose message body
+            # 2. Locate the compose message body (with wait retry for Gmail to render)
             body_element = None
             body_selectors = [
                 "//div[@role='textbox' and (contains(@aria-label, 'Message Body') or contains(@aria-label, 'Body'))]",
@@ -374,17 +374,22 @@ class EmailReporter:
                 "//div[@aria-label='Message Body']",
                 "//div[@role='textbox']",
             ]
-            for sel in body_selectors:
-                try:
-                    elems = driver.find_elements(By.XPATH, sel)
-                    for el in elems:
-                        if el.is_displayed():
-                            body_element = el
+            start_wait = time.time()
+            while time.time() - start_wait < 18:
+                for sel in body_selectors:
+                    try:
+                        elems = driver.find_elements(By.XPATH, sel)
+                        for el in elems:
+                            if el.is_displayed():
+                                body_element = el
+                                break
+                        if body_element:
                             break
-                    if body_element:
-                        break
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
+                if body_element:
+                    break
+                time.sleep(1.0)
 
             if not body_element:
                 if log_queue:
