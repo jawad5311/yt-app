@@ -47,6 +47,8 @@ def create_mock_settings_view(config_mgr, app_controller=None):
     view.quality_switch = make_dummy_switch(True)
     view.quality_menu = make_dummy_menu("360p")
     view.micro_pause_switch = make_dummy_switch(True)
+    view.like_video_switch = make_dummy_switch(True)
+    view.like_comments_switch = make_dummy_switch(True)
     view.appearance_menu = make_dummy_menu("Dark")
 
     return view

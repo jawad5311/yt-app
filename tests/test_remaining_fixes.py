@@ -21,21 +21,21 @@ from src.ui.views.settings_view import QUALITY_OPTIONS
 
 
 # ---------------------------------------------------------------------------
-# Issue 1: Automated likes and comments disabled
+# Issue 1: Automated likes and comments enabled and configurable
 # ---------------------------------------------------------------------------
 
-def test_issue_1_likes_removed_from_defaults_and_purged(tmp_path):
+def test_issue_1_likes_enabled_in_defaults_and_persistable(tmp_path):
     settings = ConfigManager.DEFAULT_DATA["settings"]
-    assert "LikeComments" not in settings
-    assert "LikeVideo" not in settings
-    assert "LikeComments" in ConfigManager.REMOVED_SETTINGS
-    assert "LikeVideo" in ConfigManager.REMOVED_SETTINGS
+    assert settings["LikeComments"] is True
+    assert settings["LikeVideo"] is True
+    assert "LikeComments" not in ConfigManager.REMOVED_SETTINGS
+    assert "LikeVideo" not in ConfigManager.REMOVED_SETTINGS
 
     cfg_file = tmp_path / "settings.json"
     cfg_file.write_text(json.dumps({
         "settings": {
-            "LikeComments": True,
-            "LikeVideo": True,
+            "LikeComments": False,
+            "LikeVideo": False,
         },
         "videos": [],
         "channels": [],
@@ -43,28 +43,36 @@ def test_issue_1_likes_removed_from_defaults_and_purged(tmp_path):
 
     mgr = ConfigManager(config_file=cfg_file)
     saved_settings = json.loads(cfg_file.read_text(encoding="utf-8"))["settings"]
-    assert "LikeComments" not in saved_settings
-    assert "LikeVideo" not in saved_settings
+    assert saved_settings["LikeComments"] is False
+    assert saved_settings["LikeVideo"] is False
 
 
-def test_issue_1_workers_disable_likes(tmp_path):
+def test_issue_1_workers_respect_like_settings(tmp_path):
     mgr = ConfigManager(config_file=tmp_path / "settings.json")
     acc = Account(email="test@gmail.com", password="pwd")
     task = VideoTask(url="https://youtube.com/watch?v=12345678901")
 
+    # Default is True
     worker = AutomationWorker(account=acc, video_tasks=[task], config_mgr=mgr)
     enabled, cfg = worker._interactivity_settings()
-    assert cfg["like_comments"] is False
-    assert cfg["like_video"] is False
+    assert cfg["like_comments"] is True
+    assert cfg["like_video"] is True
 
     w_worker = WatchingWorker(account=acc, channels=[], config_mgr=mgr)
     w_enabled, w_cfg = w_worker._interactivity_settings()
-    assert w_cfg["like_comments"] is False
-    assert w_cfg["like_video"] is False
+    assert w_cfg["like_comments"] is True
+    assert w_cfg["like_video"] is True
 
-    sim = HumanInteractivitySimulator()
-    assert sim.like_comments is False
-    assert sim.like_video is False
+    sim = HumanInteractivitySimulator(like_comments=True, like_video=True)
+    assert sim.like_comments is True
+    assert sim.like_video is True
+
+    # When toggled off in settings
+    mgr.set_setting("LikeComments", False)
+    mgr.set_setting("LikeVideo", False)
+    _, cfg_off = worker._interactivity_settings()
+    assert cfg_off["like_comments"] is False
+    assert cfg_off["like_video"] is False
 
 
 # ---------------------------------------------------------------------------

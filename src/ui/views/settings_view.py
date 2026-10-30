@@ -210,7 +210,27 @@ class SettingsView(ctk.CTkFrame):
             self.micro_pause_switch.select()
         else:
             self.micro_pause_switch.deselect()
-        self.micro_pause_switch.pack(anchor="w", padx=30, pady=(2, 15))
+        self.micro_pause_switch.pack(anchor="w", padx=30, pady=(2, 4))
+
+        self.like_video_switch = ctk.CTkSwitch(
+            container,
+            text="Automatically Like Video (organic like during playback)",
+        )
+        if self.config_mgr.get_bool("LikeVideo", True):
+            self.like_video_switch.select()
+        else:
+            self.like_video_switch.deselect()
+        self.like_video_switch.pack(anchor="w", padx=30, pady=(2, 4))
+
+        self.like_comments_switch = ctk.CTkSwitch(
+            container,
+            text="Automatically Like Comments (like 1-2 comments while browsing comments)",
+        )
+        if self.config_mgr.get_bool("LikeComments", True):
+            self.like_comments_switch.select()
+        else:
+            self.like_comments_switch.deselect()
+        self.like_comments_switch.pack(anchor="w", padx=30, pady=(2, 15))
 
         # Appearance Mode
         ctk.CTkLabel(container, text="Appearance Mode:", font=ctk.CTkFont(weight="bold")).pack(
@@ -362,6 +382,10 @@ class SettingsView(ctk.CTkFrame):
         validated["QualityLevel"] = selected_quality
 
         validated["RandomMicroPauses"] = bool(self.micro_pause_switch.get())
+        if hasattr(self, "like_video_switch"):
+            validated["LikeVideo"] = bool(self.like_video_switch.get())
+        if hasattr(self, "like_comments_switch"):
+            validated["LikeComments"] = bool(self.like_comments_switch.get())
 
         # 12. Appearance mode
         selected_appearance = self.appearance_menu.get()
