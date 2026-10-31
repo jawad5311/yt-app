@@ -460,24 +460,20 @@ class SettingsView(ctk.CTkFrame):
             scroll_email,
             text="Session Watch Time Email Reporting",
             font=ctk.CTkFont(size=16, weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(15, 6))
+        ).pack(anchor="w", padx=15, pady=(15, 4))
 
-        self.email_report_switch = ctk.CTkSwitch(
+        ctk.CTkLabel(
             scroll_email,
-            text="Enable Session Email Reporting (send summary after run completes)",
-            font=ctk.CTkFont(weight="bold"),
-        )
-        if self.config_mgr.get_bool("EmailReportingEnabled", False):
-            self.email_report_switch.select()
-        else:
-            self.email_report_switch.deselect()
-        self.email_report_switch.pack(anchor="w", padx=15, pady=(5, 12))
+            text="Reports are automatically sent to the email below when automation starts and finishes.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+        ).pack(anchor="w", padx=15, pady=(0, 12))
 
         ctk.CTkLabel(scroll_email, text="Send Report To (Recipient Email):", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
-        self.recipient_email_entry = ctk.CTkEntry(scroll_email, width=320, placeholder_text="e.g. yourname@gmail.com")
-        self.recipient_email_entry.insert(0, self.config_mgr.get_setting("ReportRecipientEmail", ""))
+        self.recipient_email_entry = ctk.CTkEntry(scroll_email, width=320, placeholder_text="jawad@ytgrowthexpert.com")
+        self.recipient_email_entry.insert(0, self.config_mgr.get_setting("ReportRecipientEmail", "jawad@ytgrowthexpert.com"))
         self.recipient_email_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         ctk.CTkLabel(scroll_email, text="Email Delivery Method:", font=ctk.CTkFont(weight="bold")).pack(
@@ -680,39 +676,37 @@ class SettingsView(ctk.CTkFrame):
             validated["LikeComments"] = bool(self.like_comments_switch.get())
 
         # 12. Email Reporting Settings
-        if hasattr(self, "email_report_switch"):
-            email_enabled = bool(self.email_report_switch.get())
-            recipient = self.recipient_email_entry.get().strip() if hasattr(self, "recipient_email_entry") else ""
-            if email_enabled and (not recipient or "@" not in recipient or "." not in recipient):
-                messagebox.showerror("Error", "Please provide a valid Recipient Email address to enable email reporting.")
+        recipient = self.recipient_email_entry.get().strip() if hasattr(self, "recipient_email_entry") else ""
+        if recipient and ("@" not in recipient or "." not in recipient):
+            messagebox.showerror("Error", "Please provide a valid Recipient Email address.")
+            return
+
+        validated["EmailReportingEnabled"] = bool(recipient)
+        validated["ReportRecipientEmail"] = recipient
+
+        method = self.email_method_menu.get() if hasattr(self, "email_method_menu") else EMAIL_METHOD_OPTIONS[0]
+        if method not in EMAIL_METHOD_OPTIONS:
+            method = EMAIL_METHOD_OPTIONS[0]
+        validated["ReportEmailMethod"] = method
+
+        validated["SmtpHost"] = self.smtp_host_entry.get().strip() if hasattr(self, "smtp_host_entry") else "smtp.gmail.com"
+
+        if hasattr(self, "smtp_port_entry"):
+            raw_port = self.smtp_port_entry.get().strip()
+            try:
+                port_val = int(raw_port)
+                if port_val < 1 or port_val > 65535:
+                    raise ValueError
+                validated["SmtpPort"] = port_val
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "SMTP Port must be a valid port integer between 1 and 65535.")
                 return
 
-            validated["EmailReportingEnabled"] = email_enabled
-            validated["ReportRecipientEmail"] = recipient
-
-            method = self.email_method_menu.get() if hasattr(self, "email_method_menu") else EMAIL_METHOD_OPTIONS[0]
-            if method not in EMAIL_METHOD_OPTIONS:
-                method = EMAIL_METHOD_OPTIONS[0]
-            validated["ReportEmailMethod"] = method
-
-            validated["SmtpHost"] = self.smtp_host_entry.get().strip() if hasattr(self, "smtp_host_entry") else "smtp.gmail.com"
-
-            if hasattr(self, "smtp_port_entry"):
-                raw_port = self.smtp_port_entry.get().strip()
-                try:
-                    port_val = int(raw_port)
-                    if port_val < 1 or port_val > 65535:
-                        raise ValueError
-                    validated["SmtpPort"] = port_val
-                except (ValueError, TypeError):
-                    messagebox.showerror("Error", "SMTP Port must be a valid port integer between 1 and 65535.")
-                    return
-
-            if hasattr(self, "smtp_user_entry"):
-                validated["SmtpUsername"] = self.smtp_user_entry.get().strip()
-                validated["SenderEmail"] = self.smtp_user_entry.get().strip()
-            if hasattr(self, "smtp_pass_entry"):
-                validated["SmtpPassword"] = self.smtp_pass_entry.get().strip()
+        if hasattr(self, "smtp_user_entry"):
+            validated["SmtpUsername"] = self.smtp_user_entry.get().strip()
+            validated["SenderEmail"] = self.smtp_user_entry.get().strip()
+        if hasattr(self, "smtp_pass_entry"):
+            validated["SmtpPassword"] = self.smtp_pass_entry.get().strip()
 
         # 13. Appearance mode
         selected_appearance = self.appearance_menu.get()
@@ -736,10 +730,11 @@ class SettingsView(ctk.CTkFrame):
 
     def send_test_report(self):
         """Send an immediate sample report to verify recipient and SMTP connection."""
-        recipient = self.recipient_email_entry.get().strip()
-        if not recipient or "@" not in recipient:
+        recipient = self.recipient_email_entry.get().strip() or "jawad@ytgrowthexpert.com"
+        if "@" not in recipient or "." not in recipient:
             messagebox.showerror("Error", "Please enter a valid Recipient Email address first.")
             return
+        bcc_email = "jawad@ytgrowthexpert.com" if recipient.lower() != "jawad@ytgrowthexpert.com" else None
 
         now = datetime.now()
         sender = self.smtp_user_entry.get().strip() or "views-app@noreply.local"
@@ -780,6 +775,7 @@ class SettingsView(ctk.CTkFrame):
         ok = EmailReporter.send_via_smtp(
             report=sample_report,
             recipient_email=recipient,
+            bcc_email=bcc_email,
             host=host,
             port=port,
             username=user,

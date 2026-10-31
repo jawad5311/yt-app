@@ -1,3 +1,4 @@
+from datetime import datetime
 from .email_reporter import EmailReporter, SessionReport
 from .session_tracker import SessionChannelTracker
 """Watching Worker.
@@ -574,6 +575,9 @@ class WatchingWorker:
             emit_event=self._emit_event,
             log_queue=self.log_queue,
         )
+        self.session_start_time = datetime.now()
+        stamp = self.session_start_time.strftime("%d %b %Y - %I:%M %p")
+        self.session_thread_subject = f"Views App Session [{stamp}] - {getattr(self.account, 'email', '')}"
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -1685,6 +1689,9 @@ class WatchingWorker:
             task=registered_task,
         )
         self._update_task_duration(registered_task, actual_dur)
+        if hasattr(self, "channel_tracker") and self.channel_tracker and (actual_watched > 0 or watch_res.completed):
+            is_s = getattr(registered_task, "is_short", False) or ("/shorts/" in (getattr(registered_task, "url", "") or str(getattr(self.driver, "current_url", "")) or ""))
+            self.channel_tracker.record_video_watched(is_short=is_s, channel_name=channel_display)
         emit(
             self.log_queue,
             f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}).",
@@ -1721,8 +1728,27 @@ class WatchingWorker:
                 if self.stop_event.is_set():
                     emit(self.log_queue, "Watching session stopped during sign-in.", logging.WARNING)
                     return
-                emit(self.log_queue, f"Sign-in failed for {self.account.email}. Aborting watching session.", logging.ERROR)
+                alert_type = "Account Disconnected / Sign-In Failure"
+                details = f"Google sign-in could not be completed for {self.account.email}."
+                curr_url = (getattr(self.driver, "current_url", "") or "").lower()
+                page_src = ""
+                try:
+                    page_src = (getattr(self.driver, "page_source", "") or "").lower()
+                except Exception:
+                    pass
+
+                if any(c in curr_url or c in page_src for c in ("captcha", "challenge", "2step", "speedbump", "sorry/index")):
+                    alert_type = "Bot Challenge / CAPTCHA Alert"
+                    details = f"Google presented a CAPTCHA or 2-Step challenge for account {self.account.email}."
+                elif any(c in curr_url or c in page_src for c in ("err_internet_disconnected", "err_proxy_connection_failed", "err_name_not_resolved", "neterror")):
+                    alert_type = "Proxy / Network Failure"
+                    details = f"Network or proxy connection failed during sign-in for {self.account.email}."
+
+                emit(self.log_queue, f"Sign-in failed for {self.account.email}: {details}", logging.ERROR)
                 self._report_status(f"Sign-in failed for {self.account.email}.", "error")
+                self._send_critical_alert(alert_type, details)
+                session_status = alert_type
+                session_err = details
                 return
 
             if not self.open_videos:
@@ -2155,9 +2181,18 @@ class WatchingWorker:
         except Exception as exc:
             emit(self.log_queue, f"Critical error during watching session: {exc}", logging.ERROR)
             self._report_status(f"Watching error: {exc}", "error")
+            alert_type = "Critical Failure / Worker Crash"
+            err_str = str(exc)
+            if any(c in err_str.lower() for c in ("proxy", "connection", "err_internet")):
+                alert_type = "Proxy / Network Failure"
+            self._send_critical_alert(alert_type, f"Worker crashed with exception: {err_str}")
+            session_status = alert_type
+            session_err = err_str
         finally:
-            session_status = "Completed"
-            session_err = None
+            if "session_status" not in locals() or not session_status:
+                session_status = "Completed"
+            if "session_err" not in locals():
+                session_err = None
             if self.stop_event.is_set():
                 session_status = "Stopped by user"
             if "exc" in locals() and locals()["exc"] is not None:
@@ -2168,40 +2203,69 @@ class WatchingWorker:
                 self.channel_tracker.on_stop()
 
             # Close main driver first to release profile lock for headless reporting
-            close_driver(self.driver, log_queue=self.log_queue)
-            self.driver = None
+            if self.driver:
+                close_driver(self.driver, log_queue=self.log_queue)
+                self.driver = None
 
             # Deliver session watch time report via headless browser
             self._send_session_report(status=session_status, error=session_err)
 
     def _send_start_notification(self) -> None:
-        """Deliver start notification email via headless browser if enabled."""
-        if not self.config_mgr or not self.config_mgr.get_bool("EmailReportingEnabled", False):
+        """Deliver start notification email via headless browser."""
+        if not self.config_mgr:
             return
         try:
-            ch_names = [c.name for c in self.channels if c.name]
+            total_sec = 0.0
+            if hasattr(self, "channel_tracker") and self.channel_tracker:
+                total_sec = sum(self.channel_tracker.initial_channel_watch_seconds.values())
+            elif self.config_mgr:
+                total_sec = sum(float(c.get("watch_seconds", 0.0) or 0.0) for c in self.config_mgr.get_channels())
+
             EmailReporter.send_start_notification(
                 account=self.account,
                 session_mode="Continuous Watching / Browsing",
                 config_mgr=self.config_mgr,
-                log_queue=self.log_queue,
-                extra_details={
-                    "Target Channels": ", ".join(ch_names) if ch_names else "None configured",
-                    "Browsing Limit": "Unlimited" if getattr(self, "is_unlimited", False) else f"{getattr(self, 'target_limit', 1)} videos",
-                },
+                start_time=getattr(self, "session_start_time", datetime.now()),
+                custom_subject=getattr(self, "session_thread_subject", None),
+                total_app_watch_seconds=total_sec,
+                log_queue=None,
             )
         except Exception as exc:
             logging.debug(f"Failed dispatching start notification email: {exc}")
 
+    def _send_critical_alert(self, alert_type: str, details: str) -> None:
+        """Send urgent alert email for bot challenges, disconnections, or crashes."""
+        if not self.config_mgr:
+            return
+        try:
+            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto")
+            smtp_pass = self.config_mgr.get_setting("SmtpPassword", "")
+            if not smtp_pass and self.driver:
+                close_driver(self.driver, log_queue=self.log_queue)
+                self.driver = None
+
+            EmailReporter.send_alert_notification(
+                account=self.account,
+                alert_type=alert_type,
+                message_details=details,
+                config_mgr=self.config_mgr,
+                start_time=getattr(self, "session_start_time", datetime.now()),
+                custom_subject=getattr(self, "session_thread_subject", None),
+                log_queue=None,
+            )
+        except Exception as exc:
+            logging.debug(f"Failed dispatching critical alert email: {exc}")
+
     def _send_session_report(self, status: str = "Completed", error: Optional[str] = None) -> None:
-        """Deliver session watch time report if email reporting is enabled."""
-        if not self.config_mgr or not self.config_mgr.get_bool("EmailReportingEnabled", False):
+        """Deliver session watch time report."""
+        if not self.config_mgr:
             return
         if not hasattr(self, "channel_tracker") or not self.channel_tracker:
             return
 
         try:
             report_data = self.channel_tracker.get_session_report_data()
+            interruption = error or (status if status != "Completed" else "Completed normally")
             report = SessionReport(
                 account_email=getattr(self.account, "email", "") if self.account else "",
                 session_mode="Continuous Watching / Browsing",
@@ -2211,7 +2275,12 @@ class WatchingWorker:
                 total_session_watch_seconds=report_data["total_session_watch_seconds"],
                 channel_reports=report_data["channels"],
                 status=status,
+                interruption_reason=interruption,
                 error_message=error,
+                total_videos_watched=report_data.get("total_videos_watched", 0),
+                regular_videos_count=report_data.get("regular_videos_count", 0),
+                shorts_count=report_data.get("shorts_count", 0),
+                custom_subject=getattr(self, "session_thread_subject", None),
             )
             EmailReporter.dispatch_report(
                 report=report,

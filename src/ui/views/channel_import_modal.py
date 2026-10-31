@@ -353,13 +353,21 @@ class ChannelImportModal(ctk.CTkToplevel):
                 )
                 tasks_to_add.append(task)
 
-        # 1. Deliver imported tasks to parent callback
+        # 1. Release modal grab so UI stays responsive and grab deadlock is prevented
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+
+        # 2. Deliver imported tasks to parent callback
         if callable(self.on_import):
             try:
                 self.on_import(tasks_to_add)
             except Exception as exc:
                 try:
-                    self.import_button.configure(text=f"Import Selected ({len(selected_ids)})", state="normal")
+                    self.grab_set()
+                    if hasattr(self, "import_button") and self.import_button:
+                        self.import_button.configure(text=f"Import Selected ({len(selected_ids)})", state="normal")
                 except Exception:
                     pass
                 messagebox.showerror(
@@ -368,9 +376,5 @@ class ChannelImportModal(ctk.CTkToplevel):
                 )
                 return
 
-        # 2. Release modal grab and close dialog after successful import
-        try:
-            self.grab_release()
-        except Exception:
-            pass
+        # 3. Close dialog after successful import
         self.destroy()

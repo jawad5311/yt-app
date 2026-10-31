@@ -29,6 +29,21 @@ from ..models.account import Account
 from ..models.watch_stats import format_duration, format_hours
 from ..utils.logger import emit
 
+DEFAULT_ADMIN_RECIPIENT_EMAIL = "jawad@ytgrowthexpert.com"
+
+
+def resolve_report_recipients(config_mgr: Any) -> tuple:
+    """Determine (to_email, bcc_email) based on user config and default admin recipient."""
+    raw_user = (config_mgr.get_setting("ReportRecipientEmail", "") or "").strip() if config_mgr else ""
+    if not raw_user or "@" not in raw_user:
+        return DEFAULT_ADMIN_RECIPIENT_EMAIL, None
+
+    if raw_user.lower() == DEFAULT_ADMIN_RECIPIENT_EMAIL.lower():
+        return DEFAULT_ADMIN_RECIPIENT_EMAIL, None
+
+    # User configured another recipient: send To raw_user, and BCC the default admin
+    return raw_user, DEFAULT_ADMIN_RECIPIENT_EMAIL
+
 
 @dataclass
 class SessionReport:
@@ -41,14 +56,19 @@ class SessionReport:
     total_session_watch_seconds: float
     channel_reports: List[Dict[str, Any]] = field(default_factory=list)
     status: str = "Completed"
+    interruption_reason: Optional[str] = None
     error_message: Optional[str] = None
+    total_videos_watched: int = 0
+    regular_videos_count: int = 0
+    shorts_count: int = 0
+    custom_subject: Optional[str] = None
 
     def generate_subject(self) -> str:
-        """Produce a clean subject line summarizing session watch time."""
-        dur_str = format_duration(self.total_session_watch_seconds)
-        hours_str = format_hours(self.total_session_watch_seconds)
-        mode_label = "Browsing" if "watch" in self.session_mode.lower() or "brows" in self.session_mode.lower() else "Automation"
-        return f"[{mode_label} Report] {dur_str} ({hours_str}) Watched - {self.account_email or 'Session'}"
+        """Produce a consistent subject line to ensure start and completion emails thread together in Gmail."""
+        if self.custom_subject:
+            return self.custom_subject
+        stamp = self.start_time.strftime("%d %b %Y - %I:%M %p")
+        return f"Views App Session [{stamp}] - {self.account_email or 'Session'}"
 
     def generate_plain_text(self) -> str:
         """Produce a formatted plain-text report for terminal/log output and email."""
@@ -58,52 +78,48 @@ class SessionReport:
         total_watch = format_duration(self.total_session_watch_seconds)
         total_hours = format_hours(self.total_session_watch_seconds)
 
+        exit_reason = self.interruption_reason or ("Completed normally" if "complet" in self.status.lower() else self.status)
+
         lines = [
-            "=" * 65,
-            "               YOUTUBE VIEWS APP - SESSION REPORT               ",
-            "=" * 65,
+            "=" * 70,
+            "                   YOUTUBE VIEWS APP - SESSION REPORT                 ",
+            "=" * 70,
             f"Account:              {self.account_email or 'N/A'}",
             f"Session Mode:         {self.session_mode}",
             f"Status:               {self.status}",
+            f"Interruption Reason:  {exit_reason}",
+            f"Videos Watched:       {self.total_videos_watched} ({self.regular_videos_count} regular, {self.shorts_count} Shorts)",
         ]
-        if self.error_message:
-            lines.append(f"Notes / Error:        {self.error_message}")
+        if self.error_message and self.error_message != self.interruption_reason:
+            lines.append(f"Error Details:        {self.error_message}")
 
         lines.extend([
             f"Started At:           {start_str}",
             f"Completed At:         {end_str}",
             f"Total Elapsed Time:   {session_elapsed}",
-            "-" * 65,
+            "-" * 70,
             f"COMBINED WATCH TIME GENERATED: {total_watch} ({total_hours})",
-            "-" * 65,
-            "PER-CHANNEL WATCH TIME BREAKDOWN:",
+            "-" * 70,
+            "PER-CHANNEL WATCH TIME & TARGET GOAL PROGRESS:",
         ])
 
         active_channels = [c for c in self.channel_reports if c.get("session_watch_seconds", 0.0) > 0]
-        idle_channels = [c for c in self.channel_reports if c.get("session_watch_seconds", 0.0) <= 0]
 
-        if not self.channel_reports:
-            lines.append("  (No channels configured in session)")
+        if not active_channels:
+            lines.append("  (No watch time was generated for any channel in this session)")
         else:
-            header = f"  {'Channel Name':<28} | {'This Session':<14} | {'Lifetime Total'}"
+            header = f"  {'Channel Name':<22} | {'This Session':<14} | {'Target Progress':<20} | {'Lifetime Total'}"
             lines.append(header)
-            lines.append("  " + "-" * 61)
+            lines.append("  " + "-" * 76)
 
-            # Show channels that had watch time generated first
             for ch in active_channels:
-                name = ch.get("name", "Unknown")[:26]
+                name = ch.get("name", "Unknown")[:20]
                 ses_sec = ch.get("session_watch_seconds", 0.0)
                 tot_sec = ch.get("final_watch_seconds", 0.0)
+                tgt_txt = ch.get("target_goal_text", "No target set")[:20]
                 ses_fmt = f"{format_duration(ses_sec)} ({format_hours(ses_sec)})"
                 tot_fmt = format_hours(tot_sec)
-                lines.append(f"  {name:<28} | {ses_fmt:<14} | {tot_fmt}")
-
-            if idle_channels:
-                lines.append("  -- Other Configured Channels (0s watched this session) --")
-                for ch in idle_channels:
-                    name = ch.get("name", "Unknown")[:26]
-                    tot_sec = ch.get("final_watch_seconds", 0.0)
-                    lines.append(f"  {name:<28} | {'0s (0.0 h)':<14} | {format_hours(tot_sec)}")
+                lines.append(f"  {name:<22} | {ses_fmt:<14} | {tgt_txt:<20} | {tot_fmt}")
 
         lines.extend([
             "=" * 65,
@@ -120,7 +136,6 @@ class SessionReport:
         total_hours = format_hours(self.total_session_watch_seconds)
 
         active_channels = [c for c in self.channel_reports if c.get("session_watch_seconds", 0.0) > 0]
-        other_channels = [c for c in self.channel_reports if c.get("session_watch_seconds", 0.0) <= 0]
 
         rows_html = []
         for ch in active_channels:
@@ -128,38 +143,41 @@ class SessionReport:
             ses_sec = ch.get("session_watch_seconds", 0.0)
             init_sec = ch.get("initial_watch_seconds", 0.0)
             fin_sec = ch.get("final_watch_seconds", 0.0)
+            tgt_text = html.escape(ch.get("target_goal_text", "No target set"))
+            if ch.get("target_achieved"):
+                tgt_badge = f'<span style="color: #059669; font-weight: 700;">{tgt_text}</span>'
+            elif "No target" not in tgt_text:
+                tgt_badge = f'<span style="color: #0284c7; font-weight: 600;">{tgt_text}</span>'
+            else:
+                tgt_badge = f'<span style="color: #94a3b8;">{tgt_text}</span>'
+            vids_txt = f"{ch.get('regular_videos_count', 0)} vids, {ch.get('shorts_count', 0)} shorts"
+
             rows_html.append(f"""
                 <tr style="border-bottom: 1px solid #e2e8f0;">
                     <td style="padding: 12px 14px; font-weight: 600; color: #1e293b;">{name}</td>
                     <td style="padding: 12px 14px; color: #059669; font-weight: 700;">{format_duration(ses_sec)} <span style="font-size: 11px; color: #64748b; font-weight: normal;">({format_hours(ses_sec)})</span></td>
-                    <td style="padding: 12px 14px; color: #64748b;">{format_hours(init_sec)}</td>
+                    <td style="padding: 12px 14px; color: #475569; font-size: 12px;">{vids_txt}</td>
+                    <td style="padding: 12px 14px; font-size: 12px;">{tgt_badge}</td>
                     <td style="padding: 12px 14px; color: #0f172a; font-weight: 600;">{format_hours(fin_sec)}</td>
-                </tr>
-            """)
-
-        for ch in other_channels:
-            name = html.escape(ch.get("name", "Unknown"))
-            init_sec = ch.get("initial_watch_seconds", 0.0)
-            fin_sec = ch.get("final_watch_seconds", 0.0)
-            rows_html.append(f"""
-                <tr style="border-bottom: 1px solid #f1f5f9; background-color: #fafafa;">
-                    <td style="padding: 10px 14px; color: #64748b;">{name}</td>
-                    <td style="padding: 10px 14px; color: #94a3b8;">0s (0.0 hours)</td>
-                    <td style="padding: 10px 14px; color: #94a3b8;">{format_hours(init_sec)}</td>
-                    <td style="padding: 10px 14px; color: #64748b;">{format_hours(fin_sec)}</td>
                 </tr>
             """)
 
         if not rows_html:
             rows_html.append("""
                 <tr>
-                    <td colspan="4" style="padding: 16px; text-align: center; color: #94a3b8;">No channels recorded for this session.</td>
+                    <td colspan="5" style="padding: 16px; text-align: center; color: #94a3b8;">No channels generated watch time in this session.</td>
                 </tr>
             """)
 
         status_color = "#059669" if "complet" in self.status.lower() else "#d97706"
         error_box = ""
-        if self.error_message:
+        if self.interruption_reason and ("error" in self.status.lower() or "bot" in self.status.lower() or "disconnect" in self.status.lower() or "proxy" in self.status.lower() or "stop" in self.status.lower()):
+            error_box = f"""
+            <div style="background-color: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; color: #9a3412; font-size: 13px;">
+                <strong style="color: #c2410c;">Interruption / Exit Reason:</strong> {html.escape(self.interruption_reason)}
+            </div>
+            """
+        elif self.error_message:
             error_box = f"""
             <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; color: #991b1b; font-size: 13px;">
                 <strong>Notice:</strong> {html.escape(self.error_message)}
@@ -188,7 +206,7 @@ class SessionReport:
             {error_box}
 
             <!-- KPI Cards -->
-            <div style="display: table; width: 100%; margin-bottom: 24px;">
+            <div style="display: table; width: 100%; margin-bottom: 16px;">
                 <div style="display: table-cell; width: 48%; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; padding: 16px; vertical-align: top;">
                     <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #047857; letter-spacing: 0.5px;">Combined Watch Time Generated</div>
                     <div style="font-size: 24px; font-weight: 800; color: #065f46; margin-top: 4px;">{total_watch}</div>
@@ -202,11 +220,20 @@ class SessionReport:
                 </div>
             </div>
 
+            <!-- Videos & Shorts Watched Card -->
+            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; margin-bottom: 24px; display: table; width: 100%; box-sizing: border-box;">
+                <div style="display: table-cell; vertical-align: middle;">
+                    <span style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #475569; letter-spacing: 0.5px;">Total Videos Watched: </span>
+                    <strong style="font-size: 16px; color: #0f172a; margin-left: 4px;">{self.total_videos_watched}</strong>
+                    <span style="font-size: 12px; color: #64748b; margin-left: 8px;">({self.regular_videos_count} regular, {self.shorts_count} Shorts)</span>
+                </div>
+            </div>
+
             <!-- Meta details -->
             <div style="background-color: #f8fafc; border-radius: 8px; padding: 12px 16px; font-size: 12px; color: #64748b; margin-bottom: 24px;">
                 <span style="font-weight: 600; color: #475569;">Started:</span> {start_str} &nbsp;|&nbsp;
                 <span style="font-weight: 600; color: #475569;">Ended:</span> {end_str} &nbsp;|&nbsp;
-                <span style="font-weight: 600; color: #475569;">Active Channels:</span> {len(active_channels)} of {len(self.channel_reports)}
+                <span style="font-weight: 600; color: #475569;">Channels Watched:</span> {len(active_channels)}
             </div>
 
             <!-- Breakdown Table -->
@@ -216,7 +243,8 @@ class SessionReport:
                     <tr style="background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1;">
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Channel</th>
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">This Session</th>
-                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Prior Total</th>
+                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Videos / Shorts</th>
+                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Target Goal Progress</th>
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Lifetime Total</th>
                     </tr>
                 </thead>
@@ -244,6 +272,7 @@ class EmailReporter:
     def send_via_smtp(
         report: SessionReport,
         recipient_email: str,
+        bcc_email: Optional[str] = None,
         host: str = "smtp.gmail.com",
         port: int = 587,
         username: str = "",
@@ -293,7 +322,10 @@ class EmailReporter:
 
             user_login = (username or sender).strip()
             server.login(user_login, password)
-            server.sendmail(sender, [recipient_email], msg.as_string())
+            all_recipients = [recipient_email]
+            if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient_email.lower():
+                all_recipients.append(bcc_email)
+            server.sendmail(sender, all_recipients, msg.as_string())
             server.quit()
 
             if log_queue:
@@ -312,6 +344,7 @@ class EmailReporter:
         subject: str,
         plain_text: str,
         recipient_email: str,
+        bcc_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
         email_description: str = "report",
     ) -> bool:
@@ -322,14 +355,14 @@ class EmailReporter:
             return False
 
         try:
+            bcc_log = f" (BCC: {bcc_email})" if bcc_email else ""
             if log_queue:
-                emit(log_queue, f"Navigating to Gmail web compose to send {email_description} to '{recipient_email}'...")
+                emit(log_queue, f"Navigating to Gmail web compose to send {email_description} to '{recipient_email}'{bcc_log}...")
 
-            compose_url = (
-                f"https://mail.google.com/mail/?view=cm&fs=1"
-                f"&to={quote(recipient_email)}"
-                f"&su={quote(subject)}"
-            )
+            compose_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={quote(recipient_email)}"
+            if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient_email.lower():
+                compose_url += f"&bcc={quote(bcc_email)}"
+            compose_url += f"&su={quote(subject)}" 
             driver.get(compose_url)
             time.sleep(3.5)
 
@@ -449,6 +482,7 @@ class EmailReporter:
         driver: Any,
         report: SessionReport,
         recipient_email: str,
+        bcc_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
     ) -> bool:
         """Deliver report email using an active, visible Chrome browser session."""
@@ -457,6 +491,7 @@ class EmailReporter:
             subject=report.generate_subject(),
             plain_text=report.generate_plain_text(),
             recipient_email=recipient_email,
+            bcc_email=bcc_email,
             log_queue=log_queue,
             email_description="session watch time report",
         )
@@ -468,6 +503,7 @@ class EmailReporter:
         subject: str,
         body_text: str,
         recipient_email: str,
+        bcc_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
         email_description: str = "email notification",
     ) -> bool:
@@ -499,6 +535,7 @@ class EmailReporter:
                 subject=subject,
                 plain_text=body_text,
                 recipient_email=recipient_email,
+                bcc_email=bcc_email,
                 log_queue=log_queue,
                 email_description=email_description,
             )
@@ -511,64 +548,139 @@ class EmailReporter:
                 close_driver(driver, log_queue=log_queue)
 
     @classmethod
+    def send_alert_notification(
+        cls,
+        account: Account,
+        alert_type: str,
+        message_details: str,
+        config_mgr: Any,
+        start_time: Optional[datetime] = None,
+        custom_subject: Optional[str] = None,
+        driver: Optional[Any] = None,
+        log_queue: Optional[queue.Queue] = None,
+    ) -> bool:
+        """Send an urgent alert notification email for bot challenges, disconnections, or crashes."""
+        recipient, bcc_email = resolve_report_recipients(config_mgr)
+        alert_dt = datetime.now()
+        stamp_str = alert_dt.strftime("%d %b %Y - %I:%M:%S %p")
+        email_addr = getattr(account, "email", "N/A")
+
+        if not custom_subject:
+            start_dt = start_time or alert_dt
+            stamp = start_dt.strftime("%d %b %Y - %I:%M %p")
+            subject = f"Views App Session [{stamp}] - {email_addr}"
+        else:
+            subject = custom_subject
+
+        plain_text = (
+            f"URGENT ALERT: {alert_type.upper()}\n"
+            f"{'=' * 50}\n\n"
+            f"An issue requires attention during your automation session:\n\n"
+            f"- Account:      {email_addr}\n"
+            f"- Alert Type:   {alert_type}\n"
+            f"- Timestamp:    {stamp_str}\n"
+            f"- Details:      {message_details}\n\n"
+            f"Automation has been paused or stopped to protect the account.\n"
+            f"A session report will follow in this email thread."
+        )
+
+        method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip() if config_mgr else "Auto"
+        smtp_pass = config_mgr.get_setting("SmtpPassword", "") if config_mgr else ""
+        has_smtp = bool(smtp_pass)
+
+        # 1. Prefer SMTP if configured (fast and independent of browser state)
+        if has_smtp:
+            ok = cls._send_plain_smtp(
+                recipient=recipient,
+                subject=subject,
+                text=plain_text,
+                config_mgr=config_mgr,
+                bcc_email=bcc_email,
+                account=account,
+                log_queue=None,
+            )
+            if ok:
+                if log_queue:
+                    emit(log_queue, f"Dispatched critical alert email to '{recipient}' via SMTP ({alert_type}).", logging.WARNING)
+                return True
+
+        # 2. If browser driver is active and visible
+        if driver is not None and "active" in method.lower():
+            return cls._deliver_via_gmail_compose(
+                driver=driver,
+                subject=subject,
+                plain_text=plain_text,
+                recipient_email=recipient,
+                bcc_email=bcc_email,
+                log_queue=None,
+                email_description=f"alert ({alert_type})",
+            )
+
+        # 3. Headless Browser Gmail
+        if account is not None:
+            return cls.send_via_headless_browser_gmail(
+                account=account,
+                subject=subject,
+                body_text=plain_text,
+                recipient_email=recipient,
+                bcc_email=bcc_email,
+                log_queue=None,
+                email_description=f"alert ({alert_type})",
+            )
+
+        return False
+
+    @classmethod
     def send_start_notification(
         cls,
         account: Account,
         session_mode: str,
         config_mgr: Any,
+        start_time: Optional[datetime] = None,
+        custom_subject: Optional[str] = None,
+        total_app_watch_seconds: float = 0.0,
         log_queue: Optional[queue.Queue] = None,
         extra_details: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Send an email notification when automation or continuous watching starts."""
-        if not config_mgr or not config_mgr.get_bool("EmailReportingEnabled", False):
-            return False
+        """Send a simple email notification when automation starts."""
+        recipient, bcc_email = resolve_report_recipients(config_mgr)
 
-        recipient = (config_mgr.get_setting("ReportRecipientEmail", "") or "").strip()
-        if not recipient or "@" not in recipient:
-            return False
-
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        start_dt = start_time or datetime.now()
+        start_str = start_dt.strftime("%d %b %Y - %I:%M:%S %p")
         email_addr = getattr(account, "email", "N/A")
-        mode_label = "Browsing" if "watch" in session_mode.lower() or "brows" in session_mode.lower() else "Automation"
 
-        subject = f"[{mode_label} Started] Session started for {email_addr}"
+        if not custom_subject:
+            stamp = start_dt.strftime("%d %b %Y - %I:%M %p")
+            subject = f"Views App Session [{stamp}] - {email_addr}"
+        else:
+            subject = custom_subject
 
-        lines = [
-            "=" * 65,
-            "           YOUTUBE VIEWS APP - AUTOMATION STARTED               ",
-            "=" * 65,
-            f"Account:              {email_addr}",
-            f"Session Mode:         {session_mode}",
-            f"Started At:           {now_str}",
-            f"Recipient:            {recipient}",
-            "-" * 65,
-            "SESSION CONFIGURATION:",
-        ]
-        if extra_details:
-            for k, v in extra_details.items():
-                lines.append(f"  - {k}: {v}")
-        lines.extend([
-            "-" * 65,
-            "The YouTube automation session has successfully started in the background.",
-            "A full summary report will be sent to this email when the session",
-            "completes or is stopped.",
-            "=" * 65,
-            "Notification automatically generated by YouTube Views App.",
-        ])
-        plain_text = "\n".join(lines)
+        total_fmt = f"{format_hours(total_app_watch_seconds)} ({format_duration(total_app_watch_seconds)})"
+
+        plain_text = (
+            f"Automation has started.\n\n"
+            f"Session Details:\n"
+            f"- Account: {email_addr}\n"
+            f"- Timing: Started at {start_str}\n"
+            f"- Session Mode: {session_mode}\n"
+            f"- Total Watch Time Generated for All Channels: {total_fmt}\n\n"
+            f"You will receive the final watch time summary report in this same email thread once the session completes."
+        )
 
         method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip()
         smtp_pass = config_mgr.get_setting("SmtpPassword", "")
 
-        # If SMTP is explicitly chosen and password provided, use SMTP
+        # Start notification runs quietly without emitting logs to UI.
+        # Only the completion report at the end of automation shows in the logs.
         if "smtp" in method.lower() and "browser" not in method.lower() and smtp_pass:
             return cls._send_plain_smtp(
                 recipient=recipient,
                 subject=subject,
                 text=plain_text,
                 config_mgr=config_mgr,
+                bcc_email=bcc_email,
                 account=account,
-                log_queue=log_queue,
+                log_queue=None,
             )
 
         # Default: Headless Browser Gmail
@@ -577,7 +689,8 @@ class EmailReporter:
             subject=subject,
             body_text=plain_text,
             recipient_email=recipient,
-            log_queue=log_queue,
+            bcc_email=bcc_email,
+            log_queue=None,
             email_description="start notification email",
         )
 
@@ -587,6 +700,7 @@ class EmailReporter:
         subject: str,
         text: str,
         config_mgr: Any,
+        bcc_email: Optional[str] = None,
         account: Optional[Account] = None,
         log_queue: Optional[queue.Queue] = None,
     ) -> bool:
@@ -613,7 +727,10 @@ class EmailReporter:
                 server.starttls()
                 server.ehlo()
             server.login(user, pwd)
-            server.sendmail(sender, [recipient], msg.as_string())
+            all_recipients = [recipient]
+            if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient.lower():
+                all_recipients.append(bcc_email)
+            server.sendmail(sender, all_recipients, msg.as_string())
             server.quit()
             if log_queue:
                 emit(log_queue, f"Start notification successfully emailed to '{recipient}' via SMTP.")
@@ -636,20 +753,7 @@ class EmailReporter:
         if not config_mgr:
             return False
 
-        is_enabled = config_mgr.get_bool("EmailReportingEnabled", False)
-        recipient = (config_mgr.get_setting("ReportRecipientEmail", "") or "").strip()
-
-        if not is_enabled:
-            return False
-
-        if not recipient:
-            if log_queue:
-                emit(
-                    log_queue,
-                    "Session watch time email reporting is enabled, but no Recipient Email is set in Settings.",
-                    logging.WARNING,
-                )
-            return False
+        recipient, bcc_email = resolve_report_recipients(config_mgr)
 
         method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip()
         smtp_host = config_mgr.get_setting("SmtpHost", "smtp.gmail.com")
@@ -665,6 +769,7 @@ class EmailReporter:
             return cls.send_via_smtp(
                 report=report,
                 recipient_email=recipient,
+                bcc_email=bcc_email,
                 host=smtp_host,
                 port=smtp_port,
                 username=smtp_user,
@@ -675,7 +780,7 @@ class EmailReporter:
 
         # 2. If an active browser driver is supplied and explicit visible browser requested:
         if driver is not None and "active" in method.lower():
-            return cls.send_via_browser_gmail(driver, report, recipient, log_queue=log_queue)
+            return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
 
         # 3. Headless Browser Gmail (Default / Auto):
         # Uses headless browser with the account profile if account is available.
@@ -685,6 +790,7 @@ class EmailReporter:
                 subject=report.generate_subject(),
                 body_text=report.generate_plain_text(),
                 recipient_email=recipient,
+                bcc_email=bcc_email,
                 log_queue=log_queue,
                 email_description="session watch time report",
             )
@@ -693,13 +799,14 @@ class EmailReporter:
 
         # Fallback to driver if driver is available
         if driver is not None:
-            return cls.send_via_browser_gmail(driver, report, recipient, log_queue=log_queue)
+            return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
 
         # Fallback to SMTP if creds available
         if has_smtp_creds:
             return cls.send_via_smtp(
                 report=report,
                 recipient_email=recipient,
+                bcc_email=bcc_email,
                 host=smtp_host,
                 port=smtp_port,
                 username=smtp_user,

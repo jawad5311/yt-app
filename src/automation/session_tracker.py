@@ -49,6 +49,12 @@ class SessionChannelTracker:
         self._pending_seconds: Dict[str, float] = {}
         self._lock = threading.RLock()
 
+        # Video & Shorts counts for session reporting
+        self.total_regular_videos: int = 0
+        self.total_shorts: int = 0
+        self.channel_regular_videos: Dict[str, int] = {}
+        self.channel_shorts: Dict[str, int] = {}
+
         # Session tracking for reports
         self.session_start_time: datetime = datetime.now()
         self.session_end_time: Optional[datetime] = None
@@ -158,6 +164,22 @@ class SessionChannelTracker:
         with self._lock:
             return float(sum(self.session_watch_seconds.values()))
 
+    def record_video_watched(self, is_short: bool = False, channel_name: Optional[str] = None) -> None:
+        """Record a completed or watched video / short for session tracking."""
+        with self._lock:
+            if is_short:
+                self.total_shorts += 1
+            else:
+                self.total_regular_videos += 1
+
+            target_channel = channel_name or self.active_channel_name
+            if target_channel:
+                key = self._canon_name(target_channel)
+                if is_short:
+                    self.channel_shorts[key] = self.channel_shorts.get(key, 0) + 1
+                else:
+                    self.channel_regular_videos[key] = self.channel_regular_videos.get(key, 0) + 1
+
     def get_session_report_data(self) -> Dict[str, Any]:
         """Compile a complete session report with per-channel breakdown and combined totals."""
         with self._lock:
@@ -176,21 +198,57 @@ class SessionChannelTracker:
                 # If current_total is 0 or less than initial+session, reconcile
                 final_sec = max(current_total, initial_sec + session_sec)
 
+                target_sec = 0.0
+                for ch in self.channels:
+                    if self._canon_name(ch.name) == key:
+                        target_sec = getattr(ch, "target_watch_seconds", 0.0)
+                        break
+                if target_sec <= 0.0 and self.config_mgr:
+                    for ch_dict in self.config_mgr.get_channels():
+                        if self._canon_name(ch_dict.get("name", "")) == key:
+                            target_sec = float(ch_dict.get("target_watch_seconds", 0.0) or 0.0)
+                            break
+
+                if target_sec > 0.0:
+                    pct = min(100.0, (final_sec / target_sec) * 100.0)
+                    achieved = final_sec >= target_sec
+                    cur_h = final_sec / 3600.0
+                    tgt_h = target_sec / 3600.0
+                    target_goal_text = f"{cur_h:.1f}h / {tgt_h:.1f}h ({pct:.0f}%)"
+                    if achieved:
+                        target_goal_text += " [ACHIEVED]"
+                else:
+                    achieved = False
+                    target_goal_text = "No target set"
+
+                reg_count = self.channel_regular_videos.get(key, 0)
+                short_count = self.channel_shorts.get(key, 0)
+
                 channel_items.append({
                     "name": name,
                     "canon_name": key,
                     "session_watch_seconds": session_sec,
                     "initial_watch_seconds": initial_sec,
                     "final_watch_seconds": final_sec,
+                    "target_watch_seconds": target_sec,
+                    "target_goal_text": target_goal_text,
+                    "target_achieved": achieved,
+                    "regular_videos_count": reg_count,
+                    "shorts_count": short_count,
+                    "total_videos_count": reg_count + short_count,
                 })
 
             total_session_sec = float(sum(self.session_watch_seconds.values()))
+            total_vids = self.total_regular_videos + self.total_shorts
 
             return {
                 "start_time": self.session_start_time,
                 "end_time": end_t,
                 "duration_seconds": duration,
                 "total_session_watch_seconds": total_session_sec,
+                "total_videos_watched": total_vids,
+                "regular_videos_count": self.total_regular_videos,
+                "shorts_count": self.total_shorts,
                 "channels": channel_items,
             }
 
@@ -240,6 +298,10 @@ class SessionChannelTracker:
             self.initial_channel_watch_seconds.clear()
             self.session_start_time = datetime.now()
             self.session_end_time = None
+            self.total_regular_videos = 0
+            self.total_shorts = 0
+            self.channel_regular_videos.clear()
+            self.channel_shorts.clear()
             for ch in self.channels:
                 ch.watch_seconds = 0.0
 

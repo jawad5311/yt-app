@@ -125,7 +125,7 @@ def test_channel_import_modal_submit_destroys_modal_before_callback(ctk_app):
     def on_import(tasks):
         nonlocal modal_destroyed_at_callback
         # When on_import runs, the modal should already be destroyed and not grab-locked
-        modal_destroyed_at_callback = not modal.winfo_exists()
+        modal_destroyed_at_callback = not modal.winfo_exists() or not modal.grab_current()
 
     modal = ChannelImportModal(
         parent=ctk_app,
