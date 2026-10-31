@@ -579,10 +579,19 @@ class TestReportEnhancedMetricsAndAlerts:
         text = sample_report.generate_plain_text()
         assert "3.0h / 5.0h (60%)" in text
         assert "Target Progress" in text
+        assert "Videos Watched" in text
+        assert "6 video(s)" in text
+        assert "1 video(s)" in text
+
+        # Verify exact column header ordering: Channel Name -> This Session -> Target Progress -> Videos Watched -> Lifetime Total
+        header_line = [line for line in text.splitlines() if "Channel Name" in line][0]
+        col_names = [c.strip() for c in header_line.split("|")]
+        assert col_names == ["Channel Name", "This Session", "Target Progress", "Videos Watched", "Lifetime Total"]
 
         html = sample_report.generate_html()
         assert "3.0h / 5.0h (60%)" in html
         assert "Target Goal Progress" in html
+        assert "Videos Watched" in html
         assert "4 vids, 2 shorts" in html
 
     def test_interruption_reason_display_on_error_and_bot_challenge(self, sample_report):

@@ -118,18 +118,22 @@ class SessionReport:
         if not active_channels:
             lines.append("  (No watch time was generated for any channel in this session)")
         else:
-            header = f"  {'Channel Name':<22} | {'This Session':<14} | {'Target Progress':<20} | {'Lifetime Total'}"
+            header = f"  {'Channel Name':<22} | {'This Session':<21} | {'Target Progress':<20} | {'Videos Watched':<16} | {'Lifetime Total'}"
             lines.append(header)
-            lines.append("  " + "-" * 76)
+            lines.append("  " + "-" * 105)
 
             for ch in active_channels:
                 name = ch.get("name", "Unknown")[:20]
                 ses_sec = ch.get("session_watch_seconds", 0.0)
                 tot_sec = ch.get("final_watch_seconds", 0.0)
                 tgt_txt = ch.get("target_goal_text", "No target set")[:20]
+                tot_vids = ch.get("total_videos_count")
+                if tot_vids is None:
+                    tot_vids = ch.get("regular_videos_count", 0) + ch.get("shorts_count", 0)
+                vids_fmt = f"{tot_vids} video(s)"
                 ses_fmt = f"{format_duration(ses_sec)} ({format_hours(ses_sec)})"
                 tot_fmt = format_hours(tot_sec)
-                lines.append(f"  {name:<22} | {ses_fmt:<14} | {tgt_txt:<20} | {tot_fmt}")
+                lines.append(f"  {name:<22} | {ses_fmt:<21} | {tgt_txt:<20} | {vids_fmt:<16} | {tot_fmt}")
 
         lines.extend([
             "=" * 65,
@@ -160,14 +164,22 @@ class SessionReport:
                 tgt_badge = f'<span style="color: #0284c7; font-weight: 600;">{tgt_text}</span>'
             else:
                 tgt_badge = f'<span style="color: #94a3b8;">{tgt_text}</span>'
-            vids_txt = f"{ch.get('regular_videos_count', 0)} vids, {ch.get('shorts_count', 0)} shorts"
+            tot_vids = ch.get("total_videos_count")
+            if tot_vids is None:
+                tot_vids = ch.get("regular_videos_count", 0) + ch.get("shorts_count", 0)
+            reg_cnt = ch.get("regular_videos_count", 0)
+            sh_cnt = ch.get("shorts_count", 0)
+            if sh_cnt > 0:
+                vids_html = f"<strong>{tot_vids}</strong> video(s) <span style=\"font-size: 11px; color: #64748b;\">({reg_cnt} vids, {sh_cnt} shorts)</span>"
+            else:
+                vids_html = f"<strong>{tot_vids}</strong> video(s)"
 
             rows_html.append(f"""
                 <tr style="border-bottom: 1px solid #e2e8f0;">
                     <td style="padding: 12px 14px; font-weight: 600; color: #1e293b;">{name}</td>
                     <td style="padding: 12px 14px; color: #059669; font-weight: 700;">{format_duration(ses_sec)} <span style="font-size: 11px; color: #64748b; font-weight: normal;">({format_hours(ses_sec)})</span></td>
-                    <td style="padding: 12px 14px; color: #475569; font-size: 12px;">{vids_txt}</td>
                     <td style="padding: 12px 14px; font-size: 12px;">{tgt_badge}</td>
+                    <td style="padding: 12px 14px; color: #475569; font-size: 12px;">{vids_html}</td>
                     <td style="padding: 12px 14px; color: #0f172a; font-weight: 600;">{format_hours(fin_sec)}</td>
                 </tr>
             """)
@@ -273,8 +285,8 @@ class SessionReport:
                     <tr style="background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1;">
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Channel</th>
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">This Session</th>
-                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Videos / Shorts</th>
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Target Goal Progress</th>
+                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Videos Watched</th>
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Lifetime Total</th>
                     </tr>
                 </thead>
