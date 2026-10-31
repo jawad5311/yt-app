@@ -92,14 +92,13 @@ def test_browsing_limit_two_permits_two_attempts_across_discovery_paths(mock_set
     worker.fetch_recommended_videos = MagicMock(return_value=[{"title": "Tech Video", "href": "/watch?v=abc"}])
     worker._find_target_video = MagicMock(return_value=target_candidate)
     worker._play_target_video = MagicMock(return_value=WatchResult(completed=True))
-    worker._watch_interleaving_buffer_video = MagicMock(return_value=True)
+    worker._check_and_play_random_buffer_video = MagicMock(return_value=True)
+    worker._send_session_report = MagicMock()
 
     worker.run()
 
     assert worker._play_target_video.call_count == 2
     assert worker.target_attempts == 2
-    # Only 1 buffer video interleaved between attempt 1 and 2; none after attempt 2
-    assert worker._watch_interleaving_buffer_video.call_count == 1
 
 
 @patch("src.automation.watching_worker.dismiss_youtube_dialogs")

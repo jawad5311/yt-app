@@ -912,7 +912,8 @@ class TestWatchingWorker:
         # Must have clean channel block
         assert "URL: https://www.youtube.com/watch?v=target11111\nTitle: Target Video 1\nChannel: Channel A" in log_str
         assert "URL: https://www.youtube.com/watch?v=target33333\nTitle: Target Video 2\nChannel: Channel B" in log_str
-        assert "[Browsing Loop]" in log_str
+        assert "Found video on Home page" in log_str
+        assert "Found video in suggested section" in log_str
 
         # Must NOT have redundant duplicate titles or boilerplate
         assert "Added video to queue under channel" not in log_str
