@@ -1,3 +1,0 @@
-# Paste the absolute path to your file containing the YouTube Data API v3 key here.
-# Example:
-# C:\Users\YourUsername\Documents\youtube_api_key.txt
