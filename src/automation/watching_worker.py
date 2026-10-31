@@ -1187,9 +1187,18 @@ class WatchingWorker:
         if self.stats_store:
             rec = self.stats_store.find_for_task(existing_task or temp_task) or self.stats_store.get(vid_key)
             if rec:
-                current_runs = rec.runs
-                watch_seconds = rec.watch_seconds
-                video_duration = rec.video_duration
+                try:
+                    current_runs = int(getattr(rec, "runs", 0) or 0)
+                except (ValueError, TypeError):
+                    current_runs = 0
+                try:
+                    watch_seconds = float(getattr(rec, "watch_seconds", 0.0) or 0.0)
+                except (ValueError, TypeError):
+                    watch_seconds = 0.0
+                try:
+                    video_duration = float(getattr(rec, "video_duration", 0.0) or 0.0)
+                except (ValueError, TypeError):
+                    video_duration = 0.0
 
         cooldown_hours = self.config_mgr.get_float("VideoCooldownHours", 12.0)
 
@@ -1202,7 +1211,12 @@ class WatchingWorker:
                 if not matching_ch or not matching_ch[0].enabled or matching_ch[0].archived:
                     return False, existing_task, f"channel '{existing_task.channel}' is disabled or not active"
 
-            eff_dur = video_duration if video_duration > 0 else getattr(existing_task, "duration_seconds", 0.0)
+            raw_task_dur = getattr(existing_task, "duration_seconds", 0.0)
+            try:
+                task_dur = float(raw_task_dur or 0.0)
+            except (ValueError, TypeError):
+                task_dur = 0.0
+            eff_dur = video_duration if video_duration > 0 else task_dur
             limit_disp = existing_task.max_runs if existing_task.max_runs > 0 else 3
             if existing_task.is_target_reached(current_runs, watch_seconds, eff_dur):
                 reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and watch_seconds / eff_dur >= existing_task.target_multiplier) else f"run limit ({current_runs}/{limit_disp} runs completed)"
