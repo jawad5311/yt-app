@@ -692,42 +692,54 @@ class TestReportEnhancedMetricsAndAlerts:
 
 
     def test_discovery_sources_breakdown_in_report_text_and_html(self, sample_report):
-        sample_report.total_videos_watched = 7
-        sample_report.regular_videos_count = 5
+        sample_report.total_videos_watched = 8
+        sample_report.regular_videos_count = 6
         sample_report.shorts_count = 2
-        sample_report.home_videos_count = 2
         sample_report.suggested_videos_count = 3
         sample_report.search_videos_count = 2
+        sample_report.home_videos_count = 2
+        sample_report.random_videos_count = 1
         sample_report.search_queries_count = 5
 
         plain_text = sample_report.generate_plain_text()
-        assert "Home Page Feed:   2 video(s)" in plain_text
+        # Verify strict ordering: Suggested -> Search -> Home -> Random
+        idx_sugg = plain_text.index("Suggested Section:")
+        idx_search = plain_text.index("YouTube Search:")
+        idx_home = plain_text.index("Home Page Feed:")
+        idx_rand = plain_text.index("Random / Other:")
+
+        assert idx_sugg < idx_search < idx_home < idx_rand
         assert "Suggested Section:   3 video(s)" in plain_text
         assert "YouTube Search:      2 video(s) (5 searches performed)" in plain_text
+        assert "Home Page Feed:      2 video(s)" in plain_text
+        assert "Random / Other:      1 video(s) (non-target channels)" in plain_text
 
         html_text = sample_report.generate_html()
-        assert "Home Feed" in html_text
-        assert "Suggested" in html_text
-        assert "YouTube Search" in html_text
+        idx_h_sugg = html_text.index("Suggested Section")
+        idx_h_search = html_text.index("YouTube Search")
+        idx_h_home = html_text.index("Homepage Feed")
+        idx_h_rand = html_text.index("Random / Other")
+        assert idx_h_sugg < idx_h_search < idx_h_home < idx_h_rand
         assert "5 searches" in html_text
 
     def test_tracker_records_discovery_sources_and_search_queries(self, tmp_path):
         cfg = ConfigManager(tmp_path / "settings.json")
         tracker = SessionChannelTracker(config_mgr=cfg)
 
-        tracker.record_video_watched(is_short=False, source="home")
-        tracker.record_video_watched(is_short=False, source="home")
         tracker.record_video_watched(is_short=False, source="suggested")
-        tracker.record_video_watched(is_short=True, source="suggested")
+        tracker.record_video_watched(is_short=True, source="suggested", is_random=True)
         tracker.record_video_watched(is_short=False, source="search")
+        tracker.record_video_watched(is_short=False, source="home")
+        tracker.record_video_watched(is_short=False, source="home")
 
         tracker.record_search_query()
         tracker.record_search_query()
         tracker.record_search_query()
 
         data = tracker.get_session_report_data()
-        assert data["home_videos_count"] == 2
         assert data["suggested_videos_count"] == 2
         assert data["search_videos_count"] == 1
+        assert data["home_videos_count"] == 2
+        assert data["random_videos_count"] == 1
         assert data["search_queries_count"] == 3
         assert data["total_videos_watched"] == 5

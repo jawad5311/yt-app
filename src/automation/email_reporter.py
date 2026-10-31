@@ -60,9 +60,10 @@ class SessionReport:
     regular_videos_count: int = 0
     shorts_count: int = 0
     custom_subject: Optional[str] = None
-    home_videos_count: int = 0
     suggested_videos_count: int = 0
     search_videos_count: int = 0
+    home_videos_count: int = 0
+    random_videos_count: int = 0
     search_queries_count: int = 0
 
     def generate_subject(self) -> str:
@@ -91,9 +92,10 @@ class SessionReport:
             f"Status:               {self.status}",
             f"Interruption Reason:  {exit_reason}",
             f"Videos Watched:       {self.total_videos_watched} ({self.regular_videos_count} regular, {self.shorts_count} Shorts)",
-            f"  • Home Page Feed:   {self.home_videos_count} video(s)",
-            f"  • Suggested Section:{self.suggested_videos_count:>4} video(s)",
-            f"  • YouTube Search:   {self.search_videos_count:>4} video(s) ({self.search_queries_count} searches performed)",
+            f"  • Suggested Section:   {self.suggested_videos_count} video(s)",
+            f"  • YouTube Search:      {self.search_videos_count} video(s) ({self.search_queries_count} searches performed)",
+            f"  • Home Page Feed:      {self.home_videos_count} video(s)",
+            f"  • Random / Other:      {self.random_videos_count} video(s) (non-target channels)",
         ]
         if self.error_message and self.error_message != self.interruption_reason:
             lines.append(f"Error Details:        {self.error_message}")
@@ -225,7 +227,7 @@ class SessionReport:
                 </div>
             </div>
 
-            <!-- Videos Watched & Discovery Source Breakdown Card -->
+            <!-- Videos Watched & Ordered Discovery Source Breakdown Card -->
             <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-bottom: 24px; box-sizing: border-box;">
                 <div style="margin-bottom: 12px;">
                     <span style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #475569; letter-spacing: 0.5px;">Total Videos Watched: </span>
@@ -233,18 +235,23 @@ class SessionReport:
                     <span style="font-size: 12px; color: #64748b; margin-left: 8px;">({self.regular_videos_count} regular, {self.shorts_count} Shorts)</span>
                 </div>
                 <div style="border-top: 1px solid #e2e8f0; padding-top: 12px; display: table; width: 100%;">
-                    <div style="display: table-cell; width: 33%; vertical-align: top;">
-                        <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">🏠 Home Feed</div>
-                        <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px;">{self.home_videos_count} <span style="font-size: 11px; font-weight: normal; color: #64748b;">watched</span></div>
-                    </div>
-                    <div style="display: table-cell; width: 33%; vertical-align: top;">
-                        <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">🎬 Suggested</div>
+                    <div style="display: table-cell; width: 25%; vertical-align: top; padding-right: 6px;">
+                        <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">🎬 Suggested Section</div>
                         <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px;">{self.suggested_videos_count} <span style="font-size: 11px; font-weight: normal; color: #64748b;">watched</span></div>
                     </div>
-                    <div style="display: table-cell; width: 34%; vertical-align: top;">
+                    <div style="display: table-cell; width: 25%; vertical-align: top; padding-right: 6px;">
                         <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">🔍 YouTube Search</div>
                         <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px;">{self.search_videos_count} <span style="font-size: 11px; font-weight: normal; color: #64748b;">watched</span></div>
                         <div style="font-size: 11px; color: #64748b; margin-top: 1px;">({self.search_queries_count} searches)</div>
+                    </div>
+                    <div style="display: table-cell; width: 25%; vertical-align: top; padding-right: 6px;">
+                        <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">🏠 Homepage Feed</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px;">{self.home_videos_count} <span style="font-size: 11px; font-weight: normal; color: #64748b;">watched</span></div>
+                    </div>
+                    <div style="display: table-cell; width: 25%; vertical-align: top;">
+                        <div style="font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase;">🎲 Random / Other</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #0f172a; margin-top: 2px;">{self.random_videos_count} <span style="font-size: 11px; font-weight: normal; color: #64748b;">watched</span></div>
+                        <div style="font-size: 11px; color: #64748b; margin-top: 1px;">(non-target)</div>
                     </div>
                 </div>
             </div>
