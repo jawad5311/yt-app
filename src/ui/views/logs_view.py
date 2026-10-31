@@ -241,6 +241,7 @@ class LogsView(ctk.CTkFrame):
                 or stripped.startswith("Updated video time")
                 or stripped.startswith("Added video to queue")
                 or stripped.startswith("Found eligible")
+                or stripped.startswith("Found video")
                 or "liked comment" in stripped.lower()
                 or "liked the video" in stripped.lower()
                 or "liked a comment" in stripped.lower()

@@ -189,6 +189,8 @@ class TestWatchingWorkerSearchIntegration(unittest.TestCase):
             log_queue=self.log_queue,
         )
         worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/watch?v=TEST_LOG_VID"
+        self.mock_config.get_int.return_value = 5
 
         self.mock_config.get_video_queue.return_value = [
             {"title": "Queued Video 1", "url": "https://www.youtube.com/watch?v=QUEUED12345", "enabled": True}
@@ -220,6 +222,8 @@ class TestWatchingWorkerSearchIntegration(unittest.TestCase):
             log_queue=self.log_queue,
         )
         worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/watch?v=TEST_LOG_VID"
+        self.mock_config.get_int.return_value = 5
 
         self.mock_config.get_video_queue.return_value = [
             {"title": "Video Not Found", "url": "https://www.youtube.com/watch?v=MISSING1111", "enabled": True},
@@ -247,6 +251,74 @@ class TestWatchingWorkerSearchIntegration(unittest.TestCase):
                     self.assertEqual(len(search_calls), 2)
                     self.assertIn("FOUND222222", session_keys)
 
+
+
+    def test_log_formatting_url_title_channel_and_found_messages(self):
+        """Verify the log messages for Scanning, Found video, and URL -> Title -> Channel ordering."""
+        from src.automation.watching_worker import WatchingWorker
+
+        worker = WatchingWorker(
+            account=self.account,
+            channels=[self.channel],
+            config_mgr=self.mock_config,
+            log_queue=self.log_queue,
+        )
+        worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/watch?v=TEST_LOG_VID"
+        self.mock_config.get_int.return_value = 5
+
+        # 1. Test _play_target_video log structure
+        with patch("src.automation.watching_worker.watch_video") as mock_watch:
+            mock_watch.return_value = MagicMock(completed=True, watched_seconds=10.0, video_duration=100.0, playback_finished=True)
+            worker._play_target_video(
+                card_info={},
+                full_url="https://www.youtube.com/watch?v=TEST_LOG_VID",
+                title="Super Awesome AI Video",
+                channel_display="AI Channel",
+                session_watched_keys=set(),
+            )
+
+            logged = []
+            while not self.log_queue.empty():
+                logged.append(self.log_queue.get_nowait())
+            log_str = "\n".join(logged)
+
+            # Strict order: URL -> Title -> Channel
+            expected_block = (
+                "URL: https://www.youtube.com/watch?v=TEST_LOG_VID\n"
+                "Title: Super Awesome AI Video\n"
+                "Channel: AI Channel"
+            )
+            self.assertIn(expected_block, log_str)
+            # Old order must NOT be present
+            self.assertNotIn("Channel: AI Channel\nURL:", log_str)
+
+        # 2. Test search_and_play_target_video logs
+        self.mock_config.get_video_queue.return_value = [
+            {"title": "Search AI Video", "url": "https://www.youtube.com/watch?v=SEARCH_VID", "enabled": True},
+        ]
+        with patch.object(worker, "search_youtube_query", return_value=True):
+            with patch("src.automation.watching_worker.find_and_click_search_result") as mock_find:
+                mock_find.return_value = {
+                    "title": "Search AI Video",
+                    "url": "https://www.youtube.com/watch?v=SEARCH_VID",
+                    "channel": "AI Channel",
+                }
+                with patch.object(worker, "_play_target_video") as mock_play:
+                    mock_play.return_value = MagicMock(completed=True)
+                    worker.search_and_play_target_video(set())
+
+                    search_logs = []
+                    while not self.log_queue.empty():
+                        search_logs.append(self.log_queue.get_nowait())
+                    search_str = "\n".join(search_logs)
+
+                    self.assertIn("Scanning YouTube search...", search_str)
+                    self.assertIn("Found video in YouTube search result", search_str)
+                    # Video title must NOT be in the Found line
+                    for line in search_logs:
+                        if "Found video in YouTube search result" in line:
+                            self.assertNotIn("Search AI Video", line)
 
 if __name__ == "__main__":
     unittest.main()

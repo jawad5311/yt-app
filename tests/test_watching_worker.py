@@ -311,7 +311,7 @@ class TestWatchingWorker:
         while not worker.log_queue.empty():
             logged.append(worker.log_queue.get_nowait())
         log_str = "\n".join(logged)
-        assert "Channel: Test Channel\nURL: https://www.youtube.com/watch?v=match123\nTitle: First Matched Video" in log_str
+        assert "URL: https://www.youtube.com/watch?v=match123\nTitle: First Matched Video\nChannel: Test Channel" in log_str
 
     @patch("src.automation.watching_worker.human_like_delay")
     @patch("src.automation.watching_worker.setup_driver")
@@ -491,7 +491,7 @@ class TestWatchingWorker:
             logged.append(worker.log_queue.get_nowait())
         log_str = "\n".join(logged)
         assert "Skipping video 'Done Video' from channel 'Test Channel': already reached run limit (3/3 runs completed)." in log_str
-        assert f"Channel: Test Channel\nURL: https://www.youtube.com/watch?v={vid_next}\nTitle: Next Video" in log_str
+        assert f"URL: https://www.youtube.com/watch?v={vid_next}\nTitle: Next Video\nChannel: Test Channel" in log_str
 
 
     def test_click_recommended_video_lockup(self, worker):
@@ -910,8 +910,8 @@ class TestWatchingWorker:
         log_str = "\n".join(logged)
 
         # Must have clean channel block
-        assert "Channel: Channel A\nURL: https://www.youtube.com/watch?v=target11111\nTitle: Target Video 1" in log_str
-        assert "Channel: Channel B\nURL: https://www.youtube.com/watch?v=target33333\nTitle: Target Video 2" in log_str
+        assert "URL: https://www.youtube.com/watch?v=target11111\nTitle: Target Video 1\nChannel: Channel A" in log_str
+        assert "URL: https://www.youtube.com/watch?v=target33333\nTitle: Target Video 2\nChannel: Channel B" in log_str
         assert "[Browsing Loop]" in log_str
 
         # Must NOT have redundant duplicate titles or boilerplate

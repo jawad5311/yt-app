@@ -1521,7 +1521,7 @@ class WatchingWorker:
         """Play and track a target channel video."""
         emit(
             self.log_queue,
-            f"Channel: {channel_display}\nURL: {full_url}\nTitle: {title}",
+            f"URL: {full_url}\nTitle: {title}\nChannel: {channel_display}",
         )
 
         inherited_mult = DEFAULT_TARGET_MULTIPLIER
@@ -1733,7 +1733,7 @@ class WatchingWorker:
 
     def search_youtube_query(self, query: str) -> bool:
         """Type and execute a YouTube search for the given query."""
-        return perform_youtube_search(self.driver, query, log_queue=self.log_queue)
+        return perform_youtube_search(self.driver, query, log_queue=None)
 
     def search_and_play_target_video(self, session_watched_keys: Set[str]) -> bool:
         """Search YouTube for a video from the video queue or targeted channels.
@@ -1789,7 +1789,7 @@ class WatchingWorker:
 
                 emit(
                     self.log_queue,
-                    f"[YouTube Search] Candidate {cand_idx}/{len(candidate_tasks)}: Searching for '{query}'...",
+                    "Scanning YouTube search...",
                 )
 
                 search_ok = self.search_youtube_query(query)
@@ -1803,7 +1803,7 @@ class WatchingWorker:
                     task=task,
                     target_channels=target_channel_names,
                     max_scrolls=3,
-                    log_queue=self.log_queue,
+                    log_queue=None,
                 )
 
                 if matched_result:
@@ -1815,7 +1815,7 @@ class WatchingWorker:
 
                     emit(
                         self.log_queue,
-                        f"[YouTube Search] Successfully found candidate in search results: '{title}' ({ch_display})!",
+                        "Found video in YouTube search result",
                     )
 
                     try:
@@ -1848,7 +1848,7 @@ class WatchingWorker:
                 if not ch_query:
                     continue
 
-                emit(self.log_queue, f"[YouTube Search] Channel Keyword Search: Searching for channel '{ch_query}'...")
+                emit(self.log_queue, "Scanning YouTube search...")
                 search_ok = self.search_youtube_query(ch_query)
                 if hasattr(self, "channel_tracker") and self.channel_tracker:
                     self.channel_tracker.record_search_query()
@@ -1859,7 +1859,7 @@ class WatchingWorker:
                     self.driver,
                     target_channels=[ch_query],
                     max_scrolls=3,
-                    log_queue=self.log_queue,
+                    log_queue=None,
                 )
 
                 if matched_result:
@@ -1870,7 +1870,7 @@ class WatchingWorker:
 
                     emit(
                         self.log_queue,
-                        f"[YouTube Search] Found channel video in search results: '{title}' ({ch_query})!",
+                        "Found video in YouTube search result",
                     )
 
                     try:
@@ -1998,7 +1998,7 @@ class WatchingWorker:
                                 channel_display = match.name or ch_name
                                 emit(
                                     self.log_queue,
-                                    f"Channel: {channel_display}\nURL: {full_url}\nTitle: {title}",
+                                    f"URL: {full_url}\nTitle: {title}\nChannel: {channel_display}",
                                 )
                                 self._emit_event(("progress", 0, matched_count, matched_count))
 
@@ -2066,6 +2066,7 @@ class WatchingWorker:
                         if self._is_target_limit_reached(target_attempts):
                             break
 
+                        emit(self.log_queue, "Scanning suggested section...")
                         rec_candidates = self.fetch_recommended_videos()
 
                         # Priority 1: Check if any suggested video belongs to our target channels
@@ -2076,7 +2077,7 @@ class WatchingWorker:
 
                         if target_match:
                             item, match_obj, full_url, title, ch_display = target_match
-                            emit(self.log_queue, f"[Browsing Loop] Found target channel video in suggestions ({s_step}/{suggested_target_count}): '{title}' ({ch_display})")
+                            emit(self.log_queue, "Found video in suggested section")
                             target_attempts += 1
                             self.target_attempts = target_attempts
                             self.watched_count = target_attempts
@@ -2217,7 +2218,7 @@ class WatchingWorker:
                         prog_total = self.target_limit if not self.is_unlimited else 0
                         self._emit_event(("progress", 0, target_attempts, prog_total))
 
-                        emit(self.log_queue, f"Found target channel video on Home page: '{title}' ({ch_display})")
+                        emit(self.log_queue, "Found video on Home page")
                         try:
                             watch_res = self._play_target_video(
                                 item, full_url, title, ch_display, session_watched_keys, is_home=True, source="home"
