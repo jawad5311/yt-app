@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import make_msgid
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -65,6 +66,8 @@ class SessionReport:
     home_videos_count: int = 0
     random_videos_count: int = 0
     search_queries_count: int = 0
+    thread_url: Optional[str] = None
+    thread_message_id: Optional[str] = None
 
     def generate_subject(self) -> str:
         """Produce a consistent subject line to ensure start and completion emails thread together in Gmail."""
@@ -295,8 +298,12 @@ class SessionReport:
 class EmailReporter:
     """Manages report and notification delivery via headless Chrome Gmail, active browser, or SMTP."""
 
-    @staticmethod
+    last_thread_url: Optional[str] = None
+    last_message_id: Optional[str] = None
+
+    @classmethod
     def send_via_smtp(
+        cls,
         report: SessionReport,
         recipient_email: str,
         bcc_email: Optional[str] = None,
@@ -306,6 +313,7 @@ class EmailReporter:
         password: str = "",
         sender_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Deliver report email using SMTP with TLS or SSL."""
         if not recipient_email or "@" not in recipient_email:
@@ -332,6 +340,18 @@ class EmailReporter:
         msg["Subject"] = subject
         msg["From"] = sender
         msg["To"] = recipient_email
+
+        domain = sender.split("@")[-1] if "@" in sender else "yttool.app"
+        msg_id = make_msgid(domain=domain)
+        msg["Message-ID"] = msg_id
+        actual_thread_id = getattr(report, "thread_message_id", None) or cls.last_message_id
+        if actual_thread_id:
+            msg["In-Reply-To"] = actual_thread_id
+            msg["References"] = actual_thread_id
+
+        cls.last_message_id = msg_id
+        if thread_info is not None and isinstance(thread_info, dict):
+            thread_info["message_id"] = msg_id
         msg.attach(MIMEText(plain_text, "plain", "utf-8"))
         msg.attach(MIMEText(html_content, "html", "utf-8"))
 
@@ -374,6 +394,7 @@ class EmailReporter:
         bcc_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
         email_description: str = "report",
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Core Gmail compose automation in Chrome (works for visible and headless Chrome)."""
         if not driver:
@@ -621,6 +642,43 @@ class EmailReporter:
                     )
                 return False
 
+            # Capture persistent thread URL from confirmation toast or opened thread
+            captured_thread_url = None
+            try:
+                view_msg_links = driver.find_elements(
+                    By.XPATH,
+                    "//a[@id='link_vmsg' or contains(text(), 'View message') or contains(@aria-label, 'View message')]",
+                )
+                for v_link in view_msg_links:
+                    href = v_link.get_attribute("href") or ""
+                    if href:
+                        if not href.startswith("http"):
+                            base = (driver.current_url or "https://mail.google.com/mail/u/0/").split("#")[0]
+                            captured_thread_url = f"{base}#{href.lstrip('#')}"
+                        else:
+                            captured_thread_url = href
+                        try:
+                            v_link.click()
+                            time.sleep(1.2)
+                            cur_after = driver.current_url or ""
+                            if cur_after and any(k in cur_after for k in ("#sent/", "#inbox/", "#all/")) and len(cur_after.split("/")[-1]) > 5:
+                                captured_thread_url = cur_after
+                        except Exception:
+                            pass
+                        break
+            except Exception:
+                pass
+
+            if not captured_thread_url:
+                cur_u = driver.current_url or ""
+                if any(x in cur_u for x in ("#sent/", "#inbox/", "#all/", "#search/")):
+                    captured_thread_url = cur_u
+
+            if captured_thread_url:
+                cls.last_thread_url = captured_thread_url
+                if thread_info is not None and isinstance(thread_info, dict):
+                    thread_info["thread_url"] = captured_thread_url
+
             # Allow 3 seconds for background network sync before browser terminates
             time.sleep(3.0)
             if log_queue:
@@ -633,6 +691,234 @@ class EmailReporter:
             return False
 
     @classmethod
+    def _deliver_via_gmail_thread_reply(
+        cls,
+        driver: Any,
+        plain_text: str,
+        thread_url: Optional[str] = None,
+        subject: Optional[str] = None,
+        recipient_email: Optional[str] = None,
+        bcc_email: Optional[str] = None,
+        log_queue: Optional[queue.Queue] = None,
+        email_description: str = "report",
+        thread_info: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Reply directly to an existing session email thread in Gmail."""
+        if not driver:
+            return False
+
+        try:
+            target_url = thread_url
+            if not target_url and subject:
+                clean_subj = subject.strip().replace('"', '')
+                target_url = f"https://mail.google.com/mail/u/0/#search/{quote('subject:"' + clean_subj + '"')}"
+
+            if not target_url:
+                return False
+
+            if log_queue:
+                emit(log_queue, f"Navigating to existing session email thread to send {email_description} as a reply...")
+
+            driver.get(target_url)
+
+            # Wait for thread or search results to load
+            start_wait = time.time()
+            is_signed_in = True
+            while time.time() - start_wait < 18:
+                current_url = driver.current_url or ""
+                if "accounts.google.com" in current_url:
+                    is_signed_in = False
+                    break
+                if "#search" in current_url:
+                    rows = driver.find_elements(By.XPATH, "//tr[contains(@class, 'zA')]")
+                    if rows:
+                        rows[0].click()
+                        time.sleep(1.5)
+                        break
+                if driver.find_elements(By.XPATH, "//div[@role='button'][@aria-label='Reply' or contains(., 'Reply')] | //div[@role='textbox'] | //div[contains(@class, 'adn ads')]"):
+                    break
+                time.sleep(1.0)
+
+            if not is_signed_in:
+                return False
+
+            # Locate Reply button and click to expand composer
+            reply_opened = False
+            reply_selectors = [
+                "//div[@role='button' and @data-tooltip and contains(@data-tooltip, 'Reply')]",
+                "//div[@role='button' and @aria-label and contains(@aria-label, 'Reply')]",
+                "//div[@role='button' and (text()='Reply' or contains(., 'Reply'))]",
+                "//span[@role='link' and text()='Reply']",
+                "//div[contains(@class, 'ams') and contains(text(), 'Reply')]",
+                "//div[contains(@aria-label, 'Reply to')]",
+                "//div[@role='textbox']",
+            ]
+            for r_sel in reply_selectors:
+                try:
+                    candidates = driver.find_elements(By.XPATH, r_sel)
+                    for cand in candidates:
+                        if cand.is_displayed():
+                            cand.click()
+                            reply_opened = True
+                            break
+                    if reply_opened:
+                        break
+                except Exception:
+                    continue
+
+            time.sleep(1.0)
+
+            # Find reply message body textbox
+            body_element = None
+            body_selectors = [
+                "//div[@role='textbox' and (contains(@aria-label, 'Reply') or contains(@aria-label, 'Message Body') or contains(@class, 'Am'))]",
+                "//div[@role='textbox'][contains(@class, 'Am')]",
+                "//div[@role='textbox']",
+            ]
+            body_start_wait = time.time()
+            while time.time() - body_start_wait < 10:
+                for b_sel in body_selectors:
+                    try:
+                        elems = driver.find_elements(By.XPATH, b_sel)
+                        for el in elems:
+                            if el.is_displayed():
+                                body_element = el
+                                break
+                        if body_element:
+                            break
+                    except Exception:
+                        continue
+                if body_element:
+                    break
+                time.sleep(0.5)
+
+            if not body_element:
+                if log_queue:
+                    emit(log_queue, "Could not open inline reply box in existing thread. Falling back to compose...", logging.INFO)
+                return False
+
+            # Populate body with plain_text
+            try:
+                driver.execute_script(
+                    """
+                    var el = arguments[0];
+                    var text = arguments[1];
+                    el.focus();
+                    if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
+                        document.execCommand('selectAll', false, null);
+                        document.execCommand('insertText', false, text);
+                    } else {
+                        el.innerText = text;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                    }
+                    """,
+                    body_element,
+                    plain_text,
+                )
+            except Exception:
+                body_element.send_keys(plain_text)
+
+            time.sleep(1.0)
+
+            # Trigger Send
+            sent_triggered = False
+            send_btn_selectors = [
+                "//div[@role='button' and @data-tooltip and contains(@data-tooltip, 'Send')]",
+                "//div[@role='button' and @aria-label and contains(@aria-label, 'Send')]",
+                "//div[@role='button' and (text()='Send' or contains(., 'Send'))]",
+                "//div[contains(@class, 'T-I') and contains(@class, 'aoO')]",
+            ]
+            for sel in send_btn_selectors:
+                try:
+                    buttons = driver.find_elements(By.XPATH, sel)
+                    for btn in buttons:
+                        if btn.is_displayed():
+                            btn.click()
+                            sent_triggered = True
+                            break
+                    if sent_triggered:
+                        break
+                except Exception:
+                    continue
+
+            if not sent_triggered:
+                try:
+                    body_element.send_keys(Keys.CONTROL, Keys.ENTER)
+                    sent_triggered = True
+                except Exception:
+                    pass
+
+            if not sent_triggered:
+                return False
+
+            # Wait for delivery confirmation
+            delivery_confirmed = False
+            start_confirm_wait = time.time()
+            while time.time() - start_confirm_wait < 20:
+                try:
+                    alert = driver.switch_to.alert
+                    alert.accept()
+                except Exception:
+                    pass
+
+                try:
+                    dialog_btns = driver.find_elements(
+                        By.XPATH,
+                        "//div[@role='dialog']//button[contains(., 'OK') or contains(., 'Send') or contains(., 'Yes') or @name='ok']",
+                    )
+                    for d_btn in dialog_btns:
+                        if d_btn.is_displayed():
+                            d_btn.click()
+                            break
+                except Exception:
+                    pass
+
+                success_indicators = [
+                    "//span[contains(text(), 'Message sent') or contains(text(), 'Your message has been sent')]",
+                    "//div[contains(@class, 'bAq') and contains(text(), 'Message sent')]",
+                    "//div[@aria-live][contains(., 'Message sent') or contains(., 'sent')]",
+                ]
+                for s_sel in success_indicators:
+                    try:
+                        toasts = driver.find_elements(By.XPATH, s_sel)
+                        if any(t.is_displayed() for t in toasts):
+                            delivery_confirmed = True
+                            break
+                    except Exception:
+                        pass
+                if delivery_confirmed:
+                    break
+
+                try:
+                    body_visible = body_element.is_displayed()
+                except Exception:
+                    body_visible = False
+
+                if not body_visible:
+                    delivery_confirmed = True
+                    break
+
+                time.sleep(1.0)
+
+            if not delivery_confirmed:
+                return False
+
+            if driver.current_url:
+                cls.last_thread_url = driver.current_url
+                if thread_info is not None and isinstance(thread_info, dict):
+                    thread_info["thread_url"] = driver.current_url
+
+            time.sleep(3.0)
+            if log_queue:
+                emit(log_queue, f"Successfully sent {email_description} under existing thread via Gmail.")
+            return True
+
+        except Exception as exc:
+            if log_queue:
+                emit(log_queue, f"Gmail thread reply error: {exc}. Trying standard delivery fallback...", logging.INFO)
+            return False
+
+    @classmethod
     def send_via_browser_gmail(
         cls,
         driver: Any,
@@ -640,8 +926,25 @@ class EmailReporter:
         recipient_email: str,
         bcc_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Deliver report email using an active, visible Chrome browser session."""
+        """Deliver report email using an active, visible Chrome browser session, threading into existing session if possible."""
+        target_thread = report.thread_url or cls.last_thread_url
+        if target_thread or report.custom_subject:
+            reply_ok = cls._deliver_via_gmail_thread_reply(
+                driver=driver,
+                plain_text=report.generate_plain_text(),
+                thread_url=target_thread,
+                subject=report.generate_subject(),
+                recipient_email=recipient_email,
+                bcc_email=bcc_email,
+                log_queue=log_queue,
+                email_description="session watch time report",
+                thread_info=thread_info,
+            )
+            if reply_ok:
+                return True
+
         return cls._deliver_via_gmail_compose(
             driver=driver,
             subject=report.generate_subject(),
@@ -650,6 +953,7 @@ class EmailReporter:
             bcc_email=bcc_email,
             log_queue=log_queue,
             email_description="session watch time report",
+            thread_info=thread_info,
         )
 
     @classmethod
@@ -662,6 +966,8 @@ class EmailReporter:
         bcc_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
         email_description: str = "email notification",
+        thread_url: Optional[str] = None,
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Launch headless Chrome with account profile, send email via Gmail web, and close."""
         from .driver import close_driver, setup_driver
@@ -686,6 +992,22 @@ class EmailReporter:
                 log_queue=log_queue,
                 headless=True,
             )
+            target_thread = thread_url or cls.last_thread_url
+            if target_thread or ("start" not in email_description.lower() and subject):
+                reply_ok = cls._deliver_via_gmail_thread_reply(
+                    driver=driver,
+                    plain_text=body_text,
+                    thread_url=target_thread,
+                    subject=subject,
+                    recipient_email=recipient_email,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    email_description=email_description,
+                    thread_info=thread_info,
+                )
+                if reply_ok:
+                    return True
+
             return cls._deliver_via_gmail_compose(
                 driver=driver,
                 subject=subject,
@@ -694,6 +1016,7 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 log_queue=log_queue,
                 email_description=email_description,
+                thread_info=thread_info,
             )
         except Exception as exc:
             if log_queue:
@@ -714,6 +1037,9 @@ class EmailReporter:
         custom_subject: Optional[str] = None,
         driver: Optional[Any] = None,
         log_queue: Optional[queue.Queue] = None,
+        thread_url: Optional[str] = None,
+        thread_message_id: Optional[str] = None,
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Send an urgent alert notification email for bot challenges, disconnections, or crashes."""
         recipient, bcc_email = resolve_report_recipients(config_mgr)
@@ -754,6 +1080,8 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 account=account,
                 log_queue=None,
+                thread_message_id=thread_message_id or cls.last_message_id,
+                thread_info=thread_info,
             )
             if ok:
                 if log_queue:
@@ -782,6 +1110,8 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 log_queue=None,
                 email_description=f"alert ({alert_type})",
+                thread_url=thread_url or cls.last_thread_url,
+                thread_info=thread_info,
             )
 
         return False
@@ -797,6 +1127,7 @@ class EmailReporter:
         total_app_watch_seconds: float = 0.0,
         log_queue: Optional[queue.Queue] = None,
         extra_details: Optional[Dict[str, Any]] = None,
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Send a simple email notification when automation starts."""
         recipient, bcc_email = resolve_report_recipients(config_mgr)
@@ -837,6 +1168,7 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 account=account,
                 log_queue=None,
+                thread_info=thread_info,
             )
 
         # Default: Headless Browser Gmail
@@ -848,10 +1180,12 @@ class EmailReporter:
             bcc_email=bcc_email,
             log_queue=None,
             email_description="start notification email",
+            thread_info=thread_info,
         )
 
-    @staticmethod
+    @classmethod
     def _send_plain_smtp(
+        cls,
         recipient: str,
         subject: str,
         text: str,
@@ -859,6 +1193,8 @@ class EmailReporter:
         bcc_email: Optional[str] = None,
         account: Optional[Account] = None,
         log_queue: Optional[queue.Queue] = None,
+        thread_message_id: Optional[str] = None,
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         host = config_mgr.get_setting("SmtpHost", "smtp.gmail.com")
         port = config_mgr.get_int("SmtpPort", 587)
@@ -873,6 +1209,18 @@ class EmailReporter:
         msg["Subject"] = subject
         msg["From"] = sender
         msg["To"] = recipient
+
+        domain = sender.split("@")[-1] if "@" in sender else "yttool.app"
+        msg_id = make_msgid(domain=domain)
+        msg["Message-ID"] = msg_id
+        actual_thread_id = thread_message_id or cls.last_message_id
+        if actual_thread_id:
+            msg["In-Reply-To"] = actual_thread_id
+            msg["References"] = actual_thread_id
+
+        cls.last_message_id = msg_id
+        if thread_info is not None and isinstance(thread_info, dict):
+            thread_info["message_id"] = msg_id
 
         try:
             if port == 465:
@@ -949,6 +1297,7 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 log_queue=log_queue,
                 email_description="session watch time report",
+                thread_url=report.thread_url or cls.last_thread_url,
             )
             if headless_ok:
                 return True

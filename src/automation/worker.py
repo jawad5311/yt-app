@@ -67,6 +67,9 @@ class AutomationWorker:
         self.session_start_time = datetime.now()
         stamp = self.session_start_time.strftime("%d %b %Y - %I:%M %p")
         self.session_thread_subject = f"Views App Session [{stamp}] - {getattr(self.account, 'email', '')}"
+        self.session_thread_url: Optional[str] = None
+        self.session_thread_message_id: Optional[str] = None
+        self.session_thread_info: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------ events
 
@@ -587,7 +590,12 @@ class AutomationWorker:
                 custom_subject=getattr(self, "session_thread_subject", None),
                 total_app_watch_seconds=total_sec,
                 log_queue=None,
+                thread_info=self.session_thread_info,
             )
+            if self.session_thread_info.get("thread_url"):
+                self.session_thread_url = self.session_thread_info["thread_url"]
+            if self.session_thread_info.get("message_id"):
+                self.session_thread_message_id = self.session_thread_info["message_id"]
         except Exception as exc:
             logging.debug(f"Failed dispatching start notification email: {exc}")
 
@@ -610,6 +618,9 @@ class AutomationWorker:
                 start_time=getattr(self, "session_start_time", datetime.now()),
                 custom_subject=getattr(self, "session_thread_subject", None),
                 log_queue=None,
+                thread_url=getattr(self, "session_thread_url", None),
+                thread_message_id=getattr(self, "session_thread_message_id", None),
+                thread_info=getattr(self, "session_thread_info", None),
             )
         except Exception as exc:
             logging.debug(f"Failed dispatching critical alert email: {exc}")
@@ -639,6 +650,8 @@ class AutomationWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
+                thread_url=getattr(self, "session_thread_url", None),
+                thread_message_id=getattr(self, "session_thread_message_id", None),
                 suggested_videos_count=report_data.get("suggested_videos_count", 0),
                 search_videos_count=report_data.get("search_videos_count", 0),
                 home_videos_count=report_data.get("home_videos_count", 0),
