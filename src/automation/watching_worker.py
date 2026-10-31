@@ -2113,7 +2113,7 @@ class WatchingWorker:
                 # -------------------------------------------------------------
                 found_home_target = False
 
-                for home_attempt in range(1, 3):
+                for home_attempt in range(1, 4):
                     if self.stop_event.is_set():
                         break
                     self.check_pause()
@@ -2135,7 +2135,7 @@ class WatchingWorker:
                         safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
                         human_like_delay(2.0, 3.5)
                     else:
-                        emit(self.log_queue, f"Scanning YouTube Home feed (attempt {home_attempt}/2)...")
+                        emit(self.log_queue, f"Scanning YouTube Home feed (attempt {home_attempt}/3)...")
 
                     dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
@@ -2199,28 +2199,19 @@ class WatchingWorker:
                     else:
                         emit(
                             self.log_queue,
-                            f"No video matching target channels found on YouTube Home (attempt {home_attempt}/2).",
+                            f"No video matching target channels found on YouTube Home (attempt {home_attempt}/3).",
                             logging.INFO,
                         )
 
                 if self.stop_event.is_set():
                     break
 
-                # If no target video was found on Home feed, do NOT stop: switch directly to YouTube search!
                 if not found_home_target:
-                    emit(
-                        self.log_queue,
-                        "[Browsing Loop] No target channel video on Home feed. Moving directly to YouTube search...",
-                    )
-                    search_success = self.search_and_play_target_video(session_watched_keys)
-                    if search_success:
-                        target_attempts += 1
-                        self.target_attempts = target_attempts
-                        self.watched_count = target_attempts
-                        prog_total = self.target_limit if not self.is_unlimited else 0
-                        self._emit_event(("progress", 0, target_attempts, prog_total))
-                    else:
-                        human_like_delay(2.0, 4.0)
+                    stop_msg = "No video of targeted channel found on YouTube Home after 3 refresh attempts. Stopping watching session."
+                    emit(self.log_queue, stop_msg, logging.WARNING)
+                    self._report_status("Stopped: No target videos found on Home page", "warning")
+                    self.stop_event.set()
+                    break
 
                 continue
 
