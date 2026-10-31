@@ -194,11 +194,17 @@ class TestEmailReporterDelivery:
         mock_send_btn = MagicMock()
         mock_send_btn.is_displayed.return_value = True
 
+        mock_toast = MagicMock(is_displayed=lambda: True)
+
         def find_elements_mock(by, selector):
+            if "@role='dialog'" in selector:
+                return []
             if "role='textbox'" in selector:
                 return [mock_body]
-            if "contains(@aria-label, 'Send')" in selector or "Send" in selector:
+            if "@data-tooltip" in selector and "Send" in selector:
                 return [mock_send_btn]
+            if "sent" in selector.lower():
+                return [mock_toast]
             return []
 
         mock_driver.find_elements.side_effect = find_elements_mock
@@ -496,11 +502,17 @@ class TestRecipientResolutionAndBcc:
         mock_body = MagicMock(is_displayed=lambda: True)
         mock_send_btn = MagicMock(is_displayed=lambda: True)
 
+        mock_toast = MagicMock(is_displayed=lambda: True)
+
         def find_elements_mock(by, selector):
+            if "@role='dialog'" in selector:
+                return []
             if "role='textbox'" in selector:
                 return [mock_body]
-            if "contains(@aria-label, 'Send')" in selector or "Send" in selector:
+            if "@data-tooltip" in selector and "Send" in selector:
                 return [mock_send_btn]
+            if "sent" in selector.lower():
+                return [mock_toast]
             return []
 
         mock_driver.find_elements.side_effect = find_elements_mock

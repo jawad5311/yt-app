@@ -361,27 +361,72 @@ class EmailReporter:
             if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient_email.lower():
                 compose_url += f"&bcc={quote(bcc_email)}"
             compose_url += f"&su={quote(subject)}"
-            driver.get(compose_url)
-            time.sleep(3.5)
+            # Pre-populate body in URL query string when within safe URL limits
+            if len(plain_text) < 7000:
+                compose_url += f"&body={quote(plain_text)}"
 
-            current_url = driver.current_url or ""
-            if "accounts.google.com" in current_url:
+            driver.get(compose_url)
+
+            # Wait for Gmail to load or redirect
+            start_wait = time.time()
+            is_signed_in = True
+            while time.time() - start_wait < 18:
+                current_url = driver.current_url or ""
+                if "accounts.google.com" in current_url:
+                    is_signed_in = False
+                    break
+                # Check if compose box or any compose element has rendered
+                if driver.find_elements(By.XPATH, "//div[@role='textbox'] | //input[@name='to' or @aria-label='To' or contains(@class, 'agP')]"):
+                    break
+                time.sleep(1.0)
+
+            if not is_signed_in:
                 if log_queue:
                     emit(log_queue, f"Gmail {email_description} delivery failed: Google account is not signed in for this profile.", logging.ERROR)
                 return False
 
-            # Ensure Recipient is populated if not auto-filled
-            try:
-                to_field = driver.find_element(By.XPATH, "//input[@name='to' or @aria-label='To' or @aria-label='To recipients']")
-                if to_field:
-                    val = to_field.get_attribute("value") or ""
-                    if recipient_email.lower() not in val.lower():
-                        to_field.click()
-                        to_field.clear()
-                        to_field.send_keys(recipient_email)
-                        to_field.send_keys(Keys.ENTER)
-            except Exception:
-                pass
+            # Ensure Recipient is populated and committed
+            recipient_clean = recipient_email.lower().strip()
+            has_recipient = False
+            chip_selectors = [
+                f"//span[contains(translate(@email, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{recipient_clean}')]",
+                f"//div[contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{recipient_clean}')]",
+                f"//span[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{recipient_clean}')]",
+            ]
+            for c_sel in chip_selectors:
+                try:
+                    chips = driver.find_elements(By.XPATH, c_sel)
+                    if any(c.is_displayed() for c in chips):
+                        has_recipient = True
+                        break
+                except Exception:
+                    pass
+
+            if not has_recipient:
+                to_selectors = [
+                    "//input[@name='to' or @aria-label='To' or @aria-label='To recipients']",
+                    "//input[contains(@class, 'agP')]",
+                    "//div[@role='combobox']//input",
+                    "//div[@name='to']//input",
+                ]
+                for sel in to_selectors:
+                    try:
+                        fields = driver.find_elements(By.XPATH, sel)
+                        for f in fields:
+                            if f.is_displayed():
+                                f.click()
+                                time.sleep(0.3)
+                                f.send_keys(recipient_email)
+                                time.sleep(0.3)
+                                f.send_keys(Keys.ENTER)
+                                time.sleep(0.2)
+                                f.send_keys(Keys.TAB)
+                                has_recipient = True
+                                break
+                        if has_recipient:
+                            break
+                    except Exception:
+                        continue
 
             # Locate the compose message body (with wait retry for Gmail to render)
             body_element = None
@@ -392,7 +437,7 @@ class EmailReporter:
                 "//div[@role='textbox']",
             ]
             start_wait = time.time()
-            while time.time() - start_wait < 18:
+            while time.time() - start_wait < 15:
                 for sel in body_selectors:
                     try:
                         elems = driver.find_elements(By.XPATH, sel)
@@ -413,30 +458,46 @@ class EmailReporter:
                     emit(log_queue, "Gmail delivery failed: could not locate Gmail compose text area.", logging.ERROR)
                 return False
 
-            # Focus and write the body content
-            body_element.click()
+            # Focus and write the body content if not already pre-populated via URL
+            try:
+                body_element.click()
+            except Exception:
+                pass
             time.sleep(0.5)
 
-            try:
-                driver.execute_script(
-                    "arguments[0].innerText = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
-                    body_element,
-                    plain_text,
-                )
-            except Exception:
-                lines = plain_text.split("\n")
-                for line in lines:
-                    body_element.send_keys(line)
-                    body_element.send_keys(Keys.SHIFT, Keys.ENTER)
+            curr_body = (body_element.text or "").strip()
+            if not curr_body or len(curr_body) < 20:
+                try:
+                    driver.execute_script(
+                        """
+                        var el = arguments[0];
+                        var text = arguments[1];
+                        el.focus();
+                        if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
+                            document.execCommand('selectAll', false, null);
+                            document.execCommand('insertText', false, text);
+                        } else {
+                            el.innerText = text;
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                        }
+                        """,
+                        body_element,
+                        plain_text,
+                    )
+                except Exception:
+                    lines = plain_text.split("\n")
+                    for line in lines:
+                        body_element.send_keys(line)
+                        body_element.send_keys(Keys.SHIFT, Keys.ENTER)
 
             time.sleep(1.0)
 
             # Trigger Send
-            sent = False
+            sent_triggered = False
             send_btn_selectors = [
                 "//div[@role='button' and @data-tooltip and contains(@data-tooltip, 'Send')]",
                 "//div[@role='button' and @aria-label and contains(@aria-label, 'Send')]",
-                "//div[@role='button' and text()='Send']",
+                "//div[@role='button' and (text()='Send' or contains(., 'Send'))]",
                 "//div[contains(@class, 'T-I') and contains(@class, 'aoO')]",
             ]
             for sel in send_btn_selectors:
@@ -445,26 +506,94 @@ class EmailReporter:
                     for btn in buttons:
                         if btn.is_displayed():
                             btn.click()
-                            sent = True
+                            sent_triggered = True
                             break
-                    if sent:
+                    if sent_triggered:
                         break
                 except Exception:
                     continue
 
-            if not sent:
+            if not sent_triggered:
                 try:
                     body_element.send_keys(Keys.CONTROL, Keys.ENTER)
-                    sent = True
+                    sent_triggered = True
                 except Exception:
                     pass
 
-            if not sent:
+            if not sent_triggered:
                 if log_queue:
-                    emit(log_queue, "Gmail delivery failed: could not trigger Send button.", logging.ERROR)
+                    emit(log_queue, f"Gmail {email_description} delivery failed: could not trigger Send button.", logging.ERROR)
                 return False
 
-            time.sleep(2.5)
+            # Wait for delivery confirmation and dismiss any modal prompts
+            delivery_confirmed = False
+            start_confirm_wait = time.time()
+            while time.time() - start_confirm_wait < 20:
+                # 1. Accept any native or in-page alert/modal (e.g. 'Send without body/subject')
+                try:
+                    alert = driver.switch_to.alert
+                    alert.accept()
+                except Exception:
+                    pass
+
+                try:
+                    dialog_btns = driver.find_elements(
+                        By.XPATH,
+                        "//div[@role='dialog']//button[contains(., 'OK') or contains(., 'Send') or contains(., 'Yes') or @name='ok']",
+                    )
+                    for d_btn in dialog_btns:
+                        if d_btn.is_displayed():
+                            d_btn.click()
+                            break
+                except Exception:
+                    pass
+
+                # 2. Check for 'Message sent' toast or notification
+                success_indicators = [
+                    "//span[contains(text(), 'Message sent') or contains(text(), 'Your message has been sent')]",
+                    "//div[contains(@class, 'bAq') and contains(text(), 'Message sent')]",
+                    "//div[@aria-live][contains(., 'Message sent') or contains(., 'sent')]",
+                ]
+                for s_sel in success_indicators:
+                    try:
+                        toasts = driver.find_elements(By.XPATH, s_sel)
+                        if any(t.is_displayed() for t in toasts):
+                            delivery_confirmed = True
+                            break
+                    except Exception:
+                        pass
+                if delivery_confirmed:
+                    break
+
+                # 3. Check if compose body disappeared and page is not in 'Sending...' state
+                try:
+                    body_visible = body_element.is_displayed()
+                except Exception:
+                    body_visible = False
+
+                if not body_visible:
+                    try:
+                        sending_elems = driver.find_elements(By.XPATH, "//*[contains(text(), 'Sending...')]")
+                        if not any(e.is_displayed() for e in sending_elems):
+                            delivery_confirmed = True
+                            break
+                    except Exception:
+                        delivery_confirmed = True
+                        break
+
+                time.sleep(1.0)
+
+            if not delivery_confirmed:
+                if log_queue:
+                    emit(
+                        log_queue,
+                        f"Gmail {email_description} delivery unconfirmed: 'Message sent' confirmation not received within timeout.",
+                        logging.WARNING,
+                    )
+                return False
+
+            # Allow 3 seconds for background network sync before browser terminates
+            time.sleep(3.0)
             if log_queue:
                 emit(log_queue, f"Successfully sent {email_description} to '{recipient_email}' via Gmail.")
             return True

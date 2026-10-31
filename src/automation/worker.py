@@ -1,6 +1,7 @@
 import logging
 import queue
 import threading
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -551,13 +552,19 @@ class AutomationWorker:
             if hasattr(self, "channel_tracker"):
                 self.channel_tracker.on_stop()
 
-            # Close main driver first to release profile lock for headless reporting
-            if self.driver:
+            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
+            if "active" in method.lower() and self.driver:
+                self._send_session_report(status=session_status, error=session_err)
                 close_driver(self.driver, log_queue=self.log_queue)
                 self.driver = None
-
-            # Deliver session watch time report via headless browser
-            self._send_session_report(status=session_status, error=session_err)
+            else:
+                # Close main driver first to release profile lock for headless reporting
+                if self.driver:
+                    close_driver(self.driver, log_queue=self.log_queue)
+                    self.driver = None
+                time.sleep(1.0)
+                # Deliver session watch time report via headless browser
+                self._send_session_report(status=session_status, error=session_err)
 
     def _send_start_notification(self) -> None:
         """Deliver start notification email via headless browser."""
@@ -631,15 +638,17 @@ class AutomationWorker:
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
             )
-            EmailReporter.dispatch_report(
+            ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
                 driver=self.driver,
                 account=self.account,
                 log_queue=self.log_queue,
             )
+            if not ok:
+                emit(self.log_queue, "Session report email delivery could not be completed.", logging.WARNING)
         except Exception as exc:
-            logging.debug(f"Failed dispatching session email report: {exc}")
+            emit(self.log_queue, f"Failed dispatching session email report: {exc}", logging.WARNING)
 
     def stop(self) -> None:
         """Stop worker execution."""
