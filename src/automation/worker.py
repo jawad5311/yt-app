@@ -70,6 +70,7 @@ class AutomationWorker:
         self.session_thread_url: Optional[str] = None
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
+        self.reporting_driver: Optional[Any] = None
 
     # ------------------------------------------------------------------ events
 
@@ -404,7 +405,20 @@ class AutomationWorker:
         emit(self.log_queue, f"Starting automation session for account: {self.account.email}")
         direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", False)
 
-        # Send start notification in headless browser for the primary worker thread
+        # Initialize persistent headless reporting browser before visible driver
+        if self.worker_id == 0:
+            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
+            if "headless" in method.lower() or "auto" in method.lower():
+                try:
+                    self.reporting_driver = EmailReporter.create_headless_reporting_driver(
+                        account=self.account,
+                        log_queue=self.log_queue,
+                    )
+                except Exception as exc:
+                    logging.debug(f"Could not create persistent reporting driver: {exc}")
+                    self.reporting_driver = None
+
+        # Send start notification in headless browser (driver kept running in background)
         if self.worker_id == 0:
             self._send_start_notification()
 
@@ -557,19 +571,18 @@ class AutomationWorker:
             if hasattr(self, "channel_tracker"):
                 self.channel_tracker.on_stop()
 
-            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
-            if "active" in method.lower() and self.driver:
-                self._send_session_report(status=session_status, error=session_err)
+            # Close main visible watching driver
+            if self.driver:
                 close_driver(self.driver, log_queue=self.log_queue)
                 self.driver = None
-            else:
-                # Close main driver first to release profile lock for headless reporting
-                if self.driver:
-                    close_driver(self.driver, log_queue=self.log_queue)
-                    self.driver = None
-                time.sleep(1.0)
-                # Deliver session watch time report via headless browser
-                self._send_session_report(status=session_status, error=session_err)
+
+            # Deliver session report via the persistent headless browser parked on the email thread
+            self._send_session_report(status=session_status, error=session_err)
+
+            # Close persistent headless reporting browser
+            if self.reporting_driver:
+                close_driver(self.reporting_driver, log_queue=self.log_queue)
+                self.reporting_driver = None
 
     def _send_start_notification(self) -> None:
         """Deliver start notification email via headless browser."""
@@ -591,6 +604,7 @@ class AutomationWorker:
                 total_app_watch_seconds=total_sec,
                 log_queue=None,
                 thread_info=self.session_thread_info,
+                driver=self.reporting_driver,
             )
             if self.session_thread_info.get("thread_url"):
                 self.session_thread_url = self.session_thread_info["thread_url"]
@@ -661,7 +675,7 @@ class AutomationWorker:
             ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
-                driver=self.driver,
+                driver=self.reporting_driver or self.driver,
                 account=self.account,
                 log_queue=self.log_queue,
             )

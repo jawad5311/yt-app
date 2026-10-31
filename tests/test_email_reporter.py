@@ -920,3 +920,70 @@ class TestSessionEmailThreading:
         assert ok is True
         assert "FMfcgzGsmWxyz" in thread_info.get("thread_url", "")
         assert EmailReporter.last_thread_url == thread_info["thread_url"]
+
+
+class TestPersistentHeadlessReportingBrowser:
+    @patch("src.automation.driver.setup_driver")
+    def test_create_headless_reporting_driver_passes_is_reporting(self, mock_setup):
+        account = Account(email="tester@gmail.com", password="pwd")
+        mock_driver = MagicMock()
+        mock_setup.return_value = mock_driver
+
+        log_q = queue.Queue()
+        drv = EmailReporter.create_headless_reporting_driver(account, log_queue=log_q)
+
+        assert drv is mock_driver
+        mock_setup.assert_called_once_with(
+            account=account,
+            log_queue=log_q,
+            headless=True,
+            is_reporting=True,
+        )
+
+    @patch.object(EmailReporter, "_deliver_via_gmail_compose", return_value=True)
+    def test_send_start_notification_uses_persistent_driver(self, mock_deliver, tmp_path):
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "SessionStartNotification": True,
+            "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
+            "ReportRecipientEmail": "admin@test.com",
+        })
+        account = Account(email="bot@gmail.com", password="p")
+        mock_driver = MagicMock()
+
+        ok = EmailReporter.send_start_notification(
+            account=account,
+            session_mode="Continuous Watching / Browsing",
+            config_mgr=cfg,
+            driver=mock_driver,
+        )
+
+        assert ok is True
+        mock_deliver.assert_called_once()
+        args, kwargs = mock_deliver.call_args
+        assert kwargs.get("driver") is mock_driver or args[0] is mock_driver
+
+    @patch.object(EmailReporter, "send_via_browser_gmail", return_value=True)
+    @patch.object(EmailReporter, "send_via_headless_browser_gmail")
+    def test_dispatch_report_reuses_persistent_driver_for_headless_method(
+        self, mock_send_headless, mock_send_browser, sample_report, tmp_path
+    ):
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
+            "ReportRecipientEmail": "admin@test.com",
+        })
+        account = Account(email="bot@gmail.com", password="p")
+        mock_persistent_driver = MagicMock()
+
+        ok = EmailReporter.dispatch_report(
+            report=sample_report,
+            config_mgr=cfg,
+            account=account,
+            driver=mock_persistent_driver,
+        )
+
+        assert ok is True
+        mock_send_browser.assert_called_once()
+        mock_send_headless.assert_not_called()
+        assert mock_send_browser.call_args[0][0] is mock_persistent_driver

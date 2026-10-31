@@ -587,6 +587,7 @@ class WatchingWorker:
         self.session_thread_url: Optional[str] = None
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
+        self.reporting_driver: Optional[Any] = None
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -2148,7 +2149,19 @@ class WatchingWorker:
         active_channels_msg = ", ".join(f"'{c.name}'" for c in self.channels if c.name)
         emit(self.log_queue, f"Target stored channel(s): {active_channels_msg}")
 
-        # Send start notification in headless browser before launching visible driver
+        # Initialize persistent headless reporting browser before visible driver
+        method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
+        if "headless" in method.lower() or "auto" in method.lower():
+            try:
+                self.reporting_driver = EmailReporter.create_headless_reporting_driver(
+                    account=self.account,
+                    log_queue=self.log_queue,
+                )
+            except Exception as exc:
+                logging.debug(f"Could not create persistent reporting driver: {exc}")
+                self.reporting_driver = None
+
+        # Send start notification in headless browser (driver kept running in background)
         self._send_start_notification()
 
         try:
@@ -2521,19 +2534,18 @@ class WatchingWorker:
             if hasattr(self, "channel_tracker"):
                 self.channel_tracker.on_stop()
 
-            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
-            if "active" in method.lower() and self.driver:
-                self._send_session_report(status=session_status, error=session_err)
+            # Close main visible watching driver
+            if self.driver:
                 close_driver(self.driver, log_queue=self.log_queue)
                 self.driver = None
-            else:
-                # Close main driver first to release profile lock for headless reporting
-                if self.driver:
-                    close_driver(self.driver, log_queue=self.log_queue)
-                    self.driver = None
-                time.sleep(1.0)
-                # Deliver session watch time report via headless browser
-                self._send_session_report(status=session_status, error=session_err)
+
+            # Deliver session report via the persistent headless browser parked on the email thread
+            self._send_session_report(status=session_status, error=session_err)
+
+            # Close persistent headless reporting browser
+            if self.reporting_driver:
+                close_driver(self.reporting_driver, log_queue=self.log_queue)
+                self.reporting_driver = None
 
     def _send_start_notification(self) -> None:
         """Deliver start notification email via headless browser."""
@@ -2555,6 +2567,7 @@ class WatchingWorker:
                 total_app_watch_seconds=total_sec,
                 log_queue=None,
                 thread_info=self.session_thread_info,
+                driver=self.reporting_driver,
             )
             if self.session_thread_info.get("thread_url"):
                 self.session_thread_url = self.session_thread_info["thread_url"]
@@ -2568,12 +2581,6 @@ class WatchingWorker:
         if not self.config_mgr:
             return
         try:
-            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto")
-            smtp_pass = self.config_mgr.get_setting("SmtpPassword", "")
-            if not smtp_pass and self.driver:
-                close_driver(self.driver, log_queue=self.log_queue)
-                self.driver = None
-
             EmailReporter.send_alert_notification(
                 account=self.account,
                 alert_type=alert_type,
@@ -2585,6 +2592,7 @@ class WatchingWorker:
                 thread_url=getattr(self, "session_thread_url", None),
                 thread_message_id=getattr(self, "session_thread_message_id", None),
                 thread_info=getattr(self, "session_thread_info", None),
+                driver=self.reporting_driver or self.driver,
             )
         except Exception as exc:
             logging.debug(f"Failed dispatching critical alert email: {exc}")
@@ -2625,7 +2633,7 @@ class WatchingWorker:
             ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
-                driver=self.driver,
+                driver=self.reporting_driver or self.driver,
                 account=self.account,
                 log_queue=self.log_queue,
             )

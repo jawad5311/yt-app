@@ -969,6 +969,34 @@ class EmailReporter:
         )
 
     @classmethod
+    def create_headless_reporting_driver(
+        cls,
+        account: Account,
+        log_queue: Optional[queue.Queue] = None,
+    ) -> Optional[Any]:
+        """Create and return a dedicated headless Chrome driver for session email notifications and reporting.
+
+        Uses an isolated reporting profile synchronized with the account's authentication cookies
+        so it can run in the background concurrently with visible browsing drivers without profile lock collisions.
+        """
+        from .driver import setup_driver
+
+        if not account or not getattr(account, "email", None):
+            return None
+        try:
+            driver = setup_driver(
+                account=account,
+                log_queue=log_queue,
+                headless=True,
+                is_reporting=True,
+            )
+            return driver
+        except Exception as exc:
+            if log_queue:
+                emit(log_queue, f"Failed initializing background headless reporting browser: {exc}", logging.WARNING)
+            return None
+
+    @classmethod
     def send_via_headless_browser_gmail(
         cls,
         account: Account,
@@ -1140,6 +1168,7 @@ class EmailReporter:
         log_queue: Optional[queue.Queue] = None,
         extra_details: Optional[Dict[str, Any]] = None,
         thread_info: Optional[Dict[str, Any]] = None,
+        driver: Optional[Any] = None,
     ) -> bool:
         """Send a simple email notification when automation starts."""
         recipient, bcc_email = resolve_report_recipients(config_mgr)
@@ -1168,6 +1197,19 @@ class EmailReporter:
 
         method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip()
         smtp_pass = config_mgr.get_setting("SmtpPassword", "")
+
+        # 1. Prefer persistent headless/visible reporting browser if provided
+        if driver is not None:
+            return cls._deliver_via_gmail_compose(
+                driver=driver,
+                subject=subject,
+                plain_text=plain_text,
+                recipient_email=recipient,
+                bcc_email=bcc_email,
+                log_queue=log_queue,
+                email_description="start notification email",
+                thread_info=thread_info,
+            )
 
         # Start notification runs quietly without emitting logs to UI.
         # Only the completion report at the end of automation shows in the logs.
@@ -1294,8 +1336,8 @@ class EmailReporter:
                 log_queue=log_queue,
             )
 
-        # 2. If an active browser driver is supplied and explicit visible browser requested:
-        if driver is not None and "active" in method.lower():
+        # 2. If a browser driver is already supplied (persistent headless reporting browser or active browser):
+        if driver is not None:
             return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
 
         # 3. Headless Browser Gmail (Default / Auto):
