@@ -1503,7 +1503,7 @@ class WatchingWorker:
             session_watched_keys.add(target_rec_id)
 
         if hasattr(self, "channel_tracker") and self.channel_tracker and (watch_res.watched_seconds > 0 or watch_res.completed):
-            self.channel_tracker.record_video_watched(is_short=False, channel_name=None, source="suggested")
+            self.channel_tracker.record_video_watched(is_short=False, channel_name=None, source="suggested", is_random=True)
 
         return not self.stop_event.is_set()
 
@@ -1516,6 +1516,7 @@ class WatchingWorker:
         session_watched_keys: Set[str],
         is_home: bool = False,
         source: Optional[str] = None,
+        is_random: bool = False,
     ) -> WatchResult:
         """Play and track a target channel video."""
         emit(
@@ -1716,7 +1717,14 @@ class WatchingWorker:
         if hasattr(self, "channel_tracker") and self.channel_tracker and (actual_watched > 0 or watch_res.completed):
             is_s = getattr(registered_task, "is_short", False) or ("/shorts/" in (getattr(registered_task, "url", "") or str(getattr(self.driver, "current_url", "")) or ""))
             resolved_source = source or ("home" if is_home else "suggested")
-            self.channel_tracker.record_video_watched(is_short=is_s, channel_name=channel_display, source=resolved_source)
+            target_names = {c.name.strip().lower() for c in self.get_target_channels() if c.name}
+            is_rand = is_random or (channel_display.strip().lower() not in target_names if channel_display else True)
+            self.channel_tracker.record_video_watched(
+                is_short=is_s,
+                channel_name=channel_display,
+                source=resolved_source,
+                is_random=is_rand,
+            )
         emit(
             self.log_queue,
             f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}).",
@@ -2351,9 +2359,10 @@ class WatchingWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
-                home_videos_count=report_data.get("home_videos_count", 0),
                 suggested_videos_count=report_data.get("suggested_videos_count", 0),
                 search_videos_count=report_data.get("search_videos_count", 0),
+                home_videos_count=report_data.get("home_videos_count", 0),
+                random_videos_count=report_data.get("random_videos_count", 0),
                 search_queries_count=report_data.get("search_queries_count", 0),
             )
             ok = EmailReporter.dispatch_report(

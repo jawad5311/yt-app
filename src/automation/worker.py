@@ -639,9 +639,10 @@ class AutomationWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
-                home_videos_count=report_data.get("home_videos_count", 0),
                 suggested_videos_count=report_data.get("suggested_videos_count", 0),
                 search_videos_count=report_data.get("search_videos_count", 0),
+                home_videos_count=report_data.get("home_videos_count", 0),
+                random_videos_count=report_data.get("random_videos_count", 0),
                 search_queries_count=report_data.get("search_queries_count", 0),
             )
             ok = EmailReporter.dispatch_report(

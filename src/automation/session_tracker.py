@@ -55,10 +55,11 @@ class SessionChannelTracker:
         self.channel_regular_videos: Dict[str, int] = {}
         self.channel_shorts: Dict[str, int] = {}
 
-        # Discovery source counts for session reporting
-        self.home_videos_count: int = 0
+        # Discovery source counts for session reporting (suggested, search, home, random)
         self.suggested_videos_count: int = 0
         self.search_videos_count: int = 0
+        self.home_videos_count: int = 0
+        self.random_videos_count: int = 0
         self.search_queries_count: int = 0
 
         # Session tracking for reports
@@ -180,22 +181,26 @@ class SessionChannelTracker:
         is_short: bool = False,
         channel_name: Optional[str] = None,
         source: Optional[str] = None,
+        is_random: bool = False,
     ) -> None:
-        """Record a completed or watched video / short and its discovery source."""
+        """Record a completed or watched video / short, its discovery source, and random/non-target status."""
         with self._lock:
             if is_short:
                 self.total_shorts += 1
             else:
                 self.total_regular_videos += 1
 
+            if is_random:
+                self.random_videos_count += 1
+
             if source:
                 src_clean = source.strip().lower()
-                if "home" in src_clean:
-                    self.home_videos_count += 1
-                elif "suggest" in src_clean or "recommend" in src_clean:
+                if "suggest" in src_clean or "recommend" in src_clean:
                     self.suggested_videos_count += 1
                 elif "search" in src_clean:
                     self.search_videos_count += 1
+                elif "home" in src_clean:
+                    self.home_videos_count += 1
 
             target_channel = channel_name or self.active_channel_name
             if target_channel:
@@ -274,9 +279,10 @@ class SessionChannelTracker:
                 "total_videos_watched": total_vids,
                 "regular_videos_count": self.total_regular_videos,
                 "shorts_count": self.total_shorts,
-                "home_videos_count": self.home_videos_count,
                 "suggested_videos_count": self.suggested_videos_count,
                 "search_videos_count": self.search_videos_count,
+                "home_videos_count": self.home_videos_count,
+                "random_videos_count": self.random_videos_count,
                 "search_queries_count": self.search_queries_count,
                 "channels": channel_items,
             }
