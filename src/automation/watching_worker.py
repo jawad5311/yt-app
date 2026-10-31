@@ -1502,6 +1502,9 @@ class WatchingWorker:
         if target_rec_id:
             session_watched_keys.add(target_rec_id)
 
+        if hasattr(self, "channel_tracker") and self.channel_tracker and (watch_res.watched_seconds > 0 or watch_res.completed):
+            self.channel_tracker.record_video_watched(is_short=False, channel_name=None, source="suggested")
+
         return not self.stop_event.is_set()
 
     def _play_target_video(
@@ -1512,6 +1515,7 @@ class WatchingWorker:
         channel_display: str,
         session_watched_keys: Set[str],
         is_home: bool = False,
+        source: Optional[str] = None,
     ) -> WatchResult:
         """Play and track a target channel video."""
         emit(
@@ -1711,7 +1715,8 @@ class WatchingWorker:
         self._update_task_duration(registered_task, actual_dur)
         if hasattr(self, "channel_tracker") and self.channel_tracker and (actual_watched > 0 or watch_res.completed):
             is_s = getattr(registered_task, "is_short", False) or ("/shorts/" in (getattr(registered_task, "url", "") or str(getattr(self.driver, "current_url", "")) or ""))
-            self.channel_tracker.record_video_watched(is_short=is_s, channel_name=channel_display)
+            resolved_source = source or ("home" if is_home else "suggested")
+            self.channel_tracker.record_video_watched(is_short=is_s, channel_name=channel_display, source=resolved_source)
         emit(
             self.log_queue,
             f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}).",
@@ -1780,6 +1785,8 @@ class WatchingWorker:
                 )
 
                 search_ok = self.search_youtube_query(query)
+                if hasattr(self, "channel_tracker") and self.channel_tracker:
+                    self.channel_tracker.record_search_query()
                 if not search_ok:
                     continue
 
@@ -1805,7 +1812,7 @@ class WatchingWorker:
 
                     try:
                         watch_res = self._play_target_video(
-                            matched_result, url, title, ch_display, session_watched_keys, is_home=False
+                            matched_result, url, title, ch_display, session_watched_keys, is_home=False, source="search"
                         )
                     except Exception as exc:
                         emit(self.log_queue, f"Error watching search result video: {exc}", logging.ERROR)
@@ -1835,6 +1842,8 @@ class WatchingWorker:
 
                 emit(self.log_queue, f"[YouTube Search] Channel Keyword Search: Searching for channel '{ch_query}'...")
                 search_ok = self.search_youtube_query(ch_query)
+                if hasattr(self, "channel_tracker") and self.channel_tracker:
+                    self.channel_tracker.record_search_query()
                 if not search_ok:
                     continue
 
@@ -1858,7 +1867,7 @@ class WatchingWorker:
 
                     try:
                         watch_res = self._play_target_video(
-                            matched_result, url, title, ch_query, session_watched_keys, is_home=False
+                            matched_result, url, title, ch_query, session_watched_keys, is_home=False, source="search"
                         )
                     except Exception as exc:
                         emit(self.log_queue, f"Error watching channel search video: {exc}", logging.ERROR)
@@ -2068,7 +2077,7 @@ class WatchingWorker:
 
                             try:
                                 watch_res = self._play_target_video(
-                                    item, full_url, title, ch_display, session_watched_keys, is_home=False
+                                    item, full_url, title, ch_display, session_watched_keys, is_home=False, source="suggested"
                                 )
                             except Exception:
                                 raise
@@ -2203,7 +2212,7 @@ class WatchingWorker:
                         emit(self.log_queue, f"Found target channel video on Home page: '{title}' ({ch_display})")
                         try:
                             watch_res = self._play_target_video(
-                                item, full_url, title, ch_display, session_watched_keys, is_home=True
+                                item, full_url, title, ch_display, session_watched_keys, is_home=True, source="home"
                             )
                         except Exception:
                             raise
@@ -2342,6 +2351,10 @@ class WatchingWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
+                home_videos_count=report_data.get("home_videos_count", 0),
+                suggested_videos_count=report_data.get("suggested_videos_count", 0),
+                search_videos_count=report_data.get("search_videos_count", 0),
+                search_queries_count=report_data.get("search_queries_count", 0),
             )
             ok = EmailReporter.dispatch_report(
                 report=report,

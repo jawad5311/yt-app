@@ -94,7 +94,7 @@ class TestBrowsingE2ESimulation(unittest.TestCase):
         mock_driver.execute_script.return_value = home_cards
 
         # 2. Mock _play_target_video
-        def play_target_side_effect(item, full_url, title, ch_display, session_keys, is_home=False):
+        def play_target_side_effect(item, full_url, title, ch_display, session_keys, is_home=False, **kwargs):
             workflow_steps.append(f"play_target:{title}:is_home={is_home}")
             # Simulate browser landing on watch page
             mock_driver.current_url = full_url

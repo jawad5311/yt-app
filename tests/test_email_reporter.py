@@ -689,3 +689,45 @@ class TestReportEnhancedMetricsAndAlerts:
         assert beta_data["shorts_count"] == 1
         assert beta_data["target_achieved"] is True
         assert "[ACHIEVED]" in beta_data["target_goal_text"]
+
+
+    def test_discovery_sources_breakdown_in_report_text_and_html(self, sample_report):
+        sample_report.total_videos_watched = 7
+        sample_report.regular_videos_count = 5
+        sample_report.shorts_count = 2
+        sample_report.home_videos_count = 2
+        sample_report.suggested_videos_count = 3
+        sample_report.search_videos_count = 2
+        sample_report.search_queries_count = 5
+
+        plain_text = sample_report.generate_plain_text()
+        assert "Home Page Feed:   2 video(s)" in plain_text
+        assert "Suggested Section:   3 video(s)" in plain_text
+        assert "YouTube Search:      2 video(s) (5 searches performed)" in plain_text
+
+        html_text = sample_report.generate_html()
+        assert "Home Feed" in html_text
+        assert "Suggested" in html_text
+        assert "YouTube Search" in html_text
+        assert "5 searches" in html_text
+
+    def test_tracker_records_discovery_sources_and_search_queries(self, tmp_path):
+        cfg = ConfigManager(tmp_path / "settings.json")
+        tracker = SessionChannelTracker(config_mgr=cfg)
+
+        tracker.record_video_watched(is_short=False, source="home")
+        tracker.record_video_watched(is_short=False, source="home")
+        tracker.record_video_watched(is_short=False, source="suggested")
+        tracker.record_video_watched(is_short=True, source="suggested")
+        tracker.record_video_watched(is_short=False, source="search")
+
+        tracker.record_search_query()
+        tracker.record_search_query()
+        tracker.record_search_query()
+
+        data = tracker.get_session_report_data()
+        assert data["home_videos_count"] == 2
+        assert data["suggested_videos_count"] == 2
+        assert data["search_videos_count"] == 1
+        assert data["search_queries_count"] == 3
+        assert data["total_videos_watched"] == 5

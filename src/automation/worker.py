@@ -203,6 +203,8 @@ class AutomationWorker:
                 is_last_attempt = (overall_attempt == total_max_attempts)
                 allow_direct = direct_link_fallback if is_last_attempt else False
 
+                if hasattr(self, "channel_tracker") and self.channel_tracker:
+                    self.channel_tracker.record_search_query()
                 try:
                     nav_ok = navigate_to_video_organically(
                         self.driver,
@@ -362,7 +364,7 @@ class AutomationWorker:
                         outcome.playback_finished = True
                     if hasattr(self, "channel_tracker") and self.channel_tracker and (outcome.watched_seconds > 0 or outcome.success):
                         is_s = getattr(task, "is_short", False) or ("/shorts/" in (getattr(task, "url", "") or ""))
-                        self.channel_tracker.record_video_watched(is_short=is_s, channel_name=task.channel)
+                        self.channel_tracker.record_video_watched(is_short=is_s, channel_name=task.channel, source="search")
                     if result.interrupted:
                         outcome.interrupted = True
                         return outcome
@@ -637,6 +639,10 @@ class AutomationWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
+                home_videos_count=report_data.get("home_videos_count", 0),
+                suggested_videos_count=report_data.get("suggested_videos_count", 0),
+                search_videos_count=report_data.get("search_videos_count", 0),
+                search_queries_count=report_data.get("search_queries_count", 0),
             )
             ok = EmailReporter.dispatch_report(
                 report=report,
