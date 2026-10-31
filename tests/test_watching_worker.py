@@ -516,7 +516,6 @@ class TestWatchingWorker:
         self, mock_close, mock_safe_get, mock_watch, mock_login, mock_setup, mock_delay, worker
     ):
         """Verify back-to-back loop: Home (Channel A) -> Recommended (Channel B) alternates cleanly."""
-        from src.models.video_task import VideoTask
         from src.models.watch_stats import TaskOutcome
 
         ch_a = Channel(name="Channel A", url="https://youtube.com/@channelA")
@@ -1162,7 +1161,7 @@ class TestAdSlotFiltering:
         # Simulate index 0 element being detected as an ad
         ad_card_element = MagicMock()
         mock_driver.find_elements.return_value = [ad_card_element]
-        
+
         def script_mock(script, *args):
             # If checking is_ad on the element, return True
             if "closest('ytd-ad-slot-renderer" in script or "is_ad" in script:

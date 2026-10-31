@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from src.config.manager import ConfigManager
 
 
@@ -51,6 +52,7 @@ def test_documentation_contains_disclaimers():
 
 def test_dashboard_unlimited_browsing_checked_by_default_on_app_open(ctk_app):
     from unittest.mock import MagicMock
+
     from src.ui.views.dashboard_view import DashboardView
 
     app = ctk_app

@@ -1,10 +1,11 @@
 """Unit tests for the Videos to Fetch / Shorts to Fetch dropdowns and Fetch Data button in open_channel_videos_modal."""
 
 from unittest.mock import MagicMock, patch
+
 import customtkinter as ctk
 
 from src.models.channel import Channel
-from src.ui.views.channels_view import ChannelsView, FETCH_DATA_OPTIONS
+from src.ui.views.channels_view import FETCH_DATA_OPTIONS, ChannelsView
 
 
 def test_channel_videos_modal_has_fetch_dropdowns_and_fetches_directly(ctk_app):

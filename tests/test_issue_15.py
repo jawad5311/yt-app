@@ -2,7 +2,6 @@
 Require unambiguous channel identity matches.
 """
 
-import pytest
 
 from src.automation.watching_worker import match_channel, normalize_channel_text
 from src.models.channel import Channel, parse_channel_identity

@@ -8,7 +8,6 @@ import customtkinter as ctk
 
 from ...automation.email_reporter import EmailReporter, SessionReport
 from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS
-from ...utils.scroll_helper import setup_smooth_scrolling
 
 APPEARANCE_OPTIONS = ["Dark", "Light", "System"]
 EMAIL_METHOD_OPTIONS = [

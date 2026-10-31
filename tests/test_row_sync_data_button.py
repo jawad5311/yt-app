@@ -1,10 +1,10 @@
 """Unit tests for the per-channel Sync Recent and Sync All buttons."""
 
 from unittest.mock import MagicMock, patch
+
 import customtkinter as ctk
 
 from src.models.channel import Channel
-from src.models.video_task import VideoTask
 from src.ui.background_jobs import BackgroundJobs
 from src.ui.views.channels_view import ChannelsView
 from src.utils.channel_fetcher import ChannelFetchResult, FetchedVideo
@@ -34,7 +34,7 @@ def test_row_sync_recent_button_initially_disabled_and_sync_all_present(ctk_app)
     cards = [w for w in view.scroll_frame.winfo_children() if isinstance(w, ctk.CTkFrame)]
     assert len(cards) == 1
     action_frame = cards[0].grid_slaves(row=0, column=2)[0]
-    
+
     # 🎬 Videos button must be removed
     videos_btn = next((b for b in action_frame.winfo_children() if isinstance(b, ctk.CTkButton) and "Videos" in b.cget("text")), None)
     assert videos_btn is None

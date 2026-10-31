@@ -2,8 +2,8 @@
 
 import json
 from unittest.mock import MagicMock, patch
+
 from src.utils.channel_fetcher import (
-    FetchedVideo,
     fetch_channel_data_api,
     format_seconds_to_duration,
     parse_iso8601_duration,

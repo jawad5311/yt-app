@@ -9,7 +9,7 @@ from src.config.manager import ConfigManager
 from src.models.account import Account
 from src.models.channel import Channel
 from src.models.watch_stats import WatchResult
-from src.ui.views.dashboard_view import DashboardView, STATUS_INFO_COLOR
+from src.ui.views.dashboard_view import STATUS_INFO_COLOR, DashboardView
 
 
 def make_dummy_worker(target_limit=1, is_unlimited=False, total_loops=None):

@@ -1,23 +1,23 @@
-from datetime import datetime
-from .email_reporter import EmailReporter, SessionReport
-from .session_tracker import SessionChannelTracker
 import logging
 import queue
 import threading
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
-from ..models.channel import Channel, is_video_task_runnable, check_video_task_eligibility
+from ..models.channel import Channel, check_video_task_eligibility
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .dispatcher import TaskDispatcher
 from .driver import close_driver, setup_driver
+from .email_reporter import EmailReporter, SessionReport
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
+from .session_tracker import SessionChannelTracker
 from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_video
 
 # Retry a failed task across up to 3 titles, with 3 attempts per title (up to 9 attempts total).

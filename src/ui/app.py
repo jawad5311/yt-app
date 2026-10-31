@@ -1,7 +1,7 @@
-import time
 import logging
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -521,10 +521,18 @@ class YTBotApp(ctk.CTk):
         active_channels = [c for c in stored_channels if c.name and c.enabled and not c.archived]
 
         if not active_channels:
+            derived_channel_names = set()
+            for t in self.queued_video_tasks:
+                if t.channel and t.enabled:
+                    derived_channel_names.add(t.channel.strip())
+            if derived_channel_names:
+                active_channels = [Channel(name=name, enabled=True) for name in derived_channel_names]
+
+        if not active_channels and not self.queued_video_tasks:
             self.show_view("channels")
             emit(
                 self.log_queue,
-                "No enabled channels found! Please check and enable at least one channel in the Channels tab before starting.",
+                "No enabled channels or queued videos found! Please add a channel in the Channels tab or video tasks in the Queue before starting.",
                 logging.WARNING,
             )
             return

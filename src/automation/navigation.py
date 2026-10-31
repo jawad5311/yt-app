@@ -1,7 +1,9 @@
-import time
 import logging
 import queue
-from typing import Any, Optional
+import random
+import time
+from typing import Any, Dict, List, Optional, Sequence
+import urllib.parse
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -354,3 +356,457 @@ def navigate_to_video_organically(
             return False
 
     return False
+
+
+def perform_youtube_search(
+    driver: Any,
+    query: str,
+    log_queue: Optional[queue.Queue] = None,
+) -> bool:
+    """Execute a search on YouTube with human-like typing and submission.
+
+    Works from any YouTube page (home, watch, or results). If already on YouTube,
+    it interacts with the masthead search box. If not on YouTube, navigates to home first.
+    """
+    clean_query = (query or "").strip()
+    if not clean_query:
+        emit(log_queue, "Search query is empty. Skipping search.", logging.WARNING)
+        return False
+
+    current_url = str(getattr(driver, "current_url", "") or "")
+    if "youtube.com" not in current_url:
+        emit(log_queue, "Navigating to YouTube home page for search...")
+        safe_get(driver, "https://www.youtube.com", timeout=45, log_queue=log_queue)
+        human_like_delay(2.0, 3.5)
+        dismiss_youtube_dialogs(driver, log_queue=log_queue)
+
+    emit(log_queue, f"Performing YouTube search for: '{clean_query}'...")
+    try:
+        search_box = WebDriverWait(driver, 20).until(
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    "//textarea[@name='search_query'] | //input[@name='search_query'] | "
+                    "//*[contains(@class, 'yt-searchbox-input')] | //input[@id='search'] | "
+                    "//textarea[@id='search'] | //ytd-searchbox//input | //ytd-searchbox//textarea | "
+                    "//form[contains(@class, 'SearchForm')]//textarea | //form[contains(@class, 'SearchForm')]//input | "
+                    "//input[contains(@class, 'ytSearchboxComponentInput')]",
+                )
+            )
+        )
+        try:
+            search_box.click()
+        except Exception:
+            driver.execute_script("arguments[0].focus();", search_box)
+
+        # Clear existing text
+        try:
+            search_box.clear()
+        except Exception:
+            pass
+        try:
+            search_box.send_keys(Keys.CONTROL + "a")
+            search_box.send_keys(Keys.BACKSPACE)
+        except Exception:
+            pass
+
+        slow_type(search_box, clean_query)
+        human_like_delay(0.5, 1.0)
+        search_box.send_keys(Keys.ENTER)
+        human_like_delay(2.5, 3.5)
+
+        # Fallback to search button if ENTER didn't trigger URL transition
+        current_url = str(getattr(driver, "current_url", "") or "")
+        if "results" not in current_url:
+            search_btns = driver.find_elements(
+                By.XPATH,
+                "//button[@id='search-icon-legacy' or @aria-label='Search' or contains(@class, 'yt-searchbox-button')] | "
+                "//button[contains(@class, 'search-icon')] | //button[contains(@class, 'ytSearchboxComponentSearchButton')]",
+            )
+            if search_btns:
+                try:
+                    search_btns[0].click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", search_btns[0])
+                human_like_delay(2.5, 3.5)
+
+        dismiss_youtube_dialogs(driver, log_queue=log_queue)
+
+        # Wait for search results container
+        results_selector = (
+            "ytd-video-renderer, ytd-item-section-renderer a#video-title, "
+            "ytd-video-renderer a#video-title, a#video-title"
+        )
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, results_selector))
+        )
+        emit(log_queue, f"Search completed for '{clean_query}'. Results loaded.")
+        return True
+    except Exception as exc:
+        emit(log_queue, f"Search input interaction encountered issue: {exc}. Trying direct search URL fallback...", logging.WARNING)
+        try:
+            safe_get(driver, f"https://www.youtube.com/results?search_query={urllib.parse.quote_plus(clean_query)}", timeout=40, log_queue=log_queue)
+            dismiss_youtube_dialogs(driver, log_queue=log_queue)
+            human_like_delay(2.0, 3.5)
+            return True
+        except Exception as fallback_exc:
+            emit(log_queue, f"Search failed completely: {fallback_exc}", logging.ERROR)
+            return False
+
+
+def find_and_click_search_result(
+    driver: Any,
+    task: Optional[VideoTask] = None,
+    target_channels: Sequence[str] = (),
+    max_scrolls: int = 3,
+    log_queue: Optional[queue.Queue] = None,
+) -> Optional[Dict[str, str]]:
+    """Scan YouTube search results for a video matching task (by ID or title) or target_channels.
+
+    If found, smooth scrolls into view, clicks the video organically to open in the current tab,
+    and returns metadata {'url': ..., 'title': ..., 'channel': ...}.
+    Returns None if no matching video is found after max_scrolls.
+    """
+    target_video_id = extract_video_id(task.url) if task and task.url else None
+    candidate_titles = task.get_title_queries() if task else []
+    target_channels_clean = [ch.strip().lower().lstrip("@") for ch in target_channels if ch.strip()]
+    if task and task.channel:
+        c_clean = task.channel.strip().lower().lstrip("@")
+        if c_clean and c_clean not in target_channels_clean:
+            target_channels_clean.append(c_clean)
+
+    emit(log_queue, "Scanning search results for matching video...")
+
+    SCAN_RESULTS_JS = """
+    var videoRenderers = Array.from(document.querySelectorAll('ytd-video-renderer'));
+    return videoRenderers.map(function(r) {
+        var titleElem = r.querySelector('a#video-title, a#video-title-link');
+        var channelElem = r.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"]');
+        return {
+            title: titleElem ? (titleElem.getAttribute('title') || titleElem.textContent || '').trim() : '',
+            url: titleElem ? (titleElem.href || '') : '',
+            channel: channelElem ? (channelElem.textContent || '').trim() : '',
+            channelHref: channelElem ? (channelElem.href || '') : ''
+        };
+    });
+    """
+
+    for scroll_idx in range(max_scrolls + 1):
+        try:
+            results_data = driver.execute_script(SCAN_RESULTS_JS) or []
+        except Exception:
+            results_data = []
+
+        matched_idx = -1
+        match_reason = ""
+
+        # Priority 1: Match by exact Video ID / URL
+        if target_video_id:
+            for idx, item in enumerate(results_data):
+                if target_video_id in item.get("url", ""):
+                    matched_idx = idx
+                    match_reason = f"video ID '{target_video_id}'"
+                    break
+
+        # Priority 2: Match by candidate title
+        if matched_idx < 0 and candidate_titles:
+            for cand in candidate_titles:
+                c_lower = cand.strip().lower()
+                if not c_lower:
+                    continue
+                for idx, item in enumerate(results_data):
+                    t_lower = item.get("title", "").lower()
+                    if c_lower in t_lower or t_lower in c_lower:
+                        matched_idx = idx
+                        match_reason = f"title '{cand}'"
+                        break
+                if matched_idx >= 0:
+                    break
+
+        # Priority 3: Match by target channel name or channel handle
+        if matched_idx < 0 and target_channels_clean:
+            for idx, item in enumerate(results_data):
+                ch_name = item.get("channel", "").lower()
+                ch_href = item.get("channelHref", "").lower()
+                for target_ch in target_channels_clean:
+                    if target_ch in ch_name or target_ch in ch_href:
+                        matched_idx = idx
+                        match_reason = f"target channel '{target_ch}'"
+                        break
+                if matched_idx >= 0:
+                    break
+
+        if matched_idx >= 0:
+            matched_item = results_data[matched_idx]
+            emit(log_queue, f"Matched search result #{matched_idx + 1} ({match_reason}): '{matched_item.get('title')}'")
+
+            CLICK_RESULT_JS = """
+            var renderers = document.querySelectorAll('ytd-video-renderer');
+            var target = renderers[arguments[0]];
+            if (!target) return false;
+            var link = target.querySelector('a#video-title, a#video-title-link, a#thumbnail');
+            if (link) {
+                link.scrollIntoView({behavior: 'smooth', block: 'center'});
+                return true;
+            }
+            return false;
+            """
+            try:
+                driver.execute_script(CLICK_RESULT_JS, matched_idx)
+            except Exception:
+                pass
+            human_like_delay(1.5, 2.5)
+
+            CLICK_EXEC_JS = """
+            var renderers = document.querySelectorAll('ytd-video-renderer');
+            var target = renderers[arguments[0]];
+            if (!target) return false;
+            var link = target.querySelector('a#video-title, a#video-title-link, a#thumbnail');
+            if (link) {
+                link.click();
+                return true;
+            }
+            return false;
+            """
+            try:
+                driver.execute_script(CLICK_EXEC_JS, matched_idx)
+            except Exception:
+                pass
+
+            human_like_delay(3.0, 5.0)
+            dismiss_youtube_dialogs(driver, log_queue=log_queue)
+            return matched_item
+
+        if scroll_idx < max_scrolls:
+            emit(log_queue, f"Video not found in visible results (scan {scroll_idx + 1}/{max_scrolls + 1}). Scrolling down...")
+            try:
+                driver.execute_script("window.scrollBy({top: 700, behavior: 'smooth'});")
+            except Exception:
+                pass
+            human_like_delay(2.0, 3.0)
+
+    emit(log_queue, "No matching video found in search results.", logging.WARNING)
+    return None
+
+
+def find_channel_video_on_home(
+    driver: Any,
+    target_channels: Sequence[str],
+    max_scrolls: int = 4,
+    log_queue: Optional[queue.Queue] = None,
+) -> Optional[Dict[str, str]]:
+    """Scan the YouTube home page feed for videos belonging to target channels.
+
+    If found, smooth scrolls to the video, clicks it organically, and returns metadata.
+    Returns None if no matching channel video is found.
+    """
+    clean_targets = [ch.strip().lower().lstrip("@") for ch in target_channels if ch.strip()]
+    if not clean_targets:
+        emit(log_queue, "No target channels specified to find on home page.", logging.INFO)
+        return None
+
+    current_url = str(getattr(driver, "current_url", "") or "")
+    if "youtube.com" not in current_url or "/watch" in current_url:
+        emit(log_queue, "Navigating to YouTube home page (https://www.youtube.com)...")
+        safe_get(driver, "https://www.youtube.com", timeout=45, log_queue=log_queue)
+        human_like_delay(2.5, 4.0)
+
+    dismiss_youtube_dialogs(driver, log_queue=log_queue)
+    emit(log_queue, f"Scanning YouTube Home feed for videos from target channel(s): {', '.join(target_channels)}...")
+
+    SCAN_HOME_JS = """
+    var cards = Array.from(document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer'));
+    return cards.map(function(c) {
+        var titleElem = c.querySelector('a#video-title-link, a#video-title');
+        var channelElem = c.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"]');
+        return {
+            title: titleElem ? (titleElem.getAttribute('title') || titleElem.textContent || '').trim() : '',
+            url: titleElem ? (titleElem.href || '') : '',
+            channel: channelElem ? (channelElem.textContent || '').trim() : '',
+            channelHref: channelElem ? (channelElem.href || '') : ''
+        };
+    });
+    """
+
+    for scroll_idx in range(max_scrolls + 1):
+        try:
+            cards = driver.execute_script(SCAN_HOME_JS) or []
+        except Exception:
+            cards = []
+
+        for idx, card in enumerate(cards):
+            url = card.get("url", "")
+            if not url or "/watch?v=" not in url:
+                continue
+            ch_name = card.get("channel", "").lower()
+            ch_href = card.get("channelHref", "").lower()
+            for target_ch in clean_targets:
+                if target_ch in ch_name or target_ch in ch_href:
+                    matched_title = card.get("title", "")
+                    emit(log_queue, f"Found home feed video from channel '{card.get('channel')}': '{matched_title}'!")
+
+                    CLICK_HOME_JS = """
+                    var cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer');
+                    var target = cards[arguments[0]];
+                    if (!target) return false;
+                    var link = target.querySelector('a#video-title-link, a#video-title, a#thumbnail');
+                    if (link) {
+                        link.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        return true;
+                    }
+                    return false;
+                    """
+                    try:
+                        driver.execute_script(CLICK_HOME_JS, idx)
+                    except Exception:
+                        pass
+                    human_like_delay(1.5, 2.5)
+
+                    try:
+                        driver.execute_script("""
+                        var cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer');
+                        var target = cards[arguments[0]];
+                        if (target) {
+                            var link = target.querySelector('a#video-title-link, a#video-title, a#thumbnail');
+                            if (link) link.click();
+                        }
+                        """, idx)
+                    except Exception:
+                        pass
+
+                    human_like_delay(3.0, 5.0)
+                    dismiss_youtube_dialogs(driver, log_queue=log_queue)
+                    return card
+
+        if scroll_idx < max_scrolls:
+            emit(log_queue, f"No target channel videos in current view (scroll {scroll_idx + 1}/{max_scrolls + 1}). Scrolling feed...")
+            try:
+                driver.execute_script("window.scrollBy({top: 700, behavior: 'smooth'});")
+            except Exception:
+                pass
+            human_like_delay(2.0, 3.0)
+
+    emit(log_queue, "No target channel videos found on YouTube Home feed.", logging.INFO)
+    return None
+
+
+def find_and_click_suggested_video(
+    driver: Any,
+    target_channels: Sequence[str] = (),
+    prefer_target_channels: bool = True,
+    max_scrolls: int = 2,
+    log_queue: Optional[queue.Queue] = None,
+) -> Optional[Dict[str, str]]:
+    """Find and click a video from the YouTube suggested / up-next section.
+
+    If prefer_target_channels is True and a video from target_channels is suggested,
+    prioritizes it; otherwise picks a random suggested video among top available candidates.
+    Returns metadata dict or None if no suggested video could be found/clicked.
+    """
+    clean_targets = [ch.strip().lower().lstrip("@") for ch in target_channels if ch.strip()]
+    emit(log_queue, "Scanning suggested section for next video...")
+
+    SCAN_SUGGESTED_JS = """
+    var items = Array.from(document.querySelectorAll(
+        'ytd-compact-video-renderer, ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer, #related ytd-compact-video-renderer, ytd-item-section-renderer ytd-compact-video-renderer'
+    ));
+    return items.map(function(item) {
+        var titleElem = item.querySelector('span#video-title, a#video-title, #video-title');
+        var linkElem = item.querySelector('a#thumbnail, a.yt-simple-endpoint');
+        var channelElem = item.querySelector('ytd-channel-name #text, #channel-name, a.yt-formatted-string');
+        return {
+            title: titleElem ? (titleElem.getAttribute('title') || titleElem.textContent || '').trim() : '',
+            url: linkElem ? (linkElem.href || '') : '',
+            channel: channelElem ? (channelElem.textContent || '').trim() : '',
+            channelHref: channelElem ? (channelElem.href || '') : ''
+        };
+    }).filter(function(i) {
+        return i.url && i.url.indexOf('/watch?v=') !== -1;
+    });
+    """
+
+    for scroll_idx in range(max_scrolls + 1):
+        try:
+            suggested_list = driver.execute_script(SCAN_SUGGESTED_JS) or []
+        except Exception:
+            suggested_list = []
+
+        if suggested_list:
+            chosen_idx = -1
+            chosen_reason = ""
+
+            # Check if any suggested video matches target channels
+            if prefer_target_channels and clean_targets:
+                for idx, s in enumerate(suggested_list[:15]):
+                    ch_name = s.get("channel", "").lower()
+                    ch_href = s.get("channelHref", "").lower()
+                    for target_ch in clean_targets:
+                        if target_ch in ch_name or target_ch in ch_href:
+                            chosen_idx = idx
+                            chosen_reason = f"matched target channel '{target_ch}'"
+                            break
+                    if chosen_idx >= 0:
+                        break
+
+            # If no target channel video, select a random candidate among top valid suggestions
+            if chosen_idx < 0:
+                pool = min(len(suggested_list), 8)
+                chosen_idx = random.randint(0, pool - 1)
+                chosen_reason = "random selection"
+
+            chosen_item = suggested_list[chosen_idx]
+            emit(log_queue, f"Selected suggested video ({chosen_reason}): '{chosen_item.get('title')}' ({chosen_item.get('channel')})")
+
+            CLICK_SUGGESTED_JS = """
+            var items = Array.from(document.querySelectorAll(
+                'ytd-compact-video-renderer, ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer, #related ytd-compact-video-renderer, ytd-item-section-renderer ytd-compact-video-renderer'
+            )).filter(function(item) {
+                var linkElem = item.querySelector('a#thumbnail, a.yt-simple-endpoint');
+                return linkElem && linkElem.href && linkElem.href.indexOf('/watch?v=') !== -1;
+            });
+            var target = items[arguments[0]];
+            if (!target) return false;
+            var link = target.querySelector('a#thumbnail, a.yt-simple-endpoint, span#video-title');
+            if (link) {
+                link.scrollIntoView({behavior: 'smooth', block: 'center'});
+                return true;
+            }
+            return false;
+            """
+            try:
+                driver.execute_script(CLICK_SUGGESTED_JS, chosen_idx)
+            except Exception:
+                pass
+            human_like_delay(1.5, 2.5)
+
+            try:
+                driver.execute_script("""
+                var items = Array.from(document.querySelectorAll(
+                    'ytd-compact-video-renderer, ytd-watch-next-secondary-results-renderer ytd-compact-video-renderer, #related ytd-compact-video-renderer, ytd-item-section-renderer ytd-compact-video-renderer'
+                )).filter(function(item) {
+                    var linkElem = item.querySelector('a#thumbnail, a.yt-simple-endpoint');
+                    return linkElem && linkElem.href && linkElem.href.indexOf('/watch?v=') !== -1;
+                });
+                var target = items[arguments[0]];
+                if (target) {
+                    var link = target.querySelector('a#thumbnail, a.yt-simple-endpoint, span#video-title');
+                    if (link) link.click();
+                }
+                """, chosen_idx)
+            except Exception:
+                pass
+
+            human_like_delay(3.0, 5.0)
+            dismiss_youtube_dialogs(driver, log_queue=log_queue)
+            return chosen_item
+
+        # Scroll secondary column / page slightly down to trigger suggested load
+        if scroll_idx < max_scrolls:
+            try:
+                driver.execute_script("window.scrollBy({top: 400, behavior: 'smooth'});")
+            except Exception:
+                pass
+            human_like_delay(2.0, 3.0)
+
+    emit(log_queue, "No suggested videos found or clickable in the suggested section.", logging.WARNING)
+    return None

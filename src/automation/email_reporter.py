@@ -8,22 +8,20 @@ Generates and delivers detailed session watch time reports and start notificatio
   profile (mail.google.com), the active browser, or via standard SMTP (smtp.gmail.com).
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
 import html
 import logging
 import queue
 import smtplib
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 
 from ..models.account import Account
 from ..models.watch_stats import format_duration, format_hours
@@ -362,7 +360,7 @@ class EmailReporter:
             compose_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={quote(recipient_email)}"
             if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient_email.lower():
                 compose_url += f"&bcc={quote(bcc_email)}"
-            compose_url += f"&su={quote(subject)}" 
+            compose_url += f"&su={quote(subject)}"
             driver.get(compose_url)
             time.sleep(3.5)
 
@@ -412,7 +410,7 @@ class EmailReporter:
 
             if not body_element:
                 if log_queue:
-                    emit(log_queue, f"Gmail delivery failed: could not locate Gmail compose text area.", logging.ERROR)
+                    emit(log_queue, "Gmail delivery failed: could not locate Gmail compose text area.", logging.ERROR)
                 return False
 
             # Focus and write the body content
@@ -463,7 +461,7 @@ class EmailReporter:
 
             if not sent:
                 if log_queue:
-                    emit(log_queue, f"Gmail delivery failed: could not trigger Send button.", logging.ERROR)
+                    emit(log_queue, "Gmail delivery failed: could not trigger Send button.", logging.ERROR)
                 return False
 
             time.sleep(2.5)
@@ -508,11 +506,11 @@ class EmailReporter:
         email_description: str = "email notification",
     ) -> bool:
         """Launch headless Chrome with account profile, send email via Gmail web, and close."""
-        from .driver import setup_driver, close_driver
+        from .driver import close_driver, setup_driver
 
         if not account or not getattr(account, "email", None):
             if log_queue:
-                emit(log_queue, f"Headless Gmail delivery failed: no account specified.", logging.WARNING)
+                emit(log_queue, "Headless Gmail delivery failed: no account specified.", logging.WARNING)
             return False
 
         if not recipient_email or "@" not in recipient_email:

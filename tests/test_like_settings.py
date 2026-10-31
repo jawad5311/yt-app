@@ -1,14 +1,12 @@
-import json
 from unittest.mock import MagicMock, patch
-import pytest
 
-from src.config.manager import ConfigManager
-from src.ui.views.settings_view import SettingsView
-from src.automation.worker import AutomationWorker
-from src.automation.watching_worker import WatchingWorker
 from src.automation.interactivity import HumanInteractivitySimulator
+from src.automation.watching_worker import WatchingWorker
+from src.automation.worker import AutomationWorker
+from src.config.manager import ConfigManager
 from src.models.account import Account
 from src.models.video_task import VideoTask
+from src.ui.views.settings_view import SettingsView
 
 
 def test_like_settings_in_defaults():

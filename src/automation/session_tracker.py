@@ -10,10 +10,10 @@ Tracks per-channel video watch time for each session run:
   and combined session watch times for reporting.
 """
 
-from datetime import datetime
 import logging
 import queue
 import threading
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from ..models.channel import Channel

@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Tuple, Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
 @dataclass
@@ -414,6 +414,7 @@ def load_env_file(env_path: Optional[Any] = None, populate_environ: bool = True)
     """Load key-value pairs from a .env file into a dictionary and populate os.environ if not set."""
     try:
         from pathlib import Path
+
         from .helpers import get_project_root
         root = get_project_root()
         # In automated unit tests, skip loading the real project .env file unless explicitly allowed or patched

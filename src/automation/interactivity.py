@@ -963,7 +963,7 @@ class HumanInteractivitySimulator:
         self.expand_description_target_time = 0.0
         self.late_interactions_done = False
         self.late_interactions_target_time = 0.0
-        self.interaction_order = "video_then_comments" 
+        self.interaction_order = "video_then_comments"
         self.will_adjust_quality = False
         self.chosen_quality = "360p"
         self.will_toggle_captions = False

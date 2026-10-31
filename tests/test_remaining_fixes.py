@@ -1,24 +1,18 @@
-import copy
 import json
-import os
 import queue
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from src.automation.driver import close_driver, setup_driver
-from src.automation.interactivity import HumanInteractivitySimulator, set_video_quality
+from src.automation.driver import close_driver
+from src.automation.interactivity import HumanInteractivitySimulator
 from src.automation.profile_manager import resolve_profile_dir
-from src.automation.worker import AutomationWorker
 from src.automation.watching_worker import WatchingWorker
+from src.automation.worker import AutomationWorker
 from src.config.manager import ConfigManager
 from src.models.account import Account
-from src.models.channel import Channel
 from src.models.video_task import VideoTask
 from src.ui.views.settings_view import QUALITY_OPTIONS
-
 
 # ---------------------------------------------------------------------------
 # Issue 1: Automated likes and comments enabled and configurable

@@ -1,5 +1,4 @@
 """Helpers for release packaging, staging, and sensitive file exclusion."""
-import os
 import shutil
 from pathlib import Path
 from typing import List, Sequence, Tuple

@@ -1,11 +1,8 @@
 """Tests for Issue 13: Apply cooldown consistently across execution paths."""
 
-from datetime import datetime, timedelta
 import queue
-import threading
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
-
-import pytest
 
 from src.automation import worker as worker_module
 from src.automation.dispatcher import TaskDispatcher
@@ -14,9 +11,9 @@ from src.automation.worker import AutomationWorker
 from src.config.manager import ConfigManager
 from src.config.stats_store import StatsStore
 from src.models.account import Account
-from src.models.channel import Channel, check_video_task_eligibility, is_video_task_runnable
+from src.models.channel import Channel, is_video_task_runnable
 from src.models.video_task import VideoTask
-from src.models.watch_stats import StatRecord, TaskOutcome, WatchResult, is_within_cooldown
+from src.models.watch_stats import TaskOutcome, is_within_cooldown
 
 VID_1 = "dQw4w9WgXcQ"
 VID_2 = "abcdefghijk"

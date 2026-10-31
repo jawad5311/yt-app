@@ -1,17 +1,15 @@
 import unittest
-from unittest.mock import MagicMock, patch
 from pathlib import Path
-import json
+from unittest.mock import MagicMock, patch
 
-from src.models.channel import Channel, VideoGroup
-from src.models.video_task import VideoTask
-from src.config.manager import ConfigManager
-from src.config.stats_store import StatsStore
 from src.automation.session_tracker import SessionChannelTracker
 from src.automation.youtube_actions import WatchResult
+from src.config.manager import ConfigManager
+from src.config.stats_store import StatsStore
+from src.models.channel import Channel, VideoGroup
+from src.models.video_task import VideoTask
 from src.ui.app import YTBotApp
 from src.ui.views.queue_view import QueueView
-from src.ui.views.channels_view import ChannelsView
 
 
 class TestIssues6To10(unittest.TestCase):
@@ -166,7 +164,6 @@ class TestIssues6To10(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_issue_10_browsing_session_continues_when_one_target_reached(self):
         from src.automation.watching_worker import WatchingWorker
-        from src.models.account import Account
 
         worker = WatchingWorker.__new__(WatchingWorker)
         worker.log_queue = MagicMock()

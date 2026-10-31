@@ -4,8 +4,8 @@ Allows users to configure target watch multiplier and max views cap
 for all channels and all videos in the queue simultaneously.
 """
 
-from tkinter import messagebox
 from typing import Any, Callable, List, Optional
+
 import customtkinter as ctk
 
 from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, VideoTask

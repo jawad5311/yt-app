@@ -2,18 +2,17 @@
 
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
-import pytest
 
+from src.automation.watching_worker import WatchingWorker
+from src.config.manager import ConfigManager
+from src.models.account import Account
+from src.models.channel import Channel, is_video_task_runnable
+from src.models.video_task import VideoTask
 from src.models.watch_stats import (
     StatRecord,
     TaskOutcome,
     is_within_cooldown,
 )
-from src.models.channel import Channel, is_video_task_runnable
-from src.models.video_task import VideoTask
-from src.automation.watching_worker import WatchingWorker
-from src.config.manager import ConfigManager
-from src.models.account import Account
 
 
 class TestVideoCooldown:

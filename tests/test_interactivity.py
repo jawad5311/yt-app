@@ -3,19 +3,19 @@ import threading
 from unittest.mock import MagicMock, patch
 
 from src.automation.interactivity import (
+    HumanInteractivitySimulator,
     browse_description_and_like_comment,
     click_and_verify_comment_like,
-    HumanInteractivitySimulator,
     ensure_normal_speed,
+    expand_video_description,
     get_playback_speed,
+    like_active_video,
+    like_random_comments,
     set_playback_speed,
     set_video_quality,
     simulate_micro_pause,
     simulate_reading_comments_or_description,
     toggle_captions,
-    expand_video_description,
-    like_random_comments,
-    like_active_video,
 )
 from src.automation.youtube_actions import watch_video
 

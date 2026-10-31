@@ -2,13 +2,13 @@ import queue
 import threading
 import time
 from unittest.mock import MagicMock, patch
+
 import pytest
 
-from src.ui.app import YTBotApp
 from src.automation.driver import close_driver
 from src.automation.session_tracker import SessionChannelTracker
-from src.config.stats_store import StatsStore
 from src.models.channel import Channel
+from src.ui.app import YTBotApp
 
 
 @pytest.fixture

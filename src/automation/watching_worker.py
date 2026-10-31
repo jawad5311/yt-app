@@ -1,6 +1,8 @@
 from datetime import datetime
+
 from .email_reporter import EmailReporter, SessionReport
 from .session_tracker import SessionChannelTracker
+
 """Watching Worker.
 
 Manages autonomous video discovery and continuous chained playback:
@@ -11,7 +13,6 @@ Manages autonomous video discovery and continuous chained playback:
 5. Clicks the matching recommended video and continues watching until stopped.
 """
 
-import difflib
 import logging
 import queue
 import random
@@ -27,14 +28,19 @@ from selenium.webdriver.support.ui import WebDriverWait
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
-from ..models.channel import Channel, canonical_channel_url, parse_channel_identity
+from ..models.channel import Channel, parse_channel_identity
 from ..models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, VideoTask
 from ..models.watch_stats import TaskOutcome, WatchResult, resolve_video_key
 from ..utils.helpers import extract_video_id, human_like_delay
 from ..utils.logger import emit
 from .driver import close_driver, setup_driver
 from .login import perform_google_login
-from .navigation import dismiss_youtube_dialogs, safe_get
+from .navigation import (
+    dismiss_youtube_dialogs,
+    find_and_click_search_result,
+    perform_youtube_search,
+    safe_get,
+)
 from .youtube_actions import (
     DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     click_element,
@@ -1698,6 +1704,159 @@ class WatchingWorker:
         )
         return watch_res
 
+    def search_youtube_query(self, query: str) -> bool:
+        """Type and execute a YouTube search for the given query."""
+        return perform_youtube_search(self.driver, query, log_queue=self.log_queue)
+
+    def search_and_play_target_video(self, session_watched_keys: Set[str]) -> bool:
+        """Search YouTube for a video from the video queue or targeted channels.
+
+        1. Selects candidate tasks from the video queue (prioritizing active channels).
+        2. Randomly searches for a video using its keywords/title.
+        3. Scans search results to find the matching video (by URL/ID, title, or channel).
+        4. If found, clicks and plays the video in the current tab.
+        5. If not found, tries another candidate video from the queue/channels until found.
+        """
+        if self.stop_event.is_set():
+            return False
+
+        target_channels = self.get_target_channels()
+        target_channel_names = [c.name for c in target_channels if c.name]
+
+        # 1. Gather runnable candidate video tasks from queue
+        raw_queue = self.config_mgr.get_video_queue() if self.config_mgr else []
+        queue_tasks: List[VideoTask] = []
+        for raw in raw_queue:
+            if isinstance(raw, dict):
+                t = VideoTask.from_dict(raw)
+                if t.enabled:
+                    if t.channel and target_channels:
+                        if not any(c.name.strip().lower() == t.channel.strip().lower() for c in target_channels):
+                            continue
+                    queue_tasks.append(t)
+
+        candidate_tasks = list(queue_tasks)
+        random.shuffle(candidate_tasks)
+
+        emit(
+            self.log_queue,
+            f"\n=== [YouTube Search] Searching for targeted video across {len(candidate_tasks)} queued candidate(s) and {len(target_channels)} channel(s) ===",
+        )
+
+        for cand_idx, task in enumerate(candidate_tasks, start=1):
+            if self.stop_event.is_set():
+                return False
+            self.check_pause()
+            if self.stop_event.is_set():
+                return False
+
+            queries = task.get_title_queries()
+            if not queries:
+                queries = [task.title or task.keywords or task.channel]
+
+            for query in queries:
+                if self.stop_event.is_set():
+                    return False
+                if not query:
+                    continue
+
+                emit(
+                    self.log_queue,
+                    f"[YouTube Search] Candidate {cand_idx}/{len(candidate_tasks)}: Searching for '{query}'...",
+                )
+
+                search_ok = self.search_youtube_query(query)
+                if not search_ok:
+                    continue
+
+                matched_result = find_and_click_search_result(
+                    self.driver,
+                    task=task,
+                    target_channels=target_channel_names,
+                    max_scrolls=3,
+                    log_queue=self.log_queue,
+                )
+
+                if matched_result:
+                    title = matched_result.get("title") or task.title or "Target Video"
+                    url = matched_result.get("url") or task.url
+                    ch_display = matched_result.get("channel") or task.channel or (target_channels[0].name if target_channels else "Target Channel")
+                    clean_href = url.split("&")[0] if url else ""
+                    vid_id = extract_video_id(clean_href) or clean_href
+
+                    emit(
+                        self.log_queue,
+                        f"[YouTube Search] Successfully found candidate in search results: '{title}' ({ch_display})!",
+                    )
+
+                    try:
+                        watch_res = self._play_target_video(
+                            matched_result, url, title, ch_display, session_watched_keys, is_home=False
+                        )
+                    except Exception as exc:
+                        emit(self.log_queue, f"Error watching search result video: {exc}", logging.ERROR)
+                        return False
+
+                    if vid_id:
+                        session_watched_keys.add(vid_id)
+                    return True
+                else:
+                    emit(
+                        self.log_queue,
+                        f"[YouTube Search] Candidate '{query}' not found in search results. Trying next candidate...",
+                        logging.INFO,
+                    )
+
+        if target_channels and not self.stop_event.is_set():
+            for ch in target_channels:
+                if self.stop_event.is_set():
+                    return False
+                self.check_pause()
+                if self.stop_event.is_set():
+                    return False
+
+                ch_query = ch.name.strip()
+                if not ch_query:
+                    continue
+
+                emit(self.log_queue, f"[YouTube Search] Channel Keyword Search: Searching for channel '{ch_query}'...")
+                search_ok = self.search_youtube_query(ch_query)
+                if not search_ok:
+                    continue
+
+                matched_result = find_and_click_search_result(
+                    self.driver,
+                    target_channels=[ch_query],
+                    max_scrolls=3,
+                    log_queue=self.log_queue,
+                )
+
+                if matched_result:
+                    title = matched_result.get("title") or f"{ch_query} Video"
+                    url = matched_result.get("url") or ""
+                    clean_href = url.split("&")[0] if url else ""
+                    vid_id = extract_video_id(clean_href) or clean_href
+
+                    emit(
+                        self.log_queue,
+                        f"[YouTube Search] Found channel video in search results: '{title}' ({ch_query})!",
+                    )
+
+                    try:
+                        watch_res = self._play_target_video(
+                            matched_result, url, title, ch_query, session_watched_keys, is_home=False
+                        )
+                    except Exception as exc:
+                        emit(self.log_queue, f"Error watching channel search video: {exc}", logging.ERROR)
+                        return False
+
+                    if vid_id:
+                        session_watched_keys.add(vid_id)
+                    return True
+
+        emit(self.log_queue, "[YouTube Search] No video found in search results across candidates and channels.", logging.WARNING)
+        return False
+
     def run(self) -> None:
         """Main watching loop: home discovery -> watch -> repeat."""
         emit(self.log_queue, f"=== Starting Watch Session for {self.account.email} ===")
@@ -1857,126 +2016,42 @@ class WatchingWorker:
                 current_url = getattr(self.driver, "current_url", "") or ""
 
                 # -------------------------------------------------------------
-                # Step 1: If on a video watch page, inspect suggested videos first!
+                # Case 1: If on a video watch page, explore suggested videos,
+                # then execute YouTube search for queued/targeted channel video!
                 # -------------------------------------------------------------
                 if "/watch" in current_url:
-                    emit(self.log_queue, "Inspecting suggested/recommended videos on watch page for target channels...")
-                    rec_candidates = self.fetch_recommended_videos()
-
-                    # Find target channel video respecting alternation (don't play two of the same channel in a go)
-                    allowed_channels = self._get_allowed_target_channels(
-                        target_channels, last_watched_channel, allow_same_channel=False
-                    )
-                    target_match = self._find_target_video(rec_candidates, allowed_channels, session_watched_keys)
-
-                    if target_match:
-                        item, match_obj, full_url, title, ch_display = target_match
-                        if self._is_target_limit_reached(target_attempts):
-                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
-                            break
-
-                        target_attempts += 1
-                        self.target_attempts = target_attempts
-                        self.watched_count = target_attempts
-                        prog_total = self.target_limit if not self.is_unlimited else 0
-                        self._emit_event(("progress", 0, target_attempts, prog_total))
-
-                        try:
-                            watch_res = self._play_target_video(
-                                item, full_url, title, ch_display, session_watched_keys, is_home=False
-                            )
-                        except Exception:
-                            raise
-                        last_watched_channel = ch_display
-
-                        if self.stop_event.is_set():
-                            break
-
-                        if self._is_target_limit_reached(target_attempts):
-                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
-                            break
-
-                        if watch_res.interrupted:
-                            remaining_channels = self.get_target_channels()
-                            if not remaining_channels:
-                                emit(self.log_queue, "All target channels have reached their targets or are disabled. Stopping browsing session.")
-                                break
-                            reason_desc = "target watch time was achieved" if watch_res.reason == "channel_target_achieved" else "channel was disabled/unchecked"
-                            emit(self.log_queue, f"Channel '{ch_display}' {reason_desc}. Continuing browsing for remaining {len(remaining_channels)} target channel(s)...")
-                            continue
-
-                        # Option 5: Interleave a 30-90s non-target video before next target video
-                        self._after_target_video_watched(session_watched_keys, target_attempts)
-                        continue
-
-                    # If no target video found in suggestions:
-                    # Open a random video from suggested list, watch for 30-90s without interaction,
-                    # and try to find the video of the targeted channel. Repeat up to 3 times.
+                    suggested_target_count = random.randint(2, 3)
                     emit(
                         self.log_queue,
-                        "Target channel video not found in suggestions. Starting random suggested video fallback (up to 3 attempts)...",
+                        f"[Browsing Loop] Watching {suggested_target_count} suggested video(s) randomly before next YouTube search...",
                     )
-                    found_target_via_random = False
 
-                    for random_attempt in range(1, 4):
+                    for s_step in range(1, suggested_target_count + 1):
                         if self.stop_event.is_set():
                             break
                         self.check_pause()
                         if self.stop_event.is_set():
                             break
-
-                        random_card = self._find_random_suggested_video(
-                            rec_candidates, getattr(self.driver, "current_url", "") or "", session_watched_keys
-                        )
-                        if not random_card:
-                            emit(
-                                self.log_queue,
-                                f"No suggested videos found to pick random video (attempt {random_attempt}/3).",
-                                logging.WARNING,
-                            )
+                        if self._is_target_limit_reached(target_attempts):
                             break
 
-                        random_dur = round(random.uniform(30.0, 90.0), 1)
-                        random_title = random_card.get("title") or "Suggested Video"
-                        emit(
-                            self.log_queue,
-                            f"Attempt {random_attempt}/3: Watching random suggested video '{random_title}' for {random_dur:.0f}s...",
-                        )
-
-                        watched_ok = self._watch_random_video(random_card, random_dur, session_watched_keys)
-                        if not watched_ok or self.stop_event.is_set():
-                            break
-
-                        # We are now on the random video's watch page!
-                        # "and then try to find the video of the targeted channel"
-                        emit(
-                            self.log_queue,
-                            f"Inspecting suggestions on random video page for target channel (attempt {random_attempt}/3)...",
-                        )
                         rec_candidates = self.fetch_recommended_videos()
 
-                        # If multiple channels exist, we still want a channel other than last_watched_channel (e.g. Channel B)
-                        # If only 1 target channel exists, since a random video intervened, it is allowed now
-                        allowed_now = self._get_allowed_target_channels(
-                            self.get_target_channels(), last_watched_channel, allow_same_channel=True
+                        # Priority 1: Check if any suggested video belongs to our target channels
+                        allowed_channels = self._get_allowed_target_channels(
+                            target_channels, last_watched_channel, allow_same_channel=True
                         )
-                        sub_target = self._find_target_video(rec_candidates, allowed_now, session_watched_keys)
-                        if sub_target:
-                            item, match_obj, full_url, title, ch_display = sub_target
-                            if self._is_target_limit_reached(target_attempts):
-                                emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
-                                break
+                        target_match = self._find_target_video(rec_candidates, allowed_channels, session_watched_keys)
 
+                        if target_match:
+                            item, match_obj, full_url, title, ch_display = target_match
+                            emit(self.log_queue, f"[Browsing Loop] Found target channel video in suggestions ({s_step}/{suggested_target_count}): '{title}' ({ch_display})")
                             target_attempts += 1
                             self.target_attempts = target_attempts
                             self.watched_count = target_attempts
                             prog_total = self.target_limit if not self.is_unlimited else 0
                             self._emit_event(("progress", 0, target_attempts, prog_total))
 
-                            emit(
-                                self.log_queue,
-                                f"Found target channel video after random video attempt {random_attempt}/3:",
-                            )
                             try:
                                 watch_res = self._play_target_video(
                                     item, full_url, title, ch_display, session_watched_keys, is_home=False
@@ -1984,51 +2059,61 @@ class WatchingWorker:
                             except Exception:
                                 raise
                             last_watched_channel = ch_display
-                            found_target_via_random = True
 
-                            if self.stop_event.is_set():
+                            if self.stop_event.is_set() or self._is_target_limit_reached(target_attempts):
                                 break
+                            continue
 
-                            if self._is_target_limit_reached(target_attempts):
-                                emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
+                        # Priority 2: Pick a random video from the suggested list
+                        random_card = self._find_random_suggested_video(
+                            rec_candidates, getattr(self.driver, "current_url", "") or "", session_watched_keys
+                        )
+                        if random_card:
+                            random_dur = round(random.uniform(30.0, 90.0), 1)
+                            random_title = random_card.get("title") or "Suggested Video"
+                            emit(
+                                self.log_queue,
+                                f"[Browsing Loop] ({s_step}/{suggested_target_count}) Watching random suggested video '{random_title}' for {random_dur:.0f}s...",
+                            )
+                            watched_ok = self._watch_random_video(random_card, random_dur, session_watched_keys)
+                            if not watched_ok or self.stop_event.is_set():
                                 break
-
-                            if watch_res.interrupted:
-                                remaining_channels = self.get_target_channels()
-                                if not remaining_channels:
-                                    emit(self.log_queue, "All target channels have reached their targets or are disabled. Stopping browsing session.")
-                                    break
-                                reason_desc = "target watch time was achieved" if watch_res.reason == "channel_target_achieved" else "channel was disabled/unchecked"
-                                emit(self.log_queue, f"Channel '{ch_display}' {reason_desc}. Continuing browsing for remaining {len(remaining_channels)} target channel(s)...")
-                                break
-
-                            # Option 5: Interleave a 30-90s non-target video before next target video
-                            self._after_target_video_watched(session_watched_keys, target_attempts)
-                            break
                         else:
                             emit(
                                 self.log_queue,
-                                f"Target channel video not found in suggestions after random video attempt {random_attempt}/3.",
+                                "[Browsing Loop] No suitable video found in suggested section. Switching immediately to YouTube search for next targeted video...",
+                                logging.INFO,
                             )
+                            break
 
-                    if self.stop_event.is_set():
+                    if self.stop_event.is_set() or self._is_target_limit_reached(target_attempts):
                         break
 
-                    if found_target_via_random:
-                        continue
+                    # ---------------------------------------------------------
+                    # YouTube Search Phase: Pick a video from queue / targeted channel,
+                    # search YouTube, click and watch!
+                    # ---------------------------------------------------------
+                    emit(self.log_queue, "[Browsing Loop] Finished suggested section phase. Starting YouTube search for next targeted video...")
+                    search_success = self.search_and_play_target_video(session_watched_keys)
+                    if search_success:
+                        target_attempts += 1
+                        self.target_attempts = target_attempts
+                        self.watched_count = target_attempts
+                        prog_total = self.target_limit if not self.is_unlimited else 0
+                        self._emit_event(("progress", 0, target_attempts, prog_total))
+                    else:
+                        emit(self.log_queue, "[Browsing Loop] Search was unable to find candidate video. Navigating to YouTube Home feed...", logging.INFO)
+                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                        human_like_delay(2.0, 3.5)
 
-                    # If still no video found after 3 random attempts:
-                    emit(
-                        self.log_queue,
-                        "No target channel video found in suggestions after 3 random video attempts. Going to YouTube Home page...",
-                    )
+                    continue
 
                 # -------------------------------------------------------------
-                # Step 2: YouTube Home Feed Discovery (with 3 refresh attempts)
+                # Case 2: Not on a watch page (e.g. startup): Check YouTube Home feed!
                 # -------------------------------------------------------------
                 found_home_target = False
 
-                for home_attempt in range(1, 4):
+                for home_attempt in range(1, 3):
                     if self.stop_event.is_set():
                         break
                     self.check_pause()
@@ -2040,44 +2125,24 @@ class WatchingWorker:
                         emit(self.log_queue, "No active target channels found. Stopping watching session.", logging.WARNING)
                         break
 
-                    # Enforce channel alternation: if multiple channels exist, do not pick last_watched_channel
                     allowed_home = self._get_allowed_target_channels(
                         current_channels, last_watched_channel, allow_same_channel=True
                     )
 
                     current_url = getattr(self.driver, "current_url", "") or ""
-                    if home_attempt == 1:
-                        if not is_clean_youtube_home_url(current_url):
-                            emit(self.log_queue, "Navigating to clean YouTube Home (https://www.youtube.com/)...")
-                            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                            human_like_delay(2.0, 3.5)
-                    else:
-                        emit(self.log_queue, f"Refreshing YouTube Home page (attempt {home_attempt}/3)...")
+                    if not is_clean_youtube_home_url(current_url):
+                        emit(self.log_queue, "Navigating to clean YouTube Home (https://www.youtube.com/)...")
                         safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
                         human_like_delay(2.0, 3.5)
+                    else:
+                        emit(self.log_queue, f"Scanning YouTube Home feed (attempt {home_attempt}/2)...")
 
                     dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-                    emit(self.log_queue, f"Waiting for YouTube Home videos to load (attempt {home_attempt}/3)...")
-                    try:
-                        WebDriverWait(self.driver, 15).until(
-                            lambda d: len(
-                                d.find_elements(
-                                    By.CSS_SELECTOR,
-                                    "ytd-rich-item-renderer, ytd-rich-grid-media, ytd-video-renderer, a[href*='/watch?v=']",
-                                )
-                            )
-                            > 0
-                        )
-                    except Exception:
-                        pass
-                    human_like_delay(1.0, 1.5)
-
-                    emit(self.log_queue, f"Scanning YouTube Home feed for target channel (attempt {home_attempt}/3)...")
                     matched_home_item: Optional[Tuple[Dict[str, Any], Channel, str, str, str]] = None
                     seen_clean_urls: Set[str] = set()
 
-                    max_scrolls = 25
+                    max_scrolls = 15
                     for scroll_idx in range(max_scrolls):
                         if self.stop_event.is_set():
                             break
@@ -2108,24 +2173,20 @@ class WatchingWorker:
                         except Exception:
                             self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
 
-                        human_like_delay(1.3, 2.2)
+                        human_like_delay(1.3, 2.0)
 
                     if self.stop_event.is_set():
                         break
 
                     if matched_home_item:
                         item, match_obj, full_url, title, ch_display = matched_home_item
-                        if self._is_target_limit_reached(target_attempts):
-                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
-                            break
-
                         target_attempts += 1
                         self.target_attempts = target_attempts
                         self.watched_count = target_attempts
                         prog_total = self.target_limit if not self.is_unlimited else 0
                         self._emit_event(("progress", 0, target_attempts, prog_total))
 
-                        emit(self.log_queue, "Found target channel video on Home page:")
+                        emit(self.log_queue, f"Found target channel video on Home page: '{title}' ({ch_display})")
                         try:
                             watch_res = self._play_target_video(
                                 item, full_url, title, ch_display, session_watched_keys, is_home=True
@@ -2134,43 +2195,32 @@ class WatchingWorker:
                             raise
                         last_watched_channel = ch_display
                         found_home_target = True
-
-                        if self.stop_event.is_set():
-                            break
-
-                        if self._is_target_limit_reached(target_attempts):
-                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
-                            break
-
-                        if watch_res.interrupted:
-                            remaining_channels = self.get_target_channels()
-                            if not remaining_channels:
-                                emit(self.log_queue, "All target channels have reached their targets or are disabled. Stopping browsing session.")
-                                break
-                            reason_desc = "target watch time was achieved" if watch_res.reason == "channel_target_achieved" else "channel was disabled/unchecked"
-                            emit(self.log_queue, f"Channel '{ch_display}' {reason_desc}. Continuing browsing for remaining {len(remaining_channels)} target channel(s)...")
-                            continue
-
-                        # Option 5: Interleave a 30-90s non-target video before next target video
-                        self._after_target_video_watched(session_watched_keys, target_attempts)
                         break
                     else:
                         emit(
                             self.log_queue,
-                            f"No video matching target channels found on YouTube Home (attempt {home_attempt}/3).",
-                            logging.WARNING,
+                            f"No video matching target channels found on YouTube Home (attempt {home_attempt}/2).",
+                            logging.INFO,
                         )
 
                 if self.stop_event.is_set():
                     break
 
+                # If no target video was found on Home feed, do NOT stop: switch directly to YouTube search!
                 if not found_home_target:
-                    # "and still no video is found then stop the script and update the log"
-                    stop_msg = "No video of targeted channel found on YouTube Home after 3 refresh attempts. Stopping watching session."
-                    emit(self.log_queue, stop_msg, logging.WARNING)
-                    self._report_status("Stopped: No target videos found on Home page", "warning")
-                    self.stop_event.set()
-                    break
+                    emit(
+                        self.log_queue,
+                        "[Browsing Loop] No target channel video on Home feed. Moving directly to YouTube search...",
+                    )
+                    search_success = self.search_and_play_target_video(session_watched_keys)
+                    if search_success:
+                        target_attempts += 1
+                        self.target_attempts = target_attempts
+                        self.watched_count = target_attempts
+                        prog_total = self.target_limit if not self.is_unlimited else 0
+                        self._emit_event(("progress", 0, target_attempts, prog_total))
+                    else:
+                        human_like_delay(2.0, 4.0)
 
                 continue
 

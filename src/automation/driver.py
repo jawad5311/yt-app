@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import queue
@@ -13,19 +12,16 @@ import undetected_chromedriver as uc
 
 from ..models.account import Account
 from ..utils.logger import emit
-from ..utils.helpers import get_project_root
-from .profile_manager import (
-    get_runtime_profiles_dir,
-    resolve_profile_dir,
-    ProfileLock,
-    ProfileBusyError,
-    is_chrome_lock_active,
-)
 from .driver_provisioner import (
-    get_chromedriver_cache_dir,
+    create_session_driver_copy,
     ensure_chromedriver,
     publish_driver_to_cache,
-    create_session_driver_copy,
+)
+from .profile_manager import (
+    ProfileBusyError,
+    ProfileLock,
+    is_chrome_lock_active,
+    resolve_profile_dir,
 )
 
 

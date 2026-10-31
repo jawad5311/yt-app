@@ -1,23 +1,19 @@
 """Tests for Issue 11: Live task controls and stale channel fallback."""
 
-import queue
 import threading
 import time
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from src.automation import worker as worker_module
-from src.automation import watching_worker as watching_module
-from src.automation.worker import AutomationWorker
 from src.automation.watching_worker import WatchingWorker
+from src.automation.worker import AutomationWorker
 from src.automation.youtube_actions import watch_video
 from src.config.manager import ConfigManager
 from src.config.stats_store import StatsStore
 from src.models.account import Account
 from src.models.channel import Channel
 from src.models.video_task import VideoTask
-from src.models.watch_stats import StatRecord, TaskOutcome, WatchResult
+from src.models.watch_stats import TaskOutcome, WatchResult
 
 VID_1 = "dQw4w9WgXcQ"
 VID_2 = "abcdefghijk"

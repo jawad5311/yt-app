@@ -1,9 +1,9 @@
 from unittest.mock import MagicMock
-import pytest
-from src.models.channel import Channel, is_video_task_runnable
-from src.models.video_task import VideoTask
+
 from src.automation.session_tracker import SessionChannelTracker
 from src.config.manager import ConfigManager
+from src.models.channel import Channel, is_video_task_runnable
+from src.models.video_task import VideoTask
 from src.ui.views.manage_channel_modal import ManageChannelModal
 
 

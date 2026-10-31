@@ -1,19 +1,18 @@
 """Regression tests for Issue 26: Duplicate accounts and profile collisions."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
+
 import pytest
 
-from src.models.account import Account, normalize_account_id
-from src.config.manager import ConfigManager, CredentialConflictError
+from src.automation.driver import cleanup_profile_locks, setup_driver
 from src.automation.profile_manager import (
-    resolve_profile_dir,
-    ProfileLock,
     ProfileBusyError,
-    is_chrome_lock_active,
+    ProfileLock,
+    resolve_profile_dir,
 )
-from src.automation.driver import cleanup_profile_locks, setup_driver, close_driver
+from src.config.manager import ConfigManager, CredentialConflictError
+from src.models.account import Account, normalize_account_id
 
 
 def test_normalization_policy():

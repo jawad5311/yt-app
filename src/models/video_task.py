@@ -1,5 +1,6 @@
-from typing import Any, Dict, List, Optional, Sequence, Tuple
 import math
+from typing import Any, Dict, List, Optional
+
 
 def safe_float(val: Any, default: float = 0.0, min_val: Optional[float] = None, max_val: Optional[float] = None) -> float:
     if val is None:
@@ -33,7 +34,7 @@ def safe_int(val: Any, default: int = 0, min_val: Optional[int] = None, max_val:
         return default
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 # Duration choices offered by the UI (Add/Edit task modal and the Settings default).
 WATCHTIME_OPTIONS: List[str] = [

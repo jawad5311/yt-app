@@ -1,7 +1,7 @@
 """Unit and integration tests for Session Watch Time Email Reporting."""
 
-from datetime import datetime, timedelta
 import queue
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest

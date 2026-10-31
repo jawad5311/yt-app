@@ -1,5 +1,4 @@
 from unittest.mock import MagicMock, patch
-import pytest
 
 from src.models.video_task import VideoTask
 from src.ui.views.bulk_apply_modal import BulkApplyModal

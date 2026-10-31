@@ -1,8 +1,9 @@
 from unittest.mock import MagicMock
-from src.models.channel import Channel, group_videos_by_channel, is_video_task_runnable
-from src.models.video_task import VideoTask
+
 from src.automation.watching_worker import WatchingWorker
 from src.models.account import Account
+from src.models.channel import Channel, group_videos_by_channel, is_video_task_runnable
+from src.models.video_task import VideoTask
 
 
 def test_unchecking_channel_preserves_video_checked_states():

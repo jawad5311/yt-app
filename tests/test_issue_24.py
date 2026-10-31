@@ -1,9 +1,9 @@
 import json
-import logging
 from unittest.mock import patch
+
 import pytest
 
-from src.config.manager import ConfigManager, CorruptCredentialsError, CredentialConflictError, ConfigurationError
+from src.config.manager import ConfigManager, ConfigurationError, CorruptCredentialsError, CredentialConflictError
 
 
 def test_missing_credentials_plus_valid_legacy_migrates_and_removes(tmp_path):

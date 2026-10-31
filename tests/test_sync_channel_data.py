@@ -1,6 +1,7 @@
 """Unit tests for Check New button, New Videos/Shorts badge detection, and Sync Data logic."""
 
 from unittest.mock import MagicMock, patch
+
 import customtkinter as ctk
 
 from src.models.channel import Channel
