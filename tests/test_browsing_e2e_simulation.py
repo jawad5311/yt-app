@@ -260,5 +260,72 @@ class TestBrowsingE2ESimulation(unittest.TestCase):
         self.assertLessEqual(recorded_durations[0], 120.0)
 
 
+    def test_non_consecutive_channel_countdown_trigger_and_buffer_reset(self):
+        """Verify random buffer triggers when any channel reaches 3 videos non-consecutively."""
+        mock_config = MagicMock()
+        mock_config.get_channels.return_value = [self.channel1.to_dict(), self.channel2.to_dict()]
+        mock_config.get_float.return_value = 12.0
+        worker = WatchingWorker(
+            account=self.account,
+            channels=[self.channel1, self.channel2],
+            config_mgr=mock_config,
+            log_queue=self.log_queue,
+        )
+        worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/watch?v=CURR1111111"
+        worker.fetch_recommended_videos = MagicMock(return_value=[
+            {"title": "Random Buffer Video", "href": "/watch?v=RND11111111", "channel_name": "Stranger", "channel_url": ""}
+        ])
+        worker._watch_random_video = MagicMock(return_value=True)
+
+        channel_buffer_counts = {}
+        # Video 1: Channel A
+        channel_buffer_counts["alphachannel"] = 1
+        self.assertFalse(worker._check_and_play_random_buffer_video(
+            session_watched_keys=set(),
+            consecutive_target_watched=1,
+            random_buffer_threshold=5,
+            channel_watch_counts=channel_buffer_counts,
+        ))
+
+        # Video 2: Channel B (Channel A remains 1, Channel B becomes 1)
+        channel_buffer_counts["betachannel"] = 1
+        self.assertFalse(worker._check_and_play_random_buffer_video(
+            session_watched_keys=set(),
+            consecutive_target_watched=2,
+            random_buffer_threshold=5,
+            channel_watch_counts=channel_buffer_counts,
+        ))
+
+        # Video 3: Channel A (Channel A becomes 2)
+        channel_buffer_counts["alphachannel"] = 2
+        self.assertFalse(worker._check_and_play_random_buffer_video(
+            session_watched_keys=set(),
+            consecutive_target_watched=3,
+            random_buffer_threshold=5,
+            channel_watch_counts=channel_buffer_counts,
+        ))
+
+        # Video 4: Channel B (Channel B becomes 2)
+        channel_buffer_counts["betachannel"] = 2
+        self.assertFalse(worker._check_and_play_random_buffer_video(
+            session_watched_keys=set(),
+            consecutive_target_watched=4,
+            random_buffer_threshold=5,
+            channel_watch_counts=channel_buffer_counts,
+        ))
+
+        # Video 5: Channel A reaches 3 non-consecutively -> MUST trigger random buffer!
+        channel_buffer_counts["alphachannel"] = 3
+        triggered = worker._check_and_play_random_buffer_video(
+            session_watched_keys=set(),
+            consecutive_target_watched=5,
+            random_buffer_threshold=5,
+            channel_watch_counts=channel_buffer_counts,
+        )
+        self.assertTrue(triggered)
+        worker._watch_random_video.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1284,7 +1284,9 @@ class WatchingWorker:
         target_channels: Sequence[Channel],
         last_channel_name: Optional[str],
         session_watched_keys: Set[str],
+        channel_watch_counts: Optional[Dict[str, int]] = None,
         channel_consecutive_counts: Optional[Dict[str, int]] = None,
+        **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Channel, str, str, str]]:
         """Search candidate video cards for an eligible target channel video,
         prioritizing alternating between different target channels.
@@ -1292,14 +1294,14 @@ class WatchingWorker:
         1. If multiple target channels exist and last_channel_name is set, first search for
            videos from any OTHER target channel.
         2. If no other channel video is found, fall back to the current channel provided its
-           consecutive watch countdown hasn't reached 3.
+           watch countdown hasn't reached 3.
         3. If only one channel exists, allow it provided its countdown hasn't reached 3.
         """
         active = [c for c in target_channels if c.enabled and not c.archived]
         if not active:
             return None
 
-        counts = channel_consecutive_counts or {}
+        counts = channel_watch_counts if channel_watch_counts is not None else (channel_consecutive_counts or {})
 
         if last_channel_name:
             last_canon = SessionChannelTracker._canon_name(last_channel_name)
@@ -1330,21 +1332,24 @@ class WatchingWorker:
     def _check_and_play_random_buffer_video(
         self,
         session_watched_keys: Set[str],
-        consecutive_target_watched: int,
-        random_buffer_threshold: int,
-        channel_consecutive_counts: Dict[str, int],
+        consecutive_target_watched: int = 0,
+        random_buffer_threshold: int = 3,
+        channel_watch_counts: Optional[Dict[str, int]] = None,
+        channel_consecutive_counts: Optional[Dict[str, int]] = None,
+        **kwargs,
     ) -> bool:
         """Check if random non-target buffer video condition is met and watch it if so.
 
         Triggers when:
         1. consecutive_target_watched >= random_buffer_threshold (randomly 1-3 target videos watched), OR
-        2. Any individual channel countdown reaches 3 consecutive videos.
+        2. Any individual channel countdown reaches 3 videos (non-consecutive, accumulated since last buffer).
         """
         if self.stop_event.is_set():
             return False
 
+        counts = channel_watch_counts if channel_watch_counts is not None else (channel_consecutive_counts or {})
         exceeded_channel = None
-        for ch_canon, count in channel_consecutive_counts.items():
+        for ch_canon, count in counts.items():
             if count >= 3:
                 exceeded_channel = ch_canon
                 break
@@ -1356,7 +1361,7 @@ class WatchingWorker:
         if exceeded_channel:
             emit(
                 self.log_queue,
-                f"Channel countdown reached 3 consecutive video(s) for '{exceeded_channel}'. Triggering non-target random buffer video...",
+                f"Channel countdown reached 3 video(s) for '{exceeded_channel}'. Triggering non-target random buffer video...",
             )
         else:
             emit(
@@ -1420,8 +1425,10 @@ class WatchingWorker:
         self,
         session_watched_keys: Set[str],
         last_watched_channel: Optional[str] = None,
+        channel_watch_counts: Optional[Dict[str, int]] = None,
         channel_consecutive_counts: Optional[Dict[str, int]] = None,
         max_attempts: int = 3,
+        **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Channel, str, str, str]]:
         """Scan YouTube Home feed for an eligible target channel video up to max_attempts."""
         for home_attempt in range(1, max_attempts + 1):
@@ -1469,12 +1476,14 @@ class WatchingWorker:
                         seen_clean_urls.add(clean_href)
                         batch.append(item)
 
+                    counts = channel_watch_counts if channel_watch_counts is not None else (channel_consecutive_counts or {})
                     matched_home_item = self._find_preferred_target_video(
                         candidates=batch,
                         target_channels=current_channels,
                         last_channel_name=last_watched_channel,
                         session_watched_keys=session_watched_keys,
-                        channel_consecutive_counts=channel_consecutive_counts,
+                        channel_watch_counts=counts,
+                        channel_consecutive_counts=counts,
                     )
                     if matched_home_item:
                         return matched_home_item
@@ -2270,7 +2279,7 @@ class WatchingWorker:
             self.target_attempts = 0
             self.watched_count = 0
             last_watched_channel: Optional[str] = None
-            consecutive_same_channel: int = 0
+            channel_buffer_counts: Dict[str, int] = {}
             consecutive_target_watched: int = 0
             random_buffer_threshold: int = random.randint(1, 3)
             suggested_miss_count: int = 0
@@ -2300,20 +2309,17 @@ class WatchingWorker:
                 # Case 1: Watch page flow
                 # -------------------------------------------------------------
                 if "/watch" in current_url:
-                    channel_consecutive_counts = {
-                        SessionChannelTracker._canon_name(last_watched_channel): consecutive_same_channel
-                    } if last_watched_channel else {}
-
                     # 1. Check if random buffer video condition met
                     buffered = self._check_and_play_random_buffer_video(
                         session_watched_keys=session_watched_keys,
                         consecutive_target_watched=consecutive_target_watched,
                         random_buffer_threshold=random_buffer_threshold,
-                        channel_consecutive_counts=channel_consecutive_counts,
+                        channel_watch_counts=channel_buffer_counts,
+                        channel_consecutive_counts=channel_buffer_counts,
                     )
                     if buffered:
                         consecutive_target_watched = 0
-                        consecutive_same_channel = 0
+                        channel_buffer_counts.clear()
                         random_buffer_threshold = random.randint(1, 3)
                         emit(
                             self.log_queue,
@@ -2339,16 +2345,13 @@ class WatchingWorker:
                     emit(self.log_queue, "Scanning suggested section...")
                     rec_candidates = self.fetch_recommended_videos()
 
-                    channel_consecutive_counts = {
-                        SessionChannelTracker._canon_name(last_watched_channel): consecutive_same_channel
-                    } if last_watched_channel else {}
-
                     target_match = self._find_preferred_target_video(
                         candidates=rec_candidates,
                         target_channels=target_channels,
                         last_channel_name=last_watched_channel,
                         session_watched_keys=session_watched_keys,
-                        channel_consecutive_counts=channel_consecutive_counts,
+                        channel_watch_counts=channel_buffer_counts,
+                        channel_consecutive_counts=channel_buffer_counts,
                     )
 
                     if target_match:
@@ -2367,17 +2370,15 @@ class WatchingWorker:
                         except Exception:
                             raise
 
-                        if last_watched_channel and SessionChannelTracker._canon_name(last_watched_channel) == SessionChannelTracker._canon_name(ch_display):
-                            consecutive_same_channel += 1
-                        else:
-                            consecutive_same_channel = 1
+                        ch_canon = SessionChannelTracker._canon_name(ch_display)
+                        channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
                         last_watched_channel = ch_display
                         consecutive_target_watched += 1
                         suggested_miss_count = 0
 
                         emit(
                             self.log_queue,
-                            f"Target channel '{ch_display}' watch countdown: {consecutive_same_channel}/3 consecutive video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                            f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
                         )
                         continue
                     else:
@@ -2398,16 +2399,14 @@ class WatchingWorker:
                             prog_total = self.target_limit if not self.is_unlimited else 0
                             self._emit_event(("progress", 0, target_attempts, prog_total))
 
-                            if last_watched_channel and SessionChannelTracker._canon_name(last_watched_channel) == SessionChannelTracker._canon_name(played_ch):
-                                consecutive_same_channel += 1
-                            else:
-                                consecutive_same_channel = 1
+                            ch_canon = SessionChannelTracker._canon_name(played_ch)
+                            channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
                             last_watched_channel = played_ch
                             consecutive_target_watched += 1
 
                             emit(
                                 self.log_queue,
-                                f"Target channel '{played_ch}' watch countdown: {consecutive_same_channel}/3 consecutive video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                                f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
                             )
                         else:
                             emit(
@@ -2423,14 +2422,11 @@ class WatchingWorker:
                 # -------------------------------------------------------------
                 # Case 2: Home feed discovery (startup or Home navigation)
                 # -------------------------------------------------------------
-                channel_consecutive_counts = {
-                    SessionChannelTracker._canon_name(last_watched_channel): consecutive_same_channel
-                } if last_watched_channel else {}
-
                 matched_home = self._scan_home_feed_for_target(
                     session_watched_keys=session_watched_keys,
                     last_watched_channel=last_watched_channel,
-                    channel_consecutive_counts=channel_consecutive_counts,
+                    channel_watch_counts=channel_buffer_counts,
+                    channel_consecutive_counts=channel_buffer_counts,
                     max_attempts=3,
                 )
 
@@ -2450,17 +2446,15 @@ class WatchingWorker:
                     except Exception:
                         raise
 
-                    if last_watched_channel and SessionChannelTracker._canon_name(last_watched_channel) == SessionChannelTracker._canon_name(ch_display):
-                        consecutive_same_channel += 1
-                    else:
-                        consecutive_same_channel = 1
+                    ch_canon = SessionChannelTracker._canon_name(ch_display)
+                    channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
                     last_watched_channel = ch_display
                     consecutive_target_watched += 1
                     suggested_miss_count = 0
 
                     emit(
                         self.log_queue,
-                        f"Target channel '{ch_display}' watch countdown: {consecutive_same_channel}/3 consecutive video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                        f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
                     )
                     continue
                 else:
@@ -2481,17 +2475,15 @@ class WatchingWorker:
                         prog_total = self.target_limit if not self.is_unlimited else 0
                         self._emit_event(("progress", 0, target_attempts, prog_total))
 
-                        if last_watched_channel and SessionChannelTracker._canon_name(last_watched_channel) == SessionChannelTracker._canon_name(played_ch):
-                            consecutive_same_channel += 1
-                        else:
-                            consecutive_same_channel = 1
+                        ch_canon = SessionChannelTracker._canon_name(played_ch)
+                        channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
                         last_watched_channel = played_ch
                         consecutive_target_watched += 1
                         suggested_miss_count = 0
 
                         emit(
                             self.log_queue,
-                            f"Target channel '{played_ch}' watch countdown: {consecutive_same_channel}/3 consecutive video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                            f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
                         )
                         continue
                     else:
