@@ -4,6 +4,8 @@ from .driver import close_driver, setup_driver
 from .interactivity import (
     HumanInteractivitySimulator,
     get_playback_speed,
+    is_short_liked,
+    like_active_short,
     set_playback_speed,
     set_video_quality,
     simulate_micro_pause,
@@ -32,6 +34,8 @@ __all__ = [
     "find_and_click_suggested_video",
     "watch_video",
     "watch_short",
+    "like_active_short",
+    "is_short_liked",
     "ensure_video_playing",
     "AutomationWorker",
     "BrowsingWorker",

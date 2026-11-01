@@ -329,6 +329,60 @@ return {
 };
 """
 
+# JavaScript to find the Short's like button scoped to active reel
+LIKE_SHORT_JS = """
+var activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
+var scope = activeReel || document;
+
+var container = scope.querySelector(
+    'like-button-view-model, .ytLikeButtonViewModelHost, .ytwReelActionBarViewModelHostDesktopActionButton, #like-button'
+);
+var btn = null;
+
+if (container) {
+    btn = container.querySelector('button');
+}
+
+if (!btn) {
+    var candidates = scope.querySelectorAll(
+        'like-button-view-model button, .ytLikeButtonViewModelHost button, button[aria-label*="like this video" i], button[aria-label*="I like this" i], button[aria-label*="like" i]'
+    );
+    for (var i = 0; i < candidates.length; i++) {
+        var aLabel = (candidates[i].getAttribute('aria-label') || '').toLowerCase();
+        if (aLabel.indexOf('dislike') === -1 && (aLabel.indexOf('like') !== -1)) {
+            btn = candidates[i];
+            break;
+        }
+    }
+}
+
+if (!btn) {
+    return { success: false, reason: 'like_button_not_found' };
+}
+
+var ariaPressed = btn.getAttribute('aria-pressed');
+var ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+var isSelected = btn.classList && (
+    btn.classList.contains('ytSpecButtonShapeNextSelected') ||
+    btn.classList.contains('style-default-active')
+);
+
+var isAlreadyLiked = (
+    ariaPressed === 'true' ||
+    isSelected ||
+    ariaLabel.indexOf('unlike') !== -1 ||
+    ariaLabel.indexOf('remove like') !== -1
+);
+
+return {
+    success: true,
+    already_liked: isAlreadyLiked,
+    button: btn,
+    renderer: container || btn
+};
+"""
+
+
 
 def is_comment_liked(driver: Any, btn: Any) -> bool:
     """Check if the comment like button or its parent container is in the liked state."""
@@ -392,6 +446,54 @@ def is_video_liked(driver: Any, btn: Any = None) -> bool:
         return res is True
     except Exception:
         return False
+
+def is_short_liked(driver: Any, btn: Any = None) -> bool:
+    """Check if the active Short is already liked."""
+    try:
+        res = driver.execute_script("""
+            var btn = arguments[0];
+            if (!btn) {
+                var activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
+                var scope = activeReel || document;
+                var container = scope.querySelector(
+                    'like-button-view-model, .ytLikeButtonViewModelHost, .ytwReelActionBarViewModelHostDesktopActionButton, #like-button'
+                );
+                if (container) btn = container.querySelector('button');
+            }
+            if (!btn) {
+                var activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
+                var scope = activeReel || document;
+                var candidates = scope.querySelectorAll(
+                    'like-button-view-model button, .ytLikeButtonViewModelHost button, button[aria-label*="like this video" i], button[aria-label*="I like this" i], button[aria-label*="like" i]'
+                );
+                for (var i = 0; i < candidates.length; i++) {
+                    var aLabel = (candidates[i].getAttribute('aria-label') || '').toLowerCase();
+                    if (aLabel.indexOf('dislike') === -1 && (aLabel.indexOf('like') !== -1)) {
+                        btn = candidates[i];
+                        break;
+                    }
+                }
+            }
+            if (!btn) return false;
+            var ariaPressed = btn.getAttribute('aria-pressed');
+            var ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+            var isSelected = btn.classList && (
+                btn.classList.contains('ytSpecButtonShapeNextSelected') ||
+                btn.classList.contains('style-default-active')
+            );
+            return (
+                ariaPressed === 'true' ||
+                isSelected ||
+                ariaLabel.indexOf('unlike') !== -1 ||
+                ariaLabel.indexOf('remove like') !== -1
+            );
+        """, btn)
+        if isinstance(res, dict):
+            return bool(res.get("already_liked", False))
+        return res is True
+    except Exception:
+        return False
+
 
 
 def click_and_verify_comment_like(driver: Any, candidate: Dict[str, Any]) -> bool:
@@ -728,6 +830,89 @@ def like_active_video(
     except Exception as exc:
         logging.debug(f"like_active_video error: {exc}")
         return False
+
+def like_active_short(
+    driver: Any,
+    log_queue: Optional[queue.Queue] = None,
+) -> bool:
+    """Click the Short's Like button if the Short is from a targeted channel and not already liked."""
+    try:
+        # Check if already liked first
+        if is_short_liked(driver):
+            emit(log_queue, "Short is already liked; skipping like.", logging.DEBUG)
+            return True
+
+        res = driver.execute_script(LIKE_SHORT_JS)
+        if isinstance(res, dict):
+            if res.get("already_liked"):
+                emit(log_queue, "Short is already liked; skipping like.", logging.DEBUG)
+                return True
+
+            btn = res.get("button")
+            renderer = res.get("renderer")
+            if btn is not None:
+                # Scroll into view if needed
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'instant', block: 'center'});", btn)
+                except Exception:
+                    pass
+                time.sleep(0.2)
+
+                # 1. ActionChains hardware click
+                try:
+                    ActionChains(driver).move_to_element(btn).pause(0.1).click().perform()
+                except Exception:
+                    pass
+
+                time.sleep(0.3)
+                if not is_short_liked(driver, btn):
+                    try:
+                        btn.click()
+                    except Exception:
+                        pass
+
+                time.sleep(0.3)
+                if not is_short_liked(driver, btn) and renderer is not None and renderer != btn:
+                    try:
+                        ActionChains(driver).move_to_element(renderer).pause(0.1).click().perform()
+                    except Exception:
+                        pass
+
+                # Fallback to realistic PointerEvent dispatch
+                if not is_short_liked(driver, btn):
+                    try:
+                        driver.execute_script("""
+                            var el = arguments[0];
+                            if (!el) return;
+                            var r = el.getBoundingClientRect();
+                            var x = r.left + r.width / 2;
+                            var y = r.top + r.height / 2;
+                            var opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+                            try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch(e){}
+                            try { el.dispatchEvent(new MouseEvent('mousedown', opts)); } catch(e){}
+                            try { el.dispatchEvent(new PointerEvent('pointerup', opts)); } catch(e){}
+                            try { el.dispatchEvent(new MouseEvent('mouseup', opts)); } catch(e){}
+                            try { el.dispatchEvent(new MouseEvent('click', opts)); } catch(e){}
+                            try { el.click(); } catch(e){}
+                        """, btn)
+                    except Exception:
+                        pass
+
+                # Poll up to 1.5s to verify
+                for _ in range(6):
+                    time.sleep(0.25)
+                    if is_short_liked(driver, btn):
+                        emit(log_queue, "Liked targeted channel Short.")
+                        return True
+            elif res.get("success"):
+                emit(log_queue, "Liked targeted channel Short.")
+                return True
+
+        return False
+    except Exception as exc:
+        logging.debug(f"like_active_short error: {exc}")
+        return False
+
 
 
 def browse_description_and_like_comment(

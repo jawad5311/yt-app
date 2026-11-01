@@ -11,7 +11,7 @@ from ..models.watch_stats import WatchResult
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .ads import PLAYER_STATE_JS, AdWatchState
-from .interactivity import HumanInteractivitySimulator
+from .interactivity import HumanInteractivitySimulator, like_active_short
 from .playback_meter import PlaybackMeter
 
 # Abort the watch loop when no <video> element is present for this many seconds.
@@ -852,10 +852,12 @@ def watch_short(
     should_stop_callback: Optional[Callable[[], Optional[str]]] = None,
     on_watch_tick: Optional[Callable[[float], None]] = None,
     max_duration_seconds: int = 180,
+    like_short: bool = False,
 ) -> WatchResult:
     """
     Watch a YouTube Short for a random (1-3) or specified number of loop repetitions in a single go.
     Tracks player state and wrap-around transitions when the short loops back to start.
+    Optionally likes the Short from targeted channel if not already liked.
     """
     if target_loops is None or target_loops < 1:
         target_loops = random.randint(1, 3)
@@ -873,6 +875,7 @@ def watch_short(
     last_known_current_time = 0.0
     video_missing_since: Optional[float] = None
     last_progress_log = 0.0
+    like_attempted = False
 
     try:
         ensure_video_playing(driver, log_queue=log_queue)
@@ -880,6 +883,13 @@ def watch_short(
         pass
 
     def _result(completed: bool, reason: str, interrupted: bool = False, finished: bool = False) -> WatchResult:
+        nonlocal like_attempted
+        if like_short and not like_attempted and completed:
+            like_attempted = True
+            try:
+                like_active_short(driver, log_queue=log_queue)
+            except Exception:
+                pass
         return WatchResult(
             completed=completed,
             interrupted=interrupted,
@@ -964,6 +974,14 @@ def watch_short(
                     on_watch_tick(measured)
                 except Exception:
                     pass
+
+        # Like the Short if requested and not already attempted once playback begins
+        if like_short and not like_attempted and (total_watched_seconds >= 2.0 or curr_time >= 2.0):
+            like_attempted = True
+            try:
+                like_active_short(driver, log_queue=log_queue)
+            except Exception as exc:
+                logging.debug(f"like_active_short error: {exc}")
 
         # If paused unexpectedly, resume
         if paused and not ended and elapsed < max_duration_seconds:

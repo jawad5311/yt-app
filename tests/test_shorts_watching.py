@@ -302,3 +302,91 @@ def test_shorts_reel_loop_skips_non_target_until_limit():
         assert mock_ws.call_count == 1  # watch_short only called for target short
         assert worker.scroll_to_next_short.call_count == 3  # scrolled 3 times; breaks on 3rd non-target (short #4)
         assert "t1" in watched_keys
+
+
+def test_like_active_short_when_unliked():
+    """Verify like_active_short clicks like button when aria-pressed is false."""
+    from src.automation.interactivity import like_active_short
+
+    driver = MagicMock()
+    mock_btn = MagicMock()
+
+    with patch("src.automation.interactivity.is_short_liked") as mock_is_liked, \
+         patch("src.automation.interactivity.time.sleep"):
+        liked_state = [False]
+        mock_is_liked.side_effect = lambda *a, **k: liked_state[0]
+
+        def on_click():
+            liked_state[0] = True
+        mock_btn.click.side_effect = on_click
+
+        driver.execute_script.return_value = {
+            "success": True,
+            "already_liked": False,
+            "button": mock_btn,
+            "renderer": mock_btn,
+        }
+
+        log_q = queue.Queue()
+        res = like_active_short(driver, log_queue=log_q)
+
+        assert res is True
+        mock_btn.click.assert_called()
+
+
+def test_like_active_short_skips_when_already_liked():
+    """Verify like_active_short skips clicking if the Short is already liked."""
+    from src.automation.interactivity import like_active_short
+
+    driver = MagicMock()
+    mock_btn = MagicMock()
+
+    with patch("src.automation.interactivity.is_short_liked") as mock_is_liked:
+        mock_is_liked.return_value = True
+
+        log_q = queue.Queue()
+        res = like_active_short(driver, log_queue=log_q)
+
+        assert res is True
+        mock_btn.click.assert_not_called()
+
+
+def test_watch_short_invokes_like_for_target():
+    """Verify watch_short calls like_active_short when like_short=True."""
+    driver = MagicMock()
+    driver.execute_script.return_value = {
+        "found": True,
+        "currentTime": 5.0,
+        "duration": 15.0,
+        "ended": False,
+        "paused": False,
+    }
+
+    with patch("src.automation.youtube_actions.ensure_video_playing"), \
+         patch("src.automation.youtube_actions.like_active_short") as mock_like:
+        mock_like.return_value = True
+
+        res = watch_short(
+            driver,
+            target_loops=1,
+            max_duration_seconds=10,
+            like_short=True,
+        )
+
+        assert res.completed is True
+        assert mock_like.call_count >= 1
+
+
+def test_channel_bar_handle_matching():
+    """Verify that channel handles from Shorts channel bar layout match configured channels."""
+    from src.automation.watching_worker import match_channel
+
+    channels = [
+        Channel(name="Love Guru", url="https://www.youtube.com/@love_guru_161", enabled=True),
+    ]
+
+    # Extracted from ytReelChannelBarViewModel: name '@love_guru_161', url '/@love_guru_161/shorts'
+    matched = match_channel("@love_guru_161", "/@love_guru_161/shorts", channels)
+    assert matched is not None
+    assert matched.name == "Love Guru"
+

@@ -491,28 +491,60 @@ return (function() {
     var activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
     var scope = activeReel || document;
 
+    var channelName = '';
+    var channelUrl = '';
+
+    // 1. Channel link in modern reel channel bar or header
     var chLink = scope.querySelector(
+        'yt-reel-channel-bar-view-model .ytReelChannelBarViewModelChannelName a, ' +
+        'yt-reel-channel-bar-view-model a[href*="/@"], ' +
+        'yt-reel-channel-bar-view-model a[href*="/channel/"], ' +
+        '.ytReelMetapanelViewModelMetapanelItem a[href*="/@"], ' +
+        '.ytReelMetapanelViewModelMetapanelItem a[href*="/channel/"], ' +
+        'a.ytAttributedStringLink[href*="/@"], ' +
         'ytd-reel-player-header-renderer ytd-channel-name a, ' +
         'ytd-reel-player-header-renderer a[href*="/@"], ' +
         'ytd-reel-player-header-renderer a[href*="/channel/"], ' +
         'ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"]'
     );
 
-    var channelName = '';
-    var channelUrl = '';
     if (chLink) {
         channelName = (chLink.textContent || '').trim();
         channelUrl = chLink.getAttribute('href') || '';
     }
+
+    // 2. Avatar or button with "Go to channel @handle" aria-label
     if (!channelName) {
-        var chEl = scope.querySelector('ytd-channel-name #text, ytd-channel-name, #channel-name');
+        var avatarEl = scope.querySelector('.ytSpecAvatarShapeHost[aria-label*="Go to channel" i], [aria-label*="Go to channel" i]');
+        if (avatarEl) {
+            var aLabel = avatarEl.getAttribute('aria-label') || '';
+            var match = aLabel.match(/Go to channel\s+(@?[^\s]+)/i);
+            if (match && match[1]) {
+                channelName = match[1].trim();
+                if (!channelUrl) {
+                    channelUrl = channelName.startsWith('/') ? channelName : ('/' + channelName);
+                }
+            }
+        }
+    }
+
+    // 3. Fallback text element
+    if (!channelName) {
+        var chEl = scope.querySelector(
+            'yt-reel-channel-bar-view-model .ytReelChannelBarViewModelChannelName, ' +
+            'ytd-channel-name #text, ytd-channel-name, #channel-name'
+        );
         if (chEl) {
             channelName = (chEl.textContent || '').trim();
         }
     }
 
+    if (!channelUrl && channelName && channelName.indexOf('@') !== -1) {
+        channelUrl = channelName.startsWith('/') ? channelName : ('/' + channelName);
+    }
+
     var titleEl = scope.querySelector(
-        'ytd-reel-player-header-renderer h2, h2.title, #video-title, .title.ytd-reel-player-header-renderer'
+        'ytd-reel-player-header-renderer h2, h2.title, #video-title, .title.ytd-reel-player-header-renderer, .ytReelMetapanelViewModelMetapanelItem h2'
     );
     var title = titleEl ? (titleEl.textContent || '').trim() : '';
 
@@ -2239,6 +2271,7 @@ class WatchingWorker:
             pause_event=self.pause_event,
             should_stop_callback=_is_short_channel_disabled,
             on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+            like_short=True,
         )
         self.channel_tracker.set_active_channel(None)
 
@@ -2309,7 +2342,14 @@ class WatchingWorker:
         clicked = False
         try:
             clicked = self.driver.execute_script(r"""
-                var btn = document.querySelector('ytd-shorts #navigation-button-down button, #navigation-button-down button, button.navigation-button-down');
+                var btn = document.querySelector(
+                    '#navigation-button-down button[aria-label="Next video"], ' +
+                    '#navigation-button-down button, ' +
+                    '.navigation-button#navigation-button-down button, ' +
+                    'ytd-shorts #navigation-button-down button, ' +
+                    'button[aria-label="Next video"], ' +
+                    'button.navigation-button-down'
+                );
                 if (btn && btn.offsetParent !== null) {
                     btn.click();
                     return true;
@@ -2318,6 +2358,20 @@ class WatchingWorker:
             """)
         except Exception:
             clicked = False
+
+        if not clicked:
+            try:
+                nav_btns = self.driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "#navigation-button-down button, button[aria-label='Next video']"
+                )
+                for nb in nav_btns:
+                    if nb.is_displayed():
+                        ActionChains(self.driver).move_to_element(nb).pause(0.1).click().perform()
+                        clicked = True
+                        break
+            except Exception:
+                pass
 
         if not clicked:
             try:
@@ -2370,7 +2424,8 @@ class WatchingWorker:
             full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
 
             # Match against targeted channels
-            matched_channel = match_channel(ch_name, ch_url, target_channels) if (ch_name or ch_url) else None
+            ch_lookup_url = ch_url or (f"/{ch_name}" if ch_name.startswith("@") else "")
+            matched_channel = match_channel(ch_name, ch_lookup_url, target_channels) if (ch_name or ch_lookup_url) else None
 
             # Or match against Shorts queue tasks
             matched_task = None
@@ -2412,6 +2467,7 @@ class WatchingWorker:
                     pause_event=self.pause_event,
                     should_stop_callback=_is_short_channel_disabled,
                     on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_display, d),
+                    like_short=True,
                 )
                 self.channel_tracker.set_active_channel(None)
 
