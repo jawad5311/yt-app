@@ -300,14 +300,15 @@ def fetch_channel_title_online(
 
 
 def extract_videos_from_data(
-    data: Dict[str, Any], max_results: int = 50
+    data: Dict[str, Any], max_results: Optional[int] = 50
 ) -> List[FetchedVideo]:
-    """Traverse ytInitialData and extract video items."""
+    """Traverse ytInitialData and extract video and shorts items."""
     results: List[FetchedVideo] = []
     seen_ids: set = set()
+    limit_val = 0 if max_results == 0 else (max_results if (max_results is not None and max_results > 0) else 50)
 
     def _walk(obj: Any) -> None:
-        if max_results > 0 and len(results) >= max_results:
+        if limit_val > 0 and len(results) >= limit_val:
             return
 
         if isinstance(obj, dict):
@@ -318,7 +319,13 @@ def extract_videos_from_data(
                 title_obj = lum.get("metadata", {}).get("lockupMetadataViewModel", {}).get("title", {})
                 title = title_obj.get("content") if isinstance(title_obj, dict) else None
 
-                dur_str = ""
+                is_short_item = False
+                if lum.get("contentType") in ("LOCKUP_CONTENT_TYPE_SHORT", "SHORT"):
+                    is_short_item = True
+                if "reelWatchEndpoint" in str(lum) or "/shorts/" in str(lum):
+                    is_short_item = True
+
+                dur_str = "Short" if is_short_item else ""
                 thumb_vm = lum.get("contentImage", {}).get("thumbnailViewModel", {})
                 if isinstance(thumb_vm, dict):
                     for overlay in thumb_vm.get("overlays", []):
@@ -336,19 +343,72 @@ def extract_videos_from_data(
 
                 if vid and title and vid not in seen_ids:
                     seen_ids.add(vid)
+                    target_url = f"https://www.youtube.com/shorts/{vid}" if is_short_item else f"https://www.youtube.com/watch?v={vid}"
                     results.append(
                         FetchedVideo(
                             video_id=str(vid),
-                            url=f"https://www.youtube.com/watch?v={vid}",
+                            url=target_url,
                             title=str(title).strip(),
-                            duration_text=dur_str,
-                            duration_seconds=parse_duration_str(dur_str),
+                            duration_text=dur_str or ("Short" if is_short_item else ""),
+                            duration_seconds=parse_duration_str(dur_str) if dur_str != "Short" else 30,
+                            is_short=is_short_item,
                         )
                     )
-                    if max_results > 0 and len(results) >= max_results:
+                    if limit_val > 0 and len(results) >= limit_val:
                         return
 
-            # Format 2: videoRenderer & gridVideoRenderer
+            # Format 2: reelItemRenderer & shortsLockupViewModel (dedicated Shorts shelf/tab)
+            if "reelItemRenderer" in obj and isinstance(obj["reelItemRenderer"], dict):
+                r_item = obj["reelItemRenderer"]
+                vid = r_item.get("videoId")
+                title = ""
+                hl = r_item.get("headline", {})
+                if isinstance(hl, dict):
+                    title = hl.get("simpleText") or ""
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
+                    results.append(
+                        FetchedVideo(
+                            video_id=str(vid),
+                            url=f"https://www.youtube.com/shorts/{vid}",
+                            title=str(title).strip() or "Short",
+                            duration_text="Short",
+                            duration_seconds=30,
+                            is_short=True,
+                        )
+                    )
+                    if limit_val > 0 and len(results) >= limit_val:
+                        return
+
+            if "shortsLockupViewModel" in obj and isinstance(obj["shortsLockupViewModel"], dict):
+                slm = obj["shortsLockupViewModel"]
+                vid = slm.get("entityId", "")
+                if vid.startswith("shorts-shelf-item-"):
+                    vid = vid.replace("shorts-shelf-item-", "")
+                if not vid or len(vid) != 11:
+                    ep = slm.get("onTap", {}).get("innertubeCommand", {}).get("reelWatchEndpoint", {})
+                    if isinstance(ep, dict) and ep.get("videoId"):
+                        vid = ep["videoId"]
+                title = ""
+                pm = slm.get("overlayMetadata", {}).get("primaryText", {})
+                if isinstance(pm, dict):
+                    title = pm.get("content") or ""
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
+                    results.append(
+                        FetchedVideo(
+                            video_id=str(vid),
+                            url=f"https://www.youtube.com/shorts/{vid}",
+                            title=str(title).strip() or "Short",
+                            duration_text="Short",
+                            duration_seconds=30,
+                            is_short=True,
+                        )
+                    )
+                    if limit_val > 0 and len(results) >= limit_val:
+                        return
+
+            # Format 3: videoRenderer & gridVideoRenderer
             for renderer_key in ("videoRenderer", "gridVideoRenderer", "compactVideoRenderer"):
                 if renderer_key in obj and isinstance(obj[renderer_key], dict):
                     vr = obj[renderer_key]
@@ -391,7 +451,7 @@ def extract_videos_from_data(
                                 duration_seconds=parse_duration_str(dur_str),
                             )
                         )
-                        if max_results > 0 and len(results) >= max_results:
+                        if limit_val > 0 and len(results) >= limit_val:
                             return
 
             for value in obj.values():
@@ -912,37 +972,113 @@ def fetch_channel_data(
     cancel_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> ChannelFetchResult:
-    """Fetch recent videos and shorts using YouTube Data API v3."""
+    """Fetch recent videos and shorts using YouTube Data API v3, with scraper fallback when API key is missing."""
     api_key = get_configured_youtube_api_key(config_mgr)
-    if not api_key:
-        return ChannelFetchResult(
-            channel_url=normalize_channel_url(channel_input),
-            error="YouTube Data API key is not configured. Please set YOUTUBE_API_KEY in your .env file or environment variables.",
-            status="error",
+    if api_key:
+        return fetch_channel_data_api(
+            channel_input=channel_input,
+            api_key=api_key,
+            video_limit=video_limit,
+            shorts_limit=shorts_limit,
+            timeout=timeout,
+            cancel_event=cancel_event,
+            progress_callback=progress_callback,
         )
-    return fetch_channel_data_api(
-        channel_input=channel_input,
-        api_key=api_key,
-        video_limit=video_limit,
-        shorts_limit=shorts_limit,
-        timeout=timeout,
-        cancel_event=cancel_event,
-        progress_callback=progress_callback,
-    )
+
+    # Scraper fallback when API key is not configured
+    clean_input = (channel_input or "").strip()
+    norm_url = normalize_channel_url(clean_input)
+    has_shorts = shorts_limit is not None and (shorts_limit >= 0)
+    has_videos = video_limit is not None and (video_limit >= 0)
+
+    if has_shorts and not has_videos:
+        shorts_url = norm_url.replace("/videos", "/shorts")
+        s_res = fetch_channel_videos(
+            shorts_url,
+            max_results=shorts_limit,
+            timeout=timeout,
+            config_mgr=config_mgr,
+            cancel_event=cancel_event,
+        )
+        for v in s_res.videos:
+            v.is_short = True
+            if "/watch?v=" in v.url:
+                v.url = f"https://www.youtube.com/shorts/{v.video_id}"
+        return s_res
+    elif has_videos and not has_shorts:
+        return fetch_channel_videos(
+            norm_url,
+            max_results=video_limit,
+            timeout=timeout,
+            config_mgr=config_mgr,
+            cancel_event=cancel_event,
+        )
+    elif has_shorts and has_videos:
+        v_res = fetch_channel_videos(
+            norm_url,
+            max_results=video_limit,
+            timeout=timeout,
+            config_mgr=config_mgr,
+            cancel_event=cancel_event,
+        )
+        shorts_url = norm_url.replace("/videos", "/shorts")
+        s_res = fetch_channel_videos(
+            shorts_url,
+            max_results=shorts_limit,
+            timeout=timeout,
+            config_mgr=config_mgr,
+            cancel_event=cancel_event,
+        )
+        for v in s_res.videos:
+            v.is_short = True
+            if "/watch?v=" in v.url:
+                v.url = f"https://www.youtube.com/shorts/{v.video_id}"
+
+        combined = list(s_res.videos) + list(v_res.videos)
+        seen_ids = set()
+        deduped = []
+        for item in combined:
+            if item.video_id not in seen_ids:
+                seen_ids.add(item.video_id)
+                deduped.append(item)
+
+        title = v_res.channel_title or s_res.channel_title
+        warn = (
+            "Fetched initial page only (no YouTube Data API key configured). "
+            "Configure a YouTube API key in settings or YOUTUBE_API_KEY environment variable for full pagination."
+        )
+        return ChannelFetchResult(
+            channel_title=title,
+            channel_url=norm_url,
+            videos=deduped,
+            requested_count=(video_limit or 0) + (shorts_limit or 0),
+            fetched_count=len(deduped),
+            status="initial_page_only",
+            provider="initial_page_scraper",
+            warning=warn,
+            is_truncated=True,
+        )
+    else:
+        return ChannelFetchResult(
+            channel_url=norm_url,
+            videos=[],
+            status="complete",
+        )
 
 
 def fetch_channel_videos_api(
     channel_input: str,
     api_key: str,
-    max_results: int = 50,
+    max_results: Optional[int] = 50,
     timeout: int = 15,
     cancel_event: Optional[threading.Event] = None,
 ) -> ChannelFetchResult:
     """Fetch videos via YouTube Data API v3 (delegates to fetch_channel_data_api)."""
+    eff_max = 50 if max_results is None else max_results
     return fetch_channel_data_api(
         channel_input=channel_input,
         api_key=api_key,
-        video_limit=max_results,
+        video_limit=eff_max,
         shorts_limit=None,
         timeout=timeout,
         cancel_event=cancel_event,
@@ -951,18 +1087,19 @@ def fetch_channel_videos_api(
 
 def fetch_channel_videos(
     channel_input: str,
-    max_results: int = 50,
+    max_results: Optional[int] = 50,
     timeout: int = 15,
     config_mgr: Optional[Any] = None,
     cancel_event: Optional[threading.Event] = None,
 ) -> ChannelFetchResult:
     """Fetch video metadata from a channel URL or handle with supported pagination."""
+    eff_max = 50 if max_results is None else max_results
     api_key = get_configured_youtube_api_key(config_mgr)
     if api_key:
         return fetch_channel_videos_api(
             channel_input=channel_input,
             api_key=api_key,
-            max_results=max_results,
+            max_results=eff_max,
             timeout=timeout,
             cancel_event=cancel_event,
         )
@@ -1018,19 +1155,20 @@ def fetch_channel_videos(
             error="Could not parse YouTube page response (bot verification or changed page structure).",
         )
 
-    videos = extract_videos_from_data(data, max_results=max_results if max_results > 0 else 50) if data else []
+    limit_val = 0 if eff_max == 0 else (eff_max if (eff_max is not None and eff_max > 0) else 50)
+    videos = extract_videos_from_data(data, max_results=limit_val) if data else []
 
     status = "complete"
     warning = None
     is_truncated = False
-    if max_results == 0 or max_results > len(videos):
+    if limit_val == 0 or limit_val > len(videos):
         status = "initial_page_only"
         is_truncated = True
         warning = (
             "Fetched initial page only (no YouTube Data API key configured). "
             "Configure a YouTube API key in settings or YOUTUBE_API_KEY environment variable for full pagination."
         )
-    elif max_results > 0 and len(videos) >= max_results:
+    elif limit_val > 0 and len(videos) >= limit_val:
         status = "limited"
         is_truncated = False
 
@@ -1038,7 +1176,7 @@ def fetch_channel_videos(
         channel_title=channel_title,
         channel_url=url,
         videos=videos,
-        requested_count=max_results,
+        requested_count=limit_val,
         fetched_count=len(videos),
         status=status,
         provider="initial_page_scraper",

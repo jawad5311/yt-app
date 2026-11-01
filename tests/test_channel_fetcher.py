@@ -283,3 +283,67 @@ def test_fetch_channel_videos_fallback_to_html_title(mock_urlopen):
 
     result = fetch_channel_videos("@iamcarhacker")
     assert result.channel_title == "Fallback Car Hacker"
+
+
+def test_extract_videos_from_data_with_none_max_results():
+    """Verify extract_videos_from_data does not raise TypeError when max_results is None."""
+    data = {
+        "lockupViewModel": {
+            "contentId": "dQw4w9WgXcQ",
+            "metadata": {
+                "lockupMetadataViewModel": {
+                    "title": {"content": "Never Gonna Give You Up"}
+                }
+            },
+        }
+    }
+    # Should not raise TypeError: '>' not supported between instances of 'NoneType' and 'int'
+    videos = extract_videos_from_data(data, max_results=None)
+    assert len(videos) == 1
+    assert videos[0].video_id == "dQw4w9WgXcQ"
+
+
+@patch("urllib.request.urlopen")
+def test_fetch_channel_videos_with_none_max_results(mock_urlopen):
+    """Verify fetch_channel_videos does not raise TypeError when max_results is None."""
+    html = (
+        '<html><head><meta property="og:title" content="Test Channel"></head>'
+        '<body><script>var ytInitialData = {"lockupViewModel": {"contentId": "dQw4w9WgXcQ", "metadata": {"lockupMetadataViewModel": {"title": {"content": "Test"}}}}};</script></body></html>'
+    )
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = html.encode("utf-8")
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+    result = fetch_channel_videos("@testchannel", max_results=None)
+    assert result.error is None
+    assert len(result.videos) == 1
+    assert result.videos[0].video_id == "dQw4w9WgXcQ"
+
+
+@patch("urllib.request.urlopen")
+def test_extract_shorts_from_reel_item_and_shorts_lockup(mock_urlopen):
+    """Verify Shorts format items (reelItemRenderer & shortsLockupViewModel) are parsed with is_short=True."""
+    data = {
+        "reelItemRenderer": {
+            "videoId": "short_vid_1",
+            "headline": {"simpleText": "Short Reel Video"},
+        },
+        "shortsLockupViewModel": {
+            "entityId": "shorts-shelf-item-short_vid_2",
+            "overlayMetadata": {
+                "primaryText": {"content": "Short Lockup Video"}
+            },
+        },
+    }
+    videos = extract_videos_from_data(data, max_results=10)
+    assert len(videos) == 2
+    s1 = next(v for v in videos if v.video_id == "short_vid_1")
+    assert s1.is_short is True
+    assert "shorts/short_vid_1" in s1.url
+    assert s1.title == "Short Reel Video"
+
+    s2 = next(v for v in videos if v.video_id == "short_vid_2")
+    assert s2.is_short is True
+    assert "shorts/short_vid_2" in s2.url
+    assert s2.title == "Short Lockup Video"
+

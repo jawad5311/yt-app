@@ -923,7 +923,7 @@ class ChannelsView(ctk.CTkFrame):
 
         name, url = channel.name, channel.url
         def _fetch_worker(report):
-            if shorts_limit is not None and shorts_limit > 0:
+            if shorts_limit is not None:
                 return fetch_channel_data(
                     url,
                     video_limit=video_limit,
@@ -932,7 +932,7 @@ class ChannelsView(ctk.CTkFrame):
                 )
             return fetch_channel_videos(
                 url,
-                max_results=video_limit,
+                max_results=video_limit if video_limit is not None else 50,
                 config_mgr=getattr(self.app_controller, "config_mgr", None),
             )
 
@@ -954,7 +954,7 @@ class ChannelsView(ctk.CTkFrame):
         self.fetch_data_for_channel(
             channel=channel,
             video_limit=max_results,
-            shorts_limit=0,
+            shorts_limit=None,
             on_imported=on_imported,
         )
 
@@ -981,7 +981,7 @@ class ChannelsView(ctk.CTkFrame):
 
         if video_limit is None and shorts_limit is None:
             v_lim = max_fetch
-            s_lim = 0
+            s_lim = None
         else:
             v_lim = video_limit
             s_lim = shorts_limit
@@ -1014,7 +1014,7 @@ class ChannelsView(ctk.CTkFrame):
 
         def _bg_fetch(report):
             if should_fetch_items:
-                if s_lim is not None and s_lim > 0:
+                if s_lim is not None:
                     res = fetch_channel_data(
                         raw_url,
                         video_limit=v_lim,
