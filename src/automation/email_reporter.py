@@ -686,10 +686,45 @@ class EmailReporter:
                 if any(x in cur_u for x in ("#sent/", "#inbox/", "#all/", "#search/")):
                     captured_thread_url = cur_u
 
+            # If sending a start notification or thread_info is tracked, ensure we locate and park on the real thread in Sent folder
+            is_valid_thread = (
+                captured_thread_url
+                and any(k in captured_thread_url for k in ("#sent/", "#inbox/", "#all/"))
+                and len(captured_thread_url.split("/")[-1]) > 5
+                and not captured_thread_url.endswith("#sent")
+                and not captured_thread_url.endswith("#inbox")
+            )
+
+            if not is_valid_thread and ("start" in email_description.lower() or thread_info is not None):
+                try:
+                    if log_queue:
+                        emit(log_queue, "Navigating to Gmail Sent folder to open and capture persistent session email thread...")
+                    driver.get("https://mail.google.com/mail/u/0/#sent")
+                    sent_wait_start = time.time()
+                    while time.time() - sent_wait_start < 15:
+                        sent_rows = driver.find_elements(By.XPATH, "//tr[contains(@class, 'zA')]")
+                        if sent_rows:
+                            sent_rows[0].click()
+                            time.sleep(2.0)
+                            cur_thread = driver.current_url or ""
+                            if any(k in cur_thread for k in ("#sent/", "#all/", "#inbox/")) and len(cur_thread.split("/")[-1]) > 5:
+                                captured_thread_url = cur_thread
+                                is_valid_thread = True
+                            elif driver.find_elements(By.XPATH, "//div[@role='main']//h2 | //div[@role='textbox'] | //div[contains(@class, 'adn ads')]"):
+                                captured_thread_url = cur_thread
+                                is_valid_thread = True
+                            break
+                        time.sleep(1.0)
+                except Exception as ex_sent:
+                    if log_queue:
+                        emit(log_queue, f"Could not navigate to Sent folder: {ex_sent}", logging.DEBUG)
+
             if captured_thread_url:
                 cls.last_thread_url = captured_thread_url
                 if thread_info is not None and isinstance(thread_info, dict):
                     thread_info["thread_url"] = captured_thread_url
+                if log_queue and is_valid_thread:
+                    emit(log_queue, f"Parked on session email thread: {captured_thread_url}")
 
             # Allow 3 seconds for background network sync before browser terminates
             time.sleep(3.0)
@@ -721,39 +756,72 @@ class EmailReporter:
 
         try:
             target_url = thread_url
-            if not target_url and subject:
+            current_url = driver.current_url or ""
+
+            already_on_thread = False
+            has_thread_id = (
+                target_url
+                and any(k in target_url for k in ("#sent/", "#inbox/", "#all/"))
+                and len(target_url.split("/")[-1]) > 5
+                and not target_url.endswith("#sent")
+                and not target_url.endswith("#inbox")
+            )
+
+            # If target_url with specific thread id is provided, navigate directly to it
+            if has_thread_id and target_url:
+                if log_queue:
+                    emit(log_queue, f"Navigating to existing session email thread ({target_url}) to send {email_description} as a reply...")
+                driver.get(target_url)
+            elif not target_url and (
+                any(k in current_url for k in ("#sent/", "#inbox/", "#all/"))
+                and len(current_url.split("/")[-1]) > 5
+                and not current_url.endswith("#sent")
+                and not current_url.endswith("#inbox")
+            ):
+                # Persistent background driver is already parked on the target session thread
+                already_on_thread = True
+            elif not target_url and subject:
                 clean_subj = subject.strip().replace('"', '')
                 search_query = f'subject:"{clean_subj}"'
                 target_url = f"https://mail.google.com/mail/u/0/#search/{quote(search_query)}"
+                if log_queue:
+                    emit(log_queue, f"Searching for session email thread in Gmail...")
+                driver.get(target_url)
+            elif target_url:
+                driver.get(target_url)
+            else:
+                if log_queue:
+                    emit(log_queue, "Navigating to Gmail Sent mail to locate session email thread...")
+                driver.get("https://mail.google.com/mail/u/0/#sent")
 
-            if not target_url:
-                return False
-
-            if log_queue:
-                emit(log_queue, f"Navigating to existing session email thread to send {email_description} as a reply...")
-
-            driver.get(target_url)
-
-            # Wait for thread or search results to load
-            start_wait = time.time()
-            is_signed_in = True
-            while time.time() - start_wait < 18:
-                current_url = driver.current_url or ""
-                if "accounts.google.com" in current_url:
-                    is_signed_in = False
-                    break
-                if "#search" in current_url:
-                    rows = driver.find_elements(By.XPATH, "//tr[contains(@class, 'zA')]")
-                    if rows:
-                        rows[0].click()
-                        time.sleep(1.5)
+            if not already_on_thread:
+                # Wait for thread or search results to load
+                start_wait = time.time()
+                is_signed_in = True
+                while time.time() - start_wait < 18:
+                    cur = driver.current_url or ""
+                    if "accounts.google.com" in cur:
+                        is_signed_in = False
                         break
-                if driver.find_elements(By.XPATH, "//div[@role='button'][@aria-label='Reply' or contains(., 'Reply')] | //div[@role='textbox'] | //div[contains(@class, 'adn ads')]"):
-                    break
-                time.sleep(1.0)
+                    if "#search" in cur or "#sent" in cur:
+                        rows = driver.find_elements(By.XPATH, "//tr[contains(@class, 'zA')]")
+                        if rows:
+                            rows[0].click()
+                            time.sleep(2.0)
+                            break
+                    if driver.find_elements(By.XPATH, "//div[@role='button'][@aria-label='Reply' or contains(., 'Reply')] | //div[@role='textbox'] | //div[contains(@class, 'adn ads')]"):
+                        break
+                    time.sleep(1.0)
 
-            if not is_signed_in:
-                return False
+                if not is_signed_in:
+                    return False
+
+            # Ensure we are scrolled to the bottom of the conversation where Reply button lives
+            try:
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            except Exception:
+                pass
+            time.sleep(1.0)
 
             # Locate Reply button and click to expand composer
             reply_opened = False
@@ -761,7 +829,7 @@ class EmailReporter:
                 "//div[@role='button' and @data-tooltip and contains(@data-tooltip, 'Reply')]",
                 "//div[@role='button' and @aria-label and contains(@aria-label, 'Reply')]",
                 "//div[@role='button' and (text()='Reply' or contains(., 'Reply'))]",
-                "//span[@role='link' and text()='Reply']",
+                "//span[@role='link' and (text()='Reply' or contains(., 'Reply'))]",
                 "//div[contains(@class, 'ams') and contains(text(), 'Reply')]",
                 "//div[contains(@aria-label, 'Reply to')]",
                 "//div[@role='textbox']",
@@ -771,6 +839,10 @@ class EmailReporter:
                     candidates = driver.find_elements(By.XPATH, r_sel)
                     for cand in candidates:
                         if cand.is_displayed():
+                            try:
+                                driver.execute_script("arguments[0].scrollIntoView(true);", cand)
+                            except Exception:
+                                pass
                             cand.click()
                             reply_opened = True
                             break
@@ -779,7 +851,14 @@ class EmailReporter:
                 except Exception:
                     continue
 
-            time.sleep(1.0)
+            # Fallback to keyboard shortcut 'r' if buttons not clicked
+            if not reply_opened:
+                try:
+                    driver.find_element(By.TAG_NAME, "body").send_keys("r")
+                except Exception:
+                    pass
+
+            time.sleep(1.5)
 
             # Find reply message body textbox
             body_element = None
@@ -789,7 +868,7 @@ class EmailReporter:
                 "//div[@role='textbox']",
             ]
             body_start_wait = time.time()
-            while time.time() - body_start_wait < 10:
+            while time.time() - body_start_wait < 12:
                 for b_sel in body_selectors:
                     try:
                         elems = driver.find_elements(By.XPATH, b_sel)
@@ -807,21 +886,42 @@ class EmailReporter:
 
             if not body_element:
                 if log_queue:
-                    emit(log_queue, "Could not open inline reply box in existing thread. Falling back to compose...", logging.INFO)
+                    emit(log_queue, "Could not open inline reply box in existing thread.", logging.WARNING)
                 return False
 
-            # Populate body with plain_text
+            # If present, click 'Show trimmed content' (...) to expand quoted message in reply
+            try:
+                trimmed_btns = driver.find_elements(
+                    By.XPATH,
+                    "//div[@aria-label='Show trimmed content' or contains(@data-tooltip, 'Trimmed content') or contains(@data-tooltip, 'trimmed') or contains(@class, 'ajR')]",
+                )
+                for t_btn in trimmed_btns:
+                    if t_btn.is_displayed():
+                        t_btn.click()
+                        time.sleep(0.5)
+                        break
+            except Exception:
+                pass
+
+            # Prepend report plain text at top of the reply body so the quoted message remains intact below
             try:
                 driver.execute_script(
                     """
                     var el = arguments[0];
                     var text = arguments[1];
                     el.focus();
+                    var sel = window.getSelection();
+                    var range = document.createRange();
+                    range.selectNodeContents(el);
+                    range.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(range);
                     if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
-                        document.execCommand('selectAll', false, null);
-                        document.execCommand('insertText', false, text);
+                        document.execCommand('insertText', false, text + '\\n\\n');
                     } else {
-                        el.innerText = text;
+                        var existing = el.innerHTML || '';
+                        var formatted = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\n/g, '<br>');
+                        el.innerHTML = formatted + '<br><br>' + existing;
                         el.dispatchEvent(new Event('input', {bubbles: true}));
                     }
                     """,
@@ -957,6 +1057,26 @@ class EmailReporter:
             )
             if reply_ok:
                 return True
+
+            # Retry by navigating to Sent folder to locate session thread
+            if log_queue:
+                emit(log_queue, "Initial thread reply attempt did not succeed. Searching Sent mail to locate session thread...", logging.INFO)
+            reply_ok = cls._deliver_via_gmail_thread_reply(
+                driver=driver,
+                plain_text=report.generate_plain_text(),
+                thread_url="https://mail.google.com/mail/u/0/#sent",
+                subject=report.generate_subject(),
+                recipient_email=recipient_email,
+                bcc_email=bcc_email,
+                log_queue=log_queue,
+                email_description="session watch time report",
+                thread_info=thread_info,
+            )
+            if reply_ok:
+                return True
+
+        if log_queue:
+            emit(log_queue, "Could not reply directly to existing thread. Falling back to compose delivery...", logging.WARNING)
 
         return cls._deliver_via_gmail_compose(
             driver=driver,

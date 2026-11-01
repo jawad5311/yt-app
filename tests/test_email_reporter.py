@@ -987,3 +987,121 @@ class TestPersistentHeadlessReportingBrowser:
         mock_send_browser.assert_called_once()
         mock_send_headless.assert_not_called()
         assert mock_send_browser.call_args[0][0] is mock_persistent_driver
+
+    @patch("time.sleep", return_value=None)
+    def test_compose_start_notification_navigates_to_sent_and_parks_on_thread(self, mock_sleep):
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://mail.google.com/mail/u/0/#inbox"
+
+        mock_body = MagicMock(is_displayed=lambda: True)
+        mock_send_btn = MagicMock(is_displayed=lambda: True)
+        mock_toast = MagicMock(is_displayed=lambda: True)
+        mock_sent_row = MagicMock(is_displayed=lambda: True)
+
+        def on_sent_row_click():
+            mock_driver.current_url = "https://mail.google.com/mail/u/0/#sent/FMfcgzGsmSent123"
+
+        mock_sent_row.click.side_effect = on_sent_row_click
+
+        def find_elements_mock(by, selector):
+            if "@role='dialog'" in selector:
+                return []
+            if "role='textbox'" in selector:
+                return [mock_body]
+            if "@data-tooltip" in selector and "Send" in selector:
+                return [mock_send_btn]
+            if "link_vmsg" in selector or "View message" in selector:
+                return []
+            if "contains(@class, 'zA')" in selector:
+                return [mock_sent_row]
+            if "sent" in selector.lower():
+                return [mock_toast]
+            return []
+
+        mock_driver.find_elements.side_effect = find_elements_mock
+
+        thread_info = {}
+        log_q = queue.Queue()
+        ok = EmailReporter._deliver_via_gmail_compose(
+            driver=mock_driver,
+            subject="Views App Session - test@gmail.com",
+            plain_text="Starting session",
+            recipient_email="jawad@ytgrowthexpert.com",
+            email_description="start notification email",
+            thread_info=thread_info,
+            log_queue=log_q,
+        )
+
+        assert ok is True
+        assert mock_sent_row.click.called
+        assert "FMfcgzGsmSent123" in thread_info.get("thread_url", "")
+        assert EmailReporter.last_thread_url == "https://mail.google.com/mail/u/0/#sent/FMfcgzGsmSent123"
+
+    @patch("time.sleep", return_value=None)
+    def test_thread_reply_parks_on_thread_and_expands_trimmed_quote(self, mock_sleep):
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://mail.google.com/mail/u/0/#sent/FMfcgzGsmSent123"
+
+        mock_reply_btn = MagicMock(is_displayed=lambda: True)
+        mock_trimmed_btn = MagicMock(is_displayed=lambda: True)
+        mock_body = MagicMock(is_displayed=lambda: True)
+        mock_send_btn = MagicMock(is_displayed=lambda: True)
+        mock_toast = MagicMock(is_displayed=lambda: True)
+
+        def find_elements_mock(by, selector):
+            if "@role='dialog'" in selector:
+                return []
+            if "Trimmed content" in selector or "ajR" in selector:
+                return [mock_trimmed_btn]
+            if "contains(@data-tooltip, 'Reply')" in selector or "text()='Reply'" in selector or "contains(., 'Reply')" in selector:
+                return [mock_reply_btn]
+            if "role='textbox'" in selector:
+                return [mock_body]
+            if "@data-tooltip" in selector and "Send" in selector:
+                return [mock_send_btn]
+            if "sent" in selector.lower():
+                return [mock_toast]
+            return []
+
+        mock_driver.find_elements.side_effect = find_elements_mock
+
+        thread_info = {}
+        log_q = queue.Queue()
+        ok = EmailReporter._deliver_via_gmail_thread_reply(
+            driver=mock_driver,
+            plain_text="Final report content",
+            thread_url="https://mail.google.com/mail/u/0/#sent/FMfcgzGsmSent123",
+            email_description="session watch time report",
+            thread_info=thread_info,
+            log_queue=log_q,
+        )
+
+        assert ok is True
+        mock_reply_btn.click.assert_called()
+        mock_trimmed_btn.click.assert_called()
+        mock_send_btn.click.assert_called()
+
+    @patch.object(EmailReporter, "_deliver_via_gmail_compose", return_value=True)
+    @patch.object(EmailReporter, "_deliver_via_gmail_thread_reply")
+    def test_send_via_browser_gmail_retries_sent_folder_before_compose(
+        self, mock_reply, mock_compose, sample_report
+    ):
+        mock_driver = MagicMock()
+        sample_report.thread_url = "https://mail.google.com/mail/u/0/#inbox/stale123"
+
+        # First reply fails, retry with #sent succeeds
+        mock_reply.side_effect = [False, True]
+
+        log_q = queue.Queue()
+        ok = EmailReporter.send_via_browser_gmail(
+            driver=mock_driver,
+            report=sample_report,
+            recipient_email="reports@example.com",
+            log_queue=log_q,
+        )
+
+        assert ok is True
+        assert mock_reply.call_count == 2
+        # Second call target url is #sent
+        assert mock_reply.call_args_list[1].kwargs.get("thread_url") == "https://mail.google.com/mail/u/0/#sent"
+        mock_compose.assert_not_called()

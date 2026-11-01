@@ -2565,7 +2565,7 @@ class WatchingWorker:
                 start_time=getattr(self, "session_start_time", datetime.now()),
                 custom_subject=getattr(self, "session_thread_subject", None),
                 total_app_watch_seconds=total_sec,
-                log_queue=None,
+                log_queue=self.log_queue,
                 thread_info=self.session_thread_info,
                 driver=self.reporting_driver,
             )
