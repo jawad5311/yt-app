@@ -56,7 +56,7 @@ def sample_report():
 class TestSessionReportFormatting:
     def test_subject_generation_threads_with_session_stamp(self, sample_report):
         subject = sample_report.generate_subject()
-        assert "Views App Session" in subject
+        assert "Entertainment Hub Session" in subject
         assert "30 Oct 2026" in subject
         assert "tester@gmail.com" in subject
 
@@ -66,8 +66,8 @@ class TestSessionReportFormatting:
 
     def test_plain_text_report(self, sample_report):
         text = sample_report.generate_plain_text()
-        assert "YOUTUBE VIEWS APP - SESSION REPORT" in text
-        assert "COMBINED WATCH TIME GENERATED: 40m 00s (0.7 hours)" in text
+        assert "ENTERTAINMENT HUB - SESSION REPORT" in text
+        assert "COMBINED ENTERTAINMENT TIME: 40m 00s (0.7 hours)" in text
         assert "Tech Channel" in text
         assert "30m 00s" in text
         assert "Science Channel" in text
@@ -80,8 +80,8 @@ class TestSessionReportFormatting:
     def test_html_report(self, sample_report):
         html_code = sample_report.generate_html()
         assert "<!DOCTYPE html>" in html_code
-        assert "Session Watch Time Report" in html_code
-        assert "Combined Watch Time Generated" in html_code
+        assert "Session Entertainment Report" in html_code
+        assert "Combined Entertainment Time" in html_code
         assert "40m 00s" in html_code
         assert "Tech Channel" in html_code
         assert "Science Channel" in html_code
@@ -308,7 +308,7 @@ class TestWorkerReportIntegration:
         assert report_arg.account_email == "worker.account@gmail.com"
         assert report_arg.session_mode == "Continuous Watching / Browsing"
         assert report_arg.status == "Stopped by user"
-        assert "Views App Session" in report_arg.custom_subject
+        assert "Entertainment Hub Session" in report_arg.custom_subject
 
     @patch.object(EmailReporter, "dispatch_report")
     def test_automation_worker_dispatches_report_on_completion(self, mock_dispatch, tmp_path):
@@ -338,7 +338,7 @@ class TestWorkerReportIntegration:
         assert report_arg.account_email == "auto.account@gmail.com"
         assert report_arg.session_mode == "Automation Queue"
         assert report_arg.status == "Completed"
-        assert "Views App Session" in report_arg.custom_subject
+        assert "Entertainment Hub Session" in report_arg.custom_subject
 
     @patch.object(EmailReporter, "send_start_notification")
     def test_watching_worker_sends_start_notification_at_launch(self, mock_start, tmp_path):
@@ -361,7 +361,7 @@ class TestWorkerReportIntegration:
         mock_start.assert_called_once()
         assert mock_start.call_args[1]["account"] == account
         assert mock_start.call_args[1]["session_mode"] == "Continuous Watching / Browsing"
-        assert "Views App Session" in mock_start.call_args[1]["custom_subject"]
+        assert "Entertainment Hub Session" in mock_start.call_args[1]["custom_subject"]
 
     @patch.object(EmailReporter, "send_start_notification")
     def test_automation_worker_sends_start_notification_at_launch(self, mock_start, tmp_path):
@@ -384,7 +384,7 @@ class TestWorkerReportIntegration:
         mock_start.assert_called_once()
         assert mock_start.call_args[1]["account"] == account
         assert mock_start.call_args[1]["session_mode"] == "Automation Queue"
-        assert "Views App Session" in mock_start.call_args[1]["custom_subject"]
+        assert "Entertainment Hub Session" in mock_start.call_args[1]["custom_subject"]
 
 
 class TestHeadlessEmailDelivery:
@@ -398,7 +398,7 @@ class TestHeadlessEmailDelivery:
         account = Account(email="active@gmail.com", password="123")
 
         start_dt = datetime(2026, 10, 31, 4, 15, 0)
-        custom_subj = "Views App Session [31 Oct 2026 - 04:15 AM] - active@gmail.com"
+        custom_subj = "Entertainment Hub Session [31 Oct 2026 - 04:15 AM] - active@gmail.com"
 
         ok = EmailReporter.send_start_notification(
             account=account,
@@ -415,10 +415,10 @@ class TestHeadlessEmailDelivery:
         assert args["account"] == account
         assert args["subject"] == custom_subj
         assert args["recipient_email"] == "user@example.com"
-        assert "Automation has started." in args["body_text"]
+        assert "Entertainment session has started." in args["body_text"]
         assert "Account: active@gmail.com" in args["body_text"]
         assert "Started at 31 Oct 2026" in args["body_text"]
-        assert "Total Watch Time Generated for All Channels: 2.0 hours (2h 00m)" in args["body_text"]
+        assert "Total Entertainment Time for All Channels: 2.0 hours (2h 00m)" in args["body_text"]
         # Verify log_queue is None to keep start notification silent in the UI logs
         assert args["log_queue"] is None
 
@@ -707,29 +707,53 @@ class TestReportEnhancedMetricsAndAlerts:
         sample_report.suggested_videos_count = 3
         sample_report.search_videos_count = 2
         sample_report.home_videos_count = 2
+        sample_report.shorts_count = 4
         sample_report.random_videos_count = 1
         sample_report.search_queries_count = 5
 
         plain_text = sample_report.generate_plain_text()
-        # Verify strict ordering: Suggested -> Search -> Home -> Random
+        # Verify strict ordering: Suggested -> Search -> Home -> Shorts -> Random
         idx_sugg = plain_text.index("Suggested Section:")
         idx_search = plain_text.index("YouTube Search:")
         idx_home = plain_text.index("Home Page Feed:")
+        idx_shorts = plain_text.index("YouTube Shorts:")
         idx_rand = plain_text.index("Random / Other:")
 
-        assert idx_sugg < idx_search < idx_home < idx_rand
+        assert idx_sugg < idx_search < idx_home < idx_shorts < idx_rand
         assert "Suggested Section:   3 video(s)" in plain_text
         assert "YouTube Search:      2 video(s) (5 searches performed)" in plain_text
         assert "Home Page Feed:      2 video(s)" in plain_text
+        assert "YouTube Shorts:      4 short(s)" in plain_text
         assert "Random / Other:      1 video(s) (non-target channels)" in plain_text
 
         html_text = sample_report.generate_html()
         idx_h_sugg = html_text.index("Suggested Section")
         idx_h_search = html_text.index("YouTube Search")
         idx_h_home = html_text.index("Homepage Feed")
+        idx_h_shorts = html_text.index("YouTube Shorts")
         idx_h_rand = html_text.index("Random / Other")
-        assert idx_h_sugg < idx_h_search < idx_h_home < idx_h_rand
+        assert idx_h_sugg < idx_h_search < idx_h_home < idx_h_shorts < idx_h_rand
         assert "5 searches" in html_text
+
+    def test_channels_sorted_by_session_watch_time_descending(self, sample_report):
+        """Verify channels in report are sorted by most watch time generated in current session."""
+        sample_report.channel_reports = [
+            {"name": "Low Channel", "session_watch_seconds": 60.0, "final_watch_seconds": 60.0},
+            {"name": "High Channel", "session_watch_seconds": 3600.0, "final_watch_seconds": 3600.0},
+            {"name": "Mid Channel", "session_watch_seconds": 600.0, "final_watch_seconds": 600.0},
+        ]
+
+        text = sample_report.generate_plain_text()
+        idx_high = text.index("High Channel")
+        idx_mid = text.index("Mid Channel")
+        idx_low = text.index("Low Channel")
+        assert idx_high < idx_mid < idx_low
+
+        html_text = sample_report.generate_html()
+        idx_h_high = html_text.index("High Channel")
+        idx_h_mid = html_text.index("Mid Channel")
+        idx_h_low = html_text.index("Low Channel")
+        assert idx_h_high < idx_h_mid < idx_h_low
 
     def test_tracker_records_discovery_sources_and_search_queries(self, tmp_path):
         cfg = ConfigManager(tmp_path / "settings.json")

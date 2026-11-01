@@ -742,7 +742,7 @@ class WatchingWorker:
         )
         self.session_start_time = datetime.now()
         stamp = self.session_start_time.strftime("%d %b %Y - %I:%M %p")
-        self.session_thread_subject = f"Views App Session [{stamp}] - {getattr(self.account, 'email', '')}"
+        self.session_thread_subject = f"Entertainment Hub Session [{stamp}] - {getattr(self.account, 'email', '')}"
         self.session_thread_url: Optional[str] = None
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
