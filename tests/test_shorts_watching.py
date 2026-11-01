@@ -162,39 +162,38 @@ def test_watch_short_user_stop_interruption():
     assert result.reason == "interrupted"
 
 
-def test_match_home_short():
-    """Test matching candidate shorts from Home page with app target shorts."""
+def test_match_home_short_matches_first_short_only():
+    """Test matching only one Short at a time by inspecting the first Short in candidate list."""
     worker = WatchingWorker.__new__(WatchingWorker)
     worker.log_queue = None
 
+    # First candidate is Mercedes CLR, second is Fiat Doblo
     candidates = [
         {"video_id": "EmWlMjI_uXQ", "href": "/shorts/EmWlMjI_uXQ", "title": "Mercedes CLR"},
         {"video_id": "fAwV9Hp_bNc", "href": "/shorts/fAwV9Hp_bNc", "title": "Fiat Doblo"},
-        {"video_id": "random12345", "href": "/shorts/random12345", "title": "Unrelated Short"},
     ]
 
-    target_shorts = [
+    # Target queue has Mercedes CLR: match succeeds because index 0 matches
+    target_shorts_1 = [
         VideoTask(url="https://www.youtube.com/shorts/EmWlMjI_uXQ", title="Target Mercedes Short", enabled=True),
-        VideoTask(url="https://www.youtube.com/shorts/another9999", title="Other Short", enabled=True),
     ]
-
-    # Matching with no previous session watch
-    match = worker.match_home_short(candidates, target_shorts, session_watched_keys=set())
-    assert match is not None
-    cand_info, matched_task = match
+    match1 = worker.match_home_short(candidates, target_shorts_1)
+    assert match1 is not None
+    cand_info, matched_task = match1
     assert cand_info["video_id"] == "EmWlMjI_uXQ"
     assert matched_task.title == "Target Mercedes Short"
 
-    # If already watched, but no alternative, returns it; if alternative unwatched exists, picks unwatched
-    target_shorts.append(VideoTask(url="https://www.youtube.com/shorts/fAwV9Hp_bNc", title="Fiat Short", enabled=True))
-    watched = {"EmWlMjI_uXQ"}
-    match2 = worker.match_home_short(candidates, target_shorts, session_watched_keys=watched)
-    assert match2 is not None
-    assert match2[0]["video_id"] == "fAwV9Hp_bNc"
+    # Target queue ONLY has Fiat Doblo (which is at index 1, NOT index 0):
+    # Must return None because only the first Short is evaluated
+    target_shorts_2 = [
+        VideoTask(url="https://www.youtube.com/shorts/fAwV9Hp_bNc", title="Fiat Short", enabled=True),
+    ]
+    match2 = worker.match_home_short(candidates, target_shorts_2)
+    assert match2 is None
 
 
 def test_play_target_short_integration():
-    """Test _play_target_short records watch stats and updates session tracker."""
+    """Test _play_target_short records watch stats and updates session tracker identically to standard videos."""
     worker = WatchingWorker.__new__(WatchingWorker)
     worker.driver = MagicMock()
     worker.log_queue = queue.Queue()
@@ -238,3 +237,7 @@ def test_play_target_short_integration():
         # Check channel tracker recorded the short
         assert worker.channel_tracker.total_shorts == 1
         assert worker.channel_tracker.channel_shorts.get("mercedes fans") == 1
+        # Check task duration was updated
+        worker._update_task_duration.assert_called_once_with(task, 15.0)
+        # Check stats store recorded outcome
+        worker.stats_store.record.assert_called_once()

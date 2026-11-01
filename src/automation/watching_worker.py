@@ -2080,35 +2080,28 @@ class WatchingWorker:
         session_watched_keys: Optional[Set[str]] = None,
     ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
         """
-        Match candidate shorts on the home page against target shorts configured in the app by URL/Video ID.
-        If multiple match, picks randomly among un-watched or least-watched candidates.
+        Match only one Short at a time by inspecting the first Short in the list of candidate shorts
+        and matching its URL / video ID against the Shorts in our Shorts queue.
+        Returns (first_short, matched_task) if there is a match, otherwise None.
         """
         if not candidate_shorts or not target_shorts:
             return None
 
-        watched_keys = session_watched_keys or set()
-        matches: List[Tuple[Dict[str, Any], VideoTask]] = []
+        first_short = candidate_shorts[0]
+        cand_id = first_short.get("video_id") or extract_video_id(first_short.get("href", ""))
+        cand_url = first_short.get("url") or first_short.get("href", "")
 
-        target_by_id: Dict[str, VideoTask] = {}
-        for t in target_shorts:
-            vid_id = extract_video_id(t.url)
-            if vid_id:
-                target_by_id[vid_id] = t
-
-        for candidate in candidate_shorts:
-            cand_id = candidate.get("video_id") or extract_video_id(candidate.get("href", ""))
-            if cand_id and cand_id in target_by_id:
-                matches.append((candidate, target_by_id[cand_id]))
-
-        if not matches:
+        if not cand_id and not cand_url:
             return None
 
-        unwatched = [
-            m for m in matches
-            if (m[0].get("video_id") not in watched_keys and m[0].get("url") not in watched_keys)
-        ]
-        candidates_pool = unwatched if unwatched else matches
-        return random.choice(candidates_pool)
+        for t in target_shorts:
+            task_id = extract_video_id(t.url)
+            if task_id and cand_id and task_id == cand_id:
+                return (first_short, t)
+            if cand_url and t.url and cand_url.split("?")[0] == t.url.split("?")[0]:
+                return (first_short, t)
+
+        return None
 
     def click_home_short(self, short_info: Dict[str, Any]) -> bool:
         """Click on the target short card on the home page and verify navigation."""
