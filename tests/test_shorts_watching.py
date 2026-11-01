@@ -286,7 +286,9 @@ def test_shorts_reel_loop_skips_non_target_until_limit():
     worker._record_watch = MagicMock()
 
     with patch("src.automation.watching_worker.watch_short") as mock_ws, \
-         patch("src.automation.watching_worker.human_like_delay"):
+         patch("src.automation.watching_worker.human_like_delay"), \
+         patch("src.automation.watching_worker.ensure_video_playing") as mock_evp, \
+         patch("src.automation.watching_worker.time.sleep") as mock_sleep:
         from src.models.watch_stats import WatchResult
         mock_ws.return_value = WatchResult(
             completed=True,
@@ -302,6 +304,45 @@ def test_shorts_reel_loop_skips_non_target_until_limit():
         assert mock_ws.call_count == 1  # watch_short only called for target short
         assert worker.scroll_to_next_short.call_count == 3  # scrolled 3 times; breaks on 3rd non-target (short #4)
         assert "t1" in watched_keys
+        # ensure_video_playing should have been called for non-target shorts
+        assert mock_evp.call_count >= 1
+
+
+def test_non_target_short_watches_two_to_six_seconds_randomly():
+    """Verify non-target short is watched for 2 to 6 seconds randomly before skipping."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.check_pause = MagicMock()
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+    worker.get_target_channels = MagicMock(return_value=[Channel(name="Target Channel", enabled=True)])
+    worker.get_target_shorts = MagicMock(return_value=[])
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 1  # Limit of 1 non-target short -> immediate exit after 1
+    worker.config_mgr = config_mgr
+
+    non_target_short = {
+        "found": True,
+        "channel_name": "Non Target Channel",
+        "channel_url": "/@nontarget",
+        "title": "Random Short",
+        "video_id": "nt1",
+    }
+    worker.get_active_short_info = MagicMock(return_value=non_target_short)
+
+    with patch("src.automation.watching_worker.random.uniform", return_value=4.5) as mock_uniform, \
+         patch("src.automation.watching_worker.ensure_video_playing") as mock_evp, \
+         patch("src.automation.watching_worker.time.sleep") as mock_sleep:
+
+        worker._run_shorts_reel_loop(session_watched_keys=set())
+
+        mock_uniform.assert_called_with(2.0, 6.0)
+        mock_evp.assert_called_once()
+        # Sleep called in increments adding up to 4.5s
+        assert mock_sleep.call_count >= 1
 
 
 def test_like_active_short_when_unliked():

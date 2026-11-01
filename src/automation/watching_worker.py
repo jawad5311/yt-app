@@ -2511,11 +2511,29 @@ class WatchingWorker:
             else:
                 non_target_count += 1
                 ch_label = ch_name or "Unknown Channel"
+                non_target_watch_time = random.uniform(2.0, 6.0)
                 emit(
                     self.log_queue,
-                    f"Short from '{ch_label}' is not in targeted channels list. Skipping ({non_target_count}/{max_non_target})...",
+                    f"Short from '{ch_label}' is not in targeted channels list. Watching for {non_target_watch_time:.1f}s randomly before skipping ({non_target_count}/{max_non_target})...",
                     logging.INFO,
                 )
+                try:
+                    ensure_video_playing(self.driver, log_queue=self.log_queue)
+                except Exception:
+                    pass
+
+                elapsed = 0.0
+                step = 0.2
+                while elapsed < non_target_watch_time and not self.stop_event.is_set():
+                    self.check_pause()
+                    if self.stop_event.is_set():
+                        break
+                    time.sleep(min(step, max(0.01, non_target_watch_time - elapsed)))
+                    elapsed += step
+
+                if self.stop_event.is_set():
+                    break
+
                 if non_target_count >= max_non_target:
                     emit(
                         self.log_queue,
