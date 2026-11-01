@@ -1,5 +1,6 @@
-from typing import Any, Dict, List, Optional, Sequence, Tuple
 import math
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
 
 def safe_float(val: Any, default: float = 0.0, min_val: Optional[float] = None, max_val: Optional[float] = None) -> float:
     if val is None:
@@ -32,12 +33,13 @@ def safe_int(val: Any, default: int = 0, min_val: Optional[int] = None, max_val:
     except (TypeError, ValueError):
         return default
 
-from datetime import datetime
 import re
+from datetime import datetime
+
 """Channel model: named YouTube channels used to group queued video tasks."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 from .video_task import VideoTask
 

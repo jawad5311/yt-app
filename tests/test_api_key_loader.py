@@ -1,8 +1,8 @@
 """Unit tests for loading YouTube API key from .env file and environment."""
 
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
+
 from src.utils.channel_fetcher import get_configured_youtube_api_key, load_env_file
 
 

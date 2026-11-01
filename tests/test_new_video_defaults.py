@@ -1,7 +1,8 @@
 """Tests for default 3x target multiplier and 5 max views when adding/importing new videos."""
 
 from unittest.mock import MagicMock
-from src.models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, VideoTask
+
+from src.models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER
 from src.ui.views.channel_import_modal import ChannelImportModal
 from src.ui.views.queue_view import QueueView
 from src.utils.channel_fetcher import FetchedVideo

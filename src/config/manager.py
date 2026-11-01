@@ -1,17 +1,17 @@
-from datetime import datetime
+import copy
 import json
 import logging
 import math
 import shutil
 import threading
+from datetime import datetime
 from pathlib import Path
-import copy
 from typing import Any, Callable, Dict, List, Optional
 
 from ..models.account import normalize_account_id
 from ..models.channel import Channel
+from ..models.video_task import DEFAULT_WATCHTIME_DURATION
 from ..utils.helpers import get_project_root
-from ..models.video_task import DEFAULT_WATCHTIME_DURATION, VideoTask
 
 
 class ConfigurationError(Exception):

@@ -2,11 +2,12 @@
 
 import json
 from unittest.mock import MagicMock, patch
+
 import customtkinter as ctk
 
 from src.models.channel import Channel
 from src.ui.views.channels_view import ChannelsView
-from src.utils.channel_fetcher import fetch_channel_data_api, ChannelFetchResult
+from src.utils.channel_fetcher import fetch_channel_data_api
 
 
 def test_channel_model_stores_and_serializes_video_totals():

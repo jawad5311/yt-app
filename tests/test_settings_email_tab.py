@@ -1,5 +1,4 @@
 from unittest.mock import MagicMock, patch
-import pytest
 
 from src.config.manager import ConfigManager
 from src.ui.views.settings_view import EMAIL_METHOD_OPTIONS, SettingsView

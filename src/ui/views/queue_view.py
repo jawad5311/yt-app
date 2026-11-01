@@ -5,8 +5,20 @@ from typing import Any, Callable, List, Optional
 import customtkinter as ctk
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
-from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
-from ...models.watch_stats import format_totals_line, format_video_watch_ratio, format_watch_line, format_watch_multiplier, resolve_video_key
+from ...models.video_task import (
+    DEFAULT_MAX_RUNS,
+    DEFAULT_TARGET_MULTIPLIER,
+    DEFAULT_WATCHTIME_DURATION,
+    WATCHTIME_OPTIONS,
+    VideoTask,
+)
+from ...models.watch_stats import (
+    format_totals_line,
+    format_video_watch_ratio,
+    format_watch_line,
+    format_watch_multiplier,
+    resolve_video_key,
+)
 from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
 

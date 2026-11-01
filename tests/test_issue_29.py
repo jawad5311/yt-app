@@ -4,17 +4,15 @@ import json
 import threading
 import urllib.error
 from unittest.mock import MagicMock, patch
-import pytest
 
+from src.ui.views.channel_import_modal import ChannelImportModal
 from src.utils.channel_fetcher import (
     ChannelFetchResult,
     FetchedVideo,
     fetch_channel_videos,
     fetch_channel_videos_api,
-    get_configured_youtube_api_key,
     sanitize_api_url,
 )
-from src.ui.views.channel_import_modal import ChannelImportModal
 
 
 def make_channel_lookup_response(channel_title="Awesome Channel", uploads_id="UU1234567890"):

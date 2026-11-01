@@ -171,7 +171,7 @@ def test_watch_video_pause_resume_does_not_expire_budget():
         def stop_after_ticks(*args, **kwargs):
             if ticks >= 3:
                 stop_ev.set()
-        
+
         result = watch_video(
             driver,
             duration_seconds=60,

@@ -1,21 +1,20 @@
 """Regression tests for Issue 27: Synchronize ChromeDriver provisioning and cache publication."""
 
 import io
-import queue
 import threading
 import time
 import zipfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
 import pytest
 
 from src.automation.driver_provisioner import (
+    MIN_DRIVER_BYTES,
     ProvisioningLock,
+    _extract_driver_exe,
+    create_session_driver_copy,
     ensure_chromedriver,
     publish_driver_to_cache,
-    create_session_driver_copy,
-    _extract_driver_exe,
-    MIN_DRIVER_BYTES,
 )
 
 

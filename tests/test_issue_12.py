@@ -1,11 +1,7 @@
 """Tests for Issue 12: Keep video reservations until watch outcomes are recorded."""
 
-import queue
 import threading
 import time
-from unittest.mock import MagicMock
-
-import pytest
 
 from src.automation import worker as worker_module
 from src.automation.dispatcher import TaskDispatcher
@@ -14,7 +10,7 @@ from src.config.manager import ConfigManager
 from src.config.stats_store import StatsStore
 from src.models.account import Account
 from src.models.video_task import VideoTask
-from src.models.watch_stats import TaskOutcome, WatchResult
+from src.models.watch_stats import WatchResult
 
 VID = "dQw4w9WgXcQ"
 

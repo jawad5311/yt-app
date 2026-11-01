@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+
 import customtkinter as ctk
 
 from src.utils.scroll_helper import setup_smooth_scrolling

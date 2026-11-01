@@ -1,11 +1,8 @@
 import json
-import math
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.config.manager import ConfigManager
-from src.ui.views.settings_view import APPEARANCE_OPTIONS, SettingsView
+from src.ui.views.settings_view import SettingsView
 
 
 def make_dummy_entry(val=""):

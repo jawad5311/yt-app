@@ -348,8 +348,8 @@ def trigger_skip_ad(driver: Any) -> bool:
 
         # If inner text element exists, also hover and click it
         try:
-            from selenium.webdriver.common.by import By
             from selenium.webdriver.common.action_chains import ActionChains
+            from selenium.webdriver.common.by import By
             text_el = btn.find_element(By.CSS_SELECTOR, ".ytp-skip-ad-button__text")
             if text_el:
                 ActionChains(driver).move_to_element(text_el).pause(0.1).click().perform()

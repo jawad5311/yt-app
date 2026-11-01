@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from src.config.manager import ConfigManager
 
 
@@ -51,6 +52,7 @@ def test_documentation_contains_disclaimers():
 
 def test_dashboard_unlimited_browsing_checked_by_default_on_app_open(ctk_app):
     from unittest.mock import MagicMock
+
     from src.ui.views.dashboard_view import DashboardView
 
     app = ctk_app
@@ -69,6 +71,42 @@ def test_dashboard_unlimited_browsing_checked_by_default_on_app_open(ctk_app):
     # Checkbox MUST be checked by default
     assert view.browsing_unlimited_cb.get() == 1
     assert view.browsing_limit_entry.cget("state") == "disabled"
+
+    # Verify Start Browsing, Stop, and Pause buttons are all placed in one line (row 0, columns 0, 1, 2)
+    start_info = view.start_watching_btn.grid_info()
+    stop_info = view.stop_btn.grid_info()
+    pause_info = view.pause_btn.grid_info()
+
+    assert start_info["row"] == 0
+    assert start_info["column"] == 0
+    assert stop_info["row"] == 0
+    assert stop_info["column"] == 1
+    assert pause_info["row"] == 0
+    assert pause_info["column"] == 2
+
+    view.destroy()
+
+
+def test_settings_view_removed_loop_and_browsing_target_limits_kept_unlimited_switch(ctk_app):
+    from unittest.mock import MagicMock
+    from src.ui.views.settings_view import SettingsView
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_setting.return_value = "5m"
+    app.config_mgr.get_int.return_value = 5
+    app.config_mgr.get_bool.return_value = True
+
+    view = SettingsView(app, app)
+
+    # loop_entry and browsing_limit_entry must be removed from SettingsView
+    assert not hasattr(view, "loop_entry")
+    assert not hasattr(view, "browsing_limit_entry")
+
+    # browsing_unlimited_switch must be present
+    assert hasattr(view, "browsing_unlimited_switch")
+    assert view.browsing_unlimited_switch.get() == 1
+
     view.destroy()
 
 

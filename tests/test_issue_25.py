@@ -1,15 +1,14 @@
 import json
-import os
 import shutil
 from pathlib import Path
+
 import pytest
 
 from src.config.manager import ConfigManager
 from src.utils.build_packaging import (
-    is_sensitive_filename,
     filter_datas,
+    is_sensitive_filename,
     stage_release,
-    SENSITIVE_FILENAMES,
 )
 
 

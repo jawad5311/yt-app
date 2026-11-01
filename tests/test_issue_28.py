@@ -3,9 +3,9 @@
 import queue
 import threading
 from unittest.mock import MagicMock, patch
+
 import pytest
 
-from src.models.account import Account
 from src.automation.login import (
     LoginState,
     check_login_state,
@@ -14,6 +14,7 @@ from src.automation.login import (
     perform_google_login,
 )
 from src.automation.worker import AutomationWorker
+from src.models.account import Account
 
 
 @pytest.fixture(autouse=True)

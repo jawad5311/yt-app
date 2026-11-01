@@ -1,6 +1,7 @@
 """Tests confirming ad blocker extension has been removed and disabled."""
 
 from pathlib import Path
+
 from src.automation.adblock import ensure_adblock, find_extension_root, load_extension_cdp
 
 

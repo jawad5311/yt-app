@@ -1,6 +1,7 @@
 """Smooth and fast mouse wheel scrolling utility for CTkScrollableFrame."""
 
 from typing import Optional
+
 import customtkinter as ctk
 
 

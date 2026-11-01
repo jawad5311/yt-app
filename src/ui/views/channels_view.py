@@ -13,14 +13,17 @@ from ...models.channel import (
     clean_channel_url,
 )
 from ...models.video_task import VideoTask, safe_float
-from ...models.watch_stats import format_duration, format_hours, format_totals_line, format_video_watch_ratio, format_watch_multiplier
+from ...models.watch_stats import (
+    format_hours,
+    format_totals_line,
+    format_video_watch_ratio,
+)
 from ...utils.channel_fetcher import (
     ChannelFetchResult,
     extract_fallback_channel_name,
     fetch_channel_data,
     fetch_channel_title_online,
     fetch_channel_videos,
-    normalize_channel_url,
 )
 from ...utils.helpers import extract_video_id
 from .channel_import_modal import ChannelImportModal
@@ -827,7 +830,7 @@ class ChannelsView(ctk.CTkFrame):
 
         v_desc = "all" if video_limit == 0 else (f"up to {video_limit}" if video_limit is not None else "no")
         s_desc = "all" if shorts_limit == 0 else (f"up to {shorts_limit}" if shorts_limit is not None else "no")
-        status_text = f"Fetching {v_desc} video(s) and {s_desc} short(s) for\n'{channel.name}'..." 
+        status_text = f"Fetching {v_desc} video(s) and {s_desc} short(s) for\n'{channel.name}'..."
         ctk.CTkLabel(
             loading,
             text=status_text,

@@ -112,7 +112,6 @@ def test_fetch_limit_options_and_custom_parsing():
 
 
 def test_channel_import_modal_submit_destroys_modal_before_callback(ctk_app):
-    from unittest.mock import MagicMock
     from src.ui.views.channel_import_modal import ChannelImportModal
 
     fetched = [

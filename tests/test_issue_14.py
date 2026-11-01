@@ -5,7 +5,6 @@ Verify playback identity before recording video statistics.
 import queue
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-import pytest
 
 from src.automation.navigation import navigate_to_video_organically
 from src.automation.watching_worker import WatchingWorker

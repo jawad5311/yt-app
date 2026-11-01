@@ -1,7 +1,6 @@
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from src.models.channel import Channel, VideoGroup, group_videos_by_channel
+from src.models.channel import Channel, group_videos_by_channel
 from src.models.video_task import VideoTask
 from src.utils.helpers import clean_youtube_url
 

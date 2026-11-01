@@ -1,5 +1,5 @@
-import pytest
 from unittest.mock import MagicMock, patch
+
 from src.models.video_task import VideoTask
 from src.ui.views.queue_view import QueueView
 

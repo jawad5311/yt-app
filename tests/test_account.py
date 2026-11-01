@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.models.account import Account, normalize_account_id
+from src.models.account import Account
 
 
 @pytest.mark.parametrize(

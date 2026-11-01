@@ -2,9 +2,9 @@
 and submitting with blank name resolves channel details via backend."""
 
 from unittest.mock import MagicMock, patch
+
 import customtkinter as ctk
 
-from src.models.channel import Channel
 from src.ui.views.channels_view import ChannelsView
 
 

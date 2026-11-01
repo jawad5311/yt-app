@@ -2,12 +2,13 @@ import queue
 import threading
 import time
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.models.account import Account
 from src.models.channel import Channel
 from src.models.video_task import VideoTask
-from src.ui.app import YTBotApp, SessionEventQueue, sanitize_error
+from src.ui.app import YTBotApp, sanitize_error
 
 
 @pytest.fixture

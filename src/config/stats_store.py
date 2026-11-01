@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from ..models.video_task import VideoTask
-from ..utils.helpers import get_project_root
 from ..models.watch_stats import (
     StatRecord,
     TaskOutcome,
@@ -15,6 +14,7 @@ from ..models.watch_stats import (
     resolve_video_key,
     totals_for,
 )
+from ..utils.helpers import get_project_root
 
 SCHEMA_VERSION = 1
 

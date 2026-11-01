@@ -1,23 +1,24 @@
-from datetime import datetime
-from .email_reporter import EmailReporter, SessionReport
-from .session_tracker import SessionChannelTracker
 import logging
 import queue
 import threading
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
-from ..models.channel import Channel, is_video_task_runnable, check_video_task_eligibility
+from ..models.channel import Channel, check_video_task_eligibility
 from ..models.video_task import VideoTask
 from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .dispatcher import TaskDispatcher
 from .driver import close_driver, setup_driver
+from .email_reporter import EmailReporter, SessionReport
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
+from .session_tracker import SessionChannelTracker
 from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_video
 
 # Retry a failed task across up to 3 titles, with 3 attempts per title (up to 9 attempts total).
@@ -66,6 +67,11 @@ class AutomationWorker:
         self.session_start_time = datetime.now()
         stamp = self.session_start_time.strftime("%d %b %Y - %I:%M %p")
         self.session_thread_subject = f"Views App Session [{stamp}] - {getattr(self.account, 'email', '')}"
+        self.session_thread_url: Optional[str] = None
+        self.session_thread_message_id: Optional[str] = None
+        self.session_thread_info: Dict[str, Any] = {}
+        self.reporting_driver: Optional[Any] = None
+        self.reporting_thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------ events
 
@@ -202,6 +208,8 @@ class AutomationWorker:
                 is_last_attempt = (overall_attempt == total_max_attempts)
                 allow_direct = direct_link_fallback if is_last_attempt else False
 
+                if hasattr(self, "channel_tracker") and self.channel_tracker:
+                    self.channel_tracker.record_search_query()
                 try:
                     nav_ok = navigate_to_video_organically(
                         self.driver,
@@ -361,7 +369,7 @@ class AutomationWorker:
                         outcome.playback_finished = True
                     if hasattr(self, "channel_tracker") and self.channel_tracker and (outcome.watched_seconds > 0 or outcome.success):
                         is_s = getattr(task, "is_short", False) or ("/shorts/" in (getattr(task, "url", "") or ""))
-                        self.channel_tracker.record_video_watched(is_short=is_s, channel_name=task.channel)
+                        self.channel_tracker.record_video_watched(is_short=is_s, channel_name=task.channel, source="search")
                     if result.interrupted:
                         outcome.interrupted = True
                         return outcome
@@ -398,9 +406,14 @@ class AutomationWorker:
         emit(self.log_queue, f"Starting automation session for account: {self.account.email}")
         direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", False)
 
-        # Send start notification in headless browser for the primary worker thread
+        # Send start notification in headless browser asynchronously without blocking visible browser launch
         if self.worker_id == 0:
-            self._send_start_notification()
+            self.reporting_thread = threading.Thread(
+                target=self._async_init_and_send_start_notification,
+                name="ReportingStartNotificationThread",
+                daemon=True,
+            )
+            self.reporting_thread.start()
 
         if self.dispatcher is not None:
             total = self.dispatcher.register_worker(self.worker_id)
@@ -551,13 +564,41 @@ class AutomationWorker:
             if hasattr(self, "channel_tracker"):
                 self.channel_tracker.on_stop()
 
-            # Close main driver first to release profile lock for headless reporting
+            # Close main visible watching driver
             if self.driver:
                 close_driver(self.driver, log_queue=self.log_queue)
                 self.driver = None
 
-            # Deliver session watch time report via headless browser
+            # Deliver session report via the persistent headless browser parked on the email thread
             self._send_session_report(status=session_status, error=session_err)
+
+            # Wait briefly if background start notification thread is still finishing
+            rep_thread = getattr(self, "reporting_thread", None)
+            if rep_thread and rep_thread.is_alive():
+                rep_thread.join(timeout=5)
+
+            # Close persistent headless reporting browser
+            if self.reporting_driver:
+                close_driver(self.reporting_driver, log_queue=self.log_queue)
+                self.reporting_driver = None
+
+    def _async_init_and_send_start_notification(self) -> None:
+        """Initialize headless reporting browser and send start notification asynchronously in background."""
+        try:
+            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
+            if "headless" in method.lower() and not getattr(self, "reporting_driver", None):
+                try:
+                    self.reporting_driver = EmailReporter.create_headless_reporting_driver(
+                        account=self.account,
+                        log_queue=self.log_queue,
+                    )
+                except Exception as exc:
+                    logging.debug(f"Could not create persistent reporting driver: {exc}")
+                    self.reporting_driver = None
+
+            self._send_start_notification()
+        except Exception as exc:
+            logging.debug(f"Failed in async start notification dispatch: {exc}")
 
     def _send_start_notification(self) -> None:
         """Deliver start notification email via headless browser."""
@@ -577,8 +618,14 @@ class AutomationWorker:
                 start_time=getattr(self, "session_start_time", datetime.now()),
                 custom_subject=getattr(self, "session_thread_subject", None),
                 total_app_watch_seconds=total_sec,
-                log_queue=None,
+                log_queue=self.log_queue,
+                thread_info=self.session_thread_info,
+                driver=self.reporting_driver,
             )
+            if self.session_thread_info.get("thread_url"):
+                self.session_thread_url = self.session_thread_info["thread_url"]
+            if self.session_thread_info.get("message_id"):
+                self.session_thread_message_id = self.session_thread_info["message_id"]
         except Exception as exc:
             logging.debug(f"Failed dispatching start notification email: {exc}")
 
@@ -601,16 +648,27 @@ class AutomationWorker:
                 start_time=getattr(self, "session_start_time", datetime.now()),
                 custom_subject=getattr(self, "session_thread_subject", None),
                 log_queue=None,
+                thread_url=getattr(self, "session_thread_url", None),
+                thread_message_id=getattr(self, "session_thread_message_id", None),
+                thread_info=getattr(self, "session_thread_info", None),
             )
         except Exception as exc:
             logging.debug(f"Failed dispatching critical alert email: {exc}")
 
     def _send_session_report(self, status: str = "Completed", error: Optional[str] = None) -> None:
         """Deliver session watch time report."""
+        self._emit_event(("report_generating", "Generating session report... Please do not close the app."))
         if not self.config_mgr:
+            self._emit_event(("report_sent", False, "No configuration manager available."))
             return
         if not hasattr(self, "channel_tracker") or not self.channel_tracker:
+            self._emit_event(("report_sent", False, "No session tracking data."))
             return
+
+        # If background start notification thread is still active, wait briefly for it to complete
+        rep_thread = getattr(self, "reporting_thread", None)
+        if rep_thread and rep_thread.is_alive():
+            rep_thread.join(timeout=15)
 
         try:
             report_data = self.channel_tracker.get_session_report_data()
@@ -630,16 +688,29 @@ class AutomationWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
+                thread_url=getattr(self, "session_thread_url", None),
+                thread_message_id=getattr(self, "session_thread_message_id", None),
+                suggested_videos_count=report_data.get("suggested_videos_count", 0),
+                search_videos_count=report_data.get("search_videos_count", 0),
+                home_videos_count=report_data.get("home_videos_count", 0),
+                random_videos_count=report_data.get("random_videos_count", 0),
+                search_queries_count=report_data.get("search_queries_count", 0),
             )
-            EmailReporter.dispatch_report(
+            ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
-                driver=self.driver,
+                driver=self.reporting_driver or self.driver,
                 account=self.account,
                 log_queue=self.log_queue,
             )
+            if not ok:
+                emit(self.log_queue, "Session report email delivery could not be completed.", logging.WARNING)
+                self._emit_event(("report_sent", False, "Session report email delivery could not be completed."))
+            else:
+                self._emit_event(("report_sent", True, "Session report sent successfully!"))
         except Exception as exc:
-            logging.debug(f"Failed dispatching session email report: {exc}")
+            emit(self.log_queue, f"Failed dispatching session email report: {exc}", logging.WARNING)
+            self._emit_event(("report_sent", False, f"Failed dispatching session email report: {exc}"))
 
     def stop(self) -> None:
         """Stop worker execution."""

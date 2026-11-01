@@ -57,6 +57,7 @@ stats.json
 # Configuration files with credentials and default accounts import (never commit)
 credentials.json
 accounts.txt
+api_key_path.txt
 .env
 .env.*
 !.env.example

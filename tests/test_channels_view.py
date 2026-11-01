@@ -66,6 +66,7 @@ def test_format_watch_line_with_hours():
 
 def test_channel_card_name_and_handle_format(ctk_app):
     import customtkinter as ctk
+
     from src.ui.background_jobs import BackgroundJobs
 
     app = ctk_app

@@ -1,9 +1,10 @@
 import logging
-from .helpers import get_project_root
 import queue
 import re
 from pathlib import Path
 from typing import Any, Optional
+
+from .helpers import get_project_root
 
 SECRET_PATTERNS = [
     re.compile(r"key=([A-Za-z0-9_\-]+)", re.IGNORECASE),

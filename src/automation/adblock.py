@@ -4,9 +4,9 @@ Extension-based ad blocking has been completely removed in favor of
 native script-based ad skipping (no extension overhead or anti-adblock detection).
 """
 
+import queue
 from pathlib import Path
 from typing import Any, Optional
-import queue
 
 
 def ensure_adblock(log_queue: Optional[queue.Queue] = None, force: bool = False) -> Optional[Path]:

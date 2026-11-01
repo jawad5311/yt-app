@@ -5,8 +5,14 @@ from typing import Callable, Dict, List, Optional, Set
 
 import customtkinter as ctk
 
-from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS, VideoTask
-from ...utils.channel_fetcher import FetchedVideo, ChannelFetchResult
+from ...models.video_task import (
+    DEFAULT_MAX_RUNS,
+    DEFAULT_TARGET_MULTIPLIER,
+    DEFAULT_WATCHTIME_DURATION,
+    WATCHTIME_OPTIONS,
+    VideoTask,
+)
+from ...utils.channel_fetcher import ChannelFetchResult, FetchedVideo
 from ...utils.helpers import clean_youtube_url
 
 

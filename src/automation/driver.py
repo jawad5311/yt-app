@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import queue
@@ -13,19 +12,16 @@ import undetected_chromedriver as uc
 
 from ..models.account import Account
 from ..utils.logger import emit
-from ..utils.helpers import get_project_root
-from .profile_manager import (
-    get_runtime_profiles_dir,
-    resolve_profile_dir,
-    ProfileLock,
-    ProfileBusyError,
-    is_chrome_lock_active,
-)
 from .driver_provisioner import (
-    get_chromedriver_cache_dir,
+    create_session_driver_copy,
     ensure_chromedriver,
     publish_driver_to_cache,
-    create_session_driver_copy,
+)
+from .profile_manager import (
+    ProfileBusyError,
+    ProfileLock,
+    is_chrome_lock_active,
+    resolve_profile_dir,
 )
 
 
@@ -83,12 +79,38 @@ def get_chrome_major_version() -> Optional[int]:
 DRIVER_INIT_LOCK = threading.Lock()
 
 
+def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
+    """Sync authentication and session state files from main profile to isolated reporting profile."""
+    if not src_dir.exists():
+        return
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    files_to_sync = [
+        "Local State",
+        "Default/Preferences",
+        "Default/Secure Preferences",
+        "Default/Network/Cookies",
+        "Default/Login Data",
+        "Default/Login Data For Account",
+        "Default/Web Data",
+    ]
+    for rel_path in files_to_sync:
+        s = src_dir / rel_path
+        d = dst_dir / rel_path
+        if s.exists():
+            try:
+                d.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(s, d)
+            except Exception:
+                pass
+
+
 def setup_driver(
     account: Account,
     log_queue: Optional[queue.Queue] = None,
     adblock_path: Optional[Path] = None,
     known_accounts: Optional[Union[List[Account], List[Dict[str, Any]]]] = None,
     headless: bool = False,
+    is_reporting: bool = False,
 ) -> uc.Chrome:
     """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
     resolved_known: Optional[List[Account]] = None
@@ -110,7 +132,13 @@ def setup_driver(
             if a
         ]
 
-    profile_dir = resolve_profile_dir(account, known_accounts=resolved_known)
+    main_profile_dir = resolve_profile_dir(account, known_accounts=resolved_known)
+    if is_reporting:
+        profile_dir = main_profile_dir.parent / f"{main_profile_dir.name}_reporting"
+        sync_reporting_profile(main_profile_dir, profile_dir)
+    else:
+        profile_dir = main_profile_dir
+
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     profile_lock = ProfileLock(profile_dir)

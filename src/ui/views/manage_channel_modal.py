@@ -9,6 +9,7 @@ Allows users to:
 
 from tkinter import messagebox
 from typing import Any, Callable, List, Optional, Tuple
+
 import customtkinter as ctk
 
 from ...models.channel import Channel
