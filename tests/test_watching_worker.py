@@ -78,6 +78,9 @@ class TestWatchingWorker:
         account = Account(email="test@gmail.com", password="pwd")
         channels = [Channel(name="Test Channel", url="https://youtube.com/@testchannel")]
         config_mgr.set_channels([c.to_dict() for c in channels])
+        config_mgr.set_setting("EmailReportingEnabled", False)
+        config_mgr.set_setting("SessionStartNotification", False)
+        config_mgr.set_setting("ReportEmailMethod", "Disabled")
         log_q = queue.Queue()
         stop_ev = threading.Event()
         event_q = queue.Queue()
@@ -641,6 +644,7 @@ class TestWatchingWorker:
         assert "Eligible Rec Video" in log_str
         assert "Updated video time for 'Eligible Rec Video': watched 60.0s" in log_str
 
+    @patch("random.randint", return_value=1)
     @patch("src.automation.watching_worker.human_like_delay")
     @patch("src.automation.watching_worker.setup_driver")
     @patch("src.automation.watching_worker.perform_google_login")
@@ -648,7 +652,7 @@ class TestWatchingWorker:
     @patch("src.automation.watching_worker.safe_get")
     @patch("src.automation.watching_worker.close_driver")
     def test_random_suggested_video_fallback_when_target_not_in_recs(
-        self, mock_close, mock_safe_get, mock_watch, mock_login, mock_setup, mock_delay, worker
+        self, mock_close, mock_safe_get, mock_watch, mock_login, mock_setup, mock_delay, mock_randint, worker
     ):
         """When Channel A is watched and suggestions have no Channel B, watch random video without interactivity, then find Channel B."""
         ch_a = Channel(name="Channel A", url="https://youtube.com/@channelA")
