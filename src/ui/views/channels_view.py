@@ -517,7 +517,7 @@ class ChannelsView(ctk.CTkFrame):
             combined_total = v_cnt + s_cnt
             ctk.CTkLabel(
                 modal,
-                text=f"📊 Channel Total: {v_cnt:,} Videos | {s_cnt:,} Shorts | {combined_total:,} Total Combined Videos",
+                text=f"all videos: {combined_total:,} | shorts: {s_cnt:,} | videos: {v_cnt:,}",
                 font=ctk.CTkFont(size=12, weight="bold"),
                 text_color=("#1D4ED8", "#93C5FD"),
             ).pack(anchor="w", padx=20, pady=(0, 6))
@@ -1436,12 +1436,7 @@ class ChannelsView(ctk.CTkFrame):
             s_cnt = channel.total_shorts if channel.total_shorts is not None else es
             combined_total = v_cnt + s_cnt
 
-            totals_parts = [
-                f"{v_cnt:,} Videos",
-                f"{s_cnt:,} Shorts",
-                f"{combined_total:,} Total Combined Videos",
-            ]
-            header_text = f"📊 Channel Total: {' | '.join(totals_parts)}"
+            header_text = f"all videos: {combined_total:,} | shorts: {s_cnt:,} | videos: {v_cnt:,}"
             if getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False):
                 badge = getattr(channel, "new_badge_text", "") or "🔥 New Videos Available"
                 header_text = f"{header_text}  •  {badge}"
@@ -2701,11 +2696,7 @@ class ChannelsView(ctk.CTkFrame):
             s_cnt = channel.total_shorts if channel.total_shorts is not None else es
             combined_total = v_cnt + s_cnt
 
-            totals_parts = [
-                f"{v_cnt:,} Videos",
-                f"{s_cnt:,} Shorts",
-                f"{combined_total:,} Total Combined Videos",
-            ]
+            totals_text = f"all videos: {combined_total:,} | shorts: {s_cnt:,} | videos: {v_cnt:,}"
 
             def _on_channel_click(event=None, ch=channel):
                 self.open_channel_videos_modal(ch)
@@ -2729,15 +2720,15 @@ class ChannelsView(ctk.CTkFrame):
             lbl.bind("<Button-1>", _on_channel_click)
 
             has_new = getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False) or getattr(channel, "has_new_shorts", False)
-            if totals_parts or has_new:
+            if totals_text or has_new:
                 meta_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
                 meta_frame.pack(anchor="w", fill="x", pady=(2, 0))
                 meta_frame.bind("<Button-1>", _on_channel_click)
 
-                if totals_parts:
+                if totals_text:
                     tot_lbl = ctk.CTkLabel(
                         meta_frame,
-                        text=f"Channel Total: {' | '.join(totals_parts)}",
+                        text=totals_text,
                         font=ctk.CTkFont(size=12),
                         justify="left",
                         anchor="w",
@@ -2748,7 +2739,7 @@ class ChannelsView(ctk.CTkFrame):
                     tot_lbl.bind("<Button-1>", _on_channel_click)
 
                 if has_new:
-                    sep = " • " if totals_parts else ""
+                    sep = " • " if totals_text else ""
                     badge_text = getattr(channel, "new_badge_text", "") or "🔥 New Videos Available"
                     new_lbl = ctk.CTkLabel(
                         meta_frame,

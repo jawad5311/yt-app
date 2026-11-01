@@ -111,10 +111,7 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
         _collect_labels(card)
 
     card_text = "\n".join(labels)
-    assert "Channel Total:" in card_text
-    assert "1,420 Videos" in card_text
-    assert "580 Shorts" in card_text
-    assert "2,000 Total Combined Videos" in card_text
+    assert "all videos: 2,000 | shorts: 580 | videos: 1,420" in card_text
 
     # Verify modal header also displays totals
     view.open_channel_videos_modal(channel)
@@ -134,10 +131,7 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
     _scan(modal)
 
     modal_text = "\n".join(modal_labels)
-    assert "Channel Total:" in modal_text
-    assert "1,420 Videos" in modal_text
-    assert "580 Shorts" in modal_text
-    assert "2,000 Total Combined Videos" in modal_text
+    assert "all videos: 2,000 | shorts: 580 | videos: 1,420" in modal_text
 
     modal.destroy()
 
@@ -154,10 +148,7 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
     _scan_edit = lambda w: [edit_labels.append(c.cget("text")) for c in w.winfo_children() if isinstance(c, ctk.CTkLabel)] and [_scan_edit(c) for c in w.winfo_children()]
     _scan_edit(edit_modal)
     edit_text = "\n".join(edit_labels)
-    assert "Channel Total:" in edit_text
-    assert "1,420 Videos" in edit_text
-    assert "580 Shorts" in edit_text
-    assert "2,000 Total Combined Videos" in edit_text
+    assert "all videos: 2,000 | shorts: 580 | videos: 1,420" in edit_text
 
     edit_modal.destroy()
     view.destroy()
