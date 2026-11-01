@@ -408,7 +408,7 @@ class AutomationWorker:
         # Initialize persistent headless reporting browser before visible driver
         if self.worker_id == 0:
             method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
-            if "headless" in method.lower() or "auto" in method.lower():
+            if "headless" in method.lower():
                 try:
                     self.reporting_driver = EmailReporter.create_headless_reporting_driver(
                         account=self.account,

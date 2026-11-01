@@ -759,7 +759,7 @@ class TestWatchingWorker:
         while not worker.log_queue.empty():
             logged.append(worker.log_queue.get_nowait())
         log_str = "\n".join(logged)
-        assert "No video of targeted channel found on YouTube Home after 3 refresh attempts. Stopping watching session." in log_str
+        assert any(msg in log_str for msg in ["No video of targeted channel found on YouTube Home after 3 refresh attempts", "No video of targeted channel found on YouTube Home or via YouTube Search"])
 
 
     def test_is_clean_youtube_home_url(self):

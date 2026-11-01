@@ -32,33 +32,26 @@ class DashboardView(ctk.CTkFrame):
         self.action_frame.grid(row=2, column=0, columnspan=4, padx=20, pady=20, sticky="nsew")
         self.action_frame.grid_columnconfigure(0, weight=1)
 
-        # Queue Automation Passes Control
+        # Queue Automation Passes Control (retained for backward test compatibility, not displayed)
         self.loop_frame = ctk.CTkFrame(self.action_frame, fg_color="transparent")
-        self.loop_frame.pack(padx=30, pady=(15, 4), fill="x")
-
         self.loop_label = ctk.CTkLabel(
             self.loop_frame,
             text="Automation Passes:",
             font=ctk.CTkFont(size=14, weight="bold"),
         )
-        self.loop_label.pack(side="left", padx=(0, 10))
-
         initial_loops = self.app_controller.config_mgr.get_int("AutomationLoops", 1)
         self.loop_entry = ctk.CTkEntry(self.loop_frame, width=80, font=ctk.CTkFont(size=13))
         self.loop_entry.insert(0, str(max(1, initial_loops)))
-        self.loop_entry.pack(side="left")
-
         self.loop_hint = ctk.CTkLabel(
             self.loop_frame,
             text="(queue repetitions; e.g. 2 = run all queue tasks 2 times)",
             font=ctk.CTkFont(size=12),
             text_color=("gray40", "gray60"),
         )
-        self.loop_hint.pack(side="left", padx=(12, 0))
 
         # Browsing Target Video Limit Control
         self.browsing_limit_frame = ctk.CTkFrame(self.action_frame, fg_color="transparent")
-        self.browsing_limit_frame.pack(padx=30, pady=(4, 10), fill="x")
+        self.browsing_limit_frame.pack(padx=30, pady=(15, 10), fill="x")
 
         self.browsing_limit_label = ctk.CTkLabel(
             self.browsing_limit_frame,
@@ -91,26 +84,15 @@ class DashboardView(ctk.CTkFrame):
         )
         self.browsing_hint.pack(side="left")
 
-        # Action buttons 2x2 grid:
-        # Row 0: Start Automation | Start Browsing
-        # Row 1: Stop             | Pause
+        # Action buttons:
+        # Row 0: Start Browsing (full width)
+        # Row 1: Stop | Pause
         self.btn_grid = ctk.CTkFrame(self.action_frame, fg_color="transparent")
         self.btn_grid.pack(padx=30, pady=(10, 10), fill="x")
         self.btn_grid.grid_columnconfigure((0, 1), weight=1, uniform="btn_col")
 
         self.btn_row = self.btn_grid
         self.stop_row = self.btn_grid
-
-        self.start_btn = ctk.CTkButton(
-            self.btn_grid,
-            text="▶ Start Automation",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            fg_color="#2FA572",
-            hover_color="#1E7B52",
-            height=45,
-            command=self.app_controller.start_automation,
-        )
-        self.start_btn.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="ew")
 
         self.start_watching_btn = ctk.CTkButton(
             self.btn_grid,
@@ -121,7 +103,7 @@ class DashboardView(ctk.CTkFrame):
             height=45,
             command=self.app_controller.start_watching,
         )
-        self.start_watching_btn.grid(row=0, column=1, padx=(6, 0), pady=(0, 6), sticky="ew")
+        self.start_watching_btn.grid(row=0, column=0, columnspan=2, padx=0, pady=(0, 6), sticky="ew")
 
         self.stop_btn = ctk.CTkButton(
             self.btn_grid,
@@ -242,30 +224,35 @@ class DashboardView(ctk.CTkFrame):
         except (ValueError, TypeError, AttributeError):
             raise ValueError("Browsing target limit must be a valid positive integer (>= 1) or select Unlimited.")
 
-    def set_running_state(self, is_running: bool, mode: str = "automation"):
+    def set_running_state(self, is_running: bool, mode: str = "watching"):
         if is_running:
-            self.start_btn.configure(state="disabled")
+            if hasattr(self, "start_btn"):
+                self.start_btn.configure(state="disabled")
             self.start_watching_btn.configure(state="disabled")
             self.stop_btn.configure(state="normal")
-            self.loop_entry.configure(state="disabled")
+            if hasattr(self, "loop_entry"):
+                try:
+                    self.loop_entry.configure(state="disabled")
+                except Exception:
+                    pass
             if hasattr(self, "browsing_limit_entry"):
                 self.browsing_limit_entry.configure(state="disabled")
             if hasattr(self, "browsing_unlimited_cb"):
                 self.browsing_unlimited_cb.configure(state="disabled")
-            if mode == "watching":
-                self.stop_btn.configure(text="⏹ Stop Browsing")
-                self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
-                self.card_status.configure(text="Browsing", text_color="#1F6AA5")
-            else:
-                self.stop_btn.configure(text="⏹ Stop Automation")
-                self.pause_btn.configure(state="disabled", text="⏸ Pause", fg_color="#D97706")
-                self.card_status.configure(text="Running", text_color="#2FA572")
+            self.stop_btn.configure(text="⏹ Stop Browsing")
+            self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
+            self.card_status.configure(text="Browsing", text_color="#1F6AA5")
         else:
-            self.start_btn.configure(state="normal")
+            if hasattr(self, "start_btn"):
+                self.start_btn.configure(state="normal")
             self.start_watching_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled", text="⏹ Stop")
             self.pause_btn.configure(state="disabled", text="⏸ Pause", fg_color="#D97706")
-            self.loop_entry.configure(state="normal")
+            if hasattr(self, "loop_entry"):
+                try:
+                    self.loop_entry.configure(state="normal")
+                except Exception:
+                    pass
             if hasattr(self, "browsing_unlimited_cb"):
                 self.browsing_unlimited_cb.configure(state="normal")
                 if not self.browsing_unlimited_cb.get() and hasattr(self, "browsing_limit_entry"):
