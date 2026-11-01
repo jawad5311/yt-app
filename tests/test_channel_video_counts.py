@@ -140,4 +140,24 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
     assert "2,000 Total Combined Videos" in modal_text
 
     modal.destroy()
+
+    # Verify Edit Channel modal also displays totals under URL
+    view.open_channel_modal(edit_index=0)
+    edit_modal = None
+    for child in view.winfo_children():
+        if isinstance(child, ctk.CTkToplevel):
+            edit_modal = child
+            break
+    assert edit_modal is not None
+
+    edit_labels = []
+    _scan_edit = lambda w: [edit_labels.append(c.cget("text")) for c in w.winfo_children() if isinstance(c, ctk.CTkLabel)] and [_scan_edit(c) for c in w.winfo_children()]
+    _scan_edit(edit_modal)
+    edit_text = "\n".join(edit_labels)
+    assert "Channel Total:" in edit_text
+    assert "1,420 Videos" in edit_text
+    assert "580 Shorts" in edit_text
+    assert "2,000 Total Combined Videos" in edit_text
+
+    edit_modal.destroy()
     view.destroy()

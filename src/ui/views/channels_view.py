@@ -510,6 +510,18 @@ class ChannelsView(ctk.CTkFrame):
         url_entry.insert(0, target.url)
         url_entry.pack(padx=20, pady=(0, 8), fill="x")
 
+        if is_editing:
+            ev, es, et = self.get_existing_video_counts_for_channel(target.name)
+            v_cnt = target.total_videos if target.total_videos is not None else ev
+            s_cnt = target.total_shorts if target.total_shorts is not None else es
+            combined_total = v_cnt + s_cnt
+            ctk.CTkLabel(
+                modal,
+                text=f"📊 Channel Total: {v_cnt:,} Videos | {s_cnt:,} Shorts | {combined_total:,} Total Combined Videos",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=("#1D4ED8", "#93C5FD"),
+            ).pack(anchor="w", padx=20, pady=(0, 6))
+
         fetch_btn = None
         status_lbl = None
 
@@ -1409,6 +1421,37 @@ class ChannelsView(ctk.CTkFrame):
 
         url_lbl.bind("<Button-1>", _edit_url)
 
+        # 3. Channel Video Counts displayed directly under the URL
+        totals_lbl = ctk.CTkLabel(
+            header,
+            text="",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=("#16A34A", "#4ADE80") if (getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False)) else ("#1D4ED8", "#93C5FD"),
+        )
+        totals_lbl.pack(anchor="w", pady=(3, 0))
+
+        def _update_totals_display():
+            ev, es, et = self.get_existing_video_counts_for_channel(channel.name)
+            v_cnt = channel.total_videos if channel.total_videos is not None else ev
+            s_cnt = channel.total_shorts if channel.total_shorts is not None else es
+            combined_total = v_cnt + s_cnt
+
+            totals_parts = [
+                f"{v_cnt:,} Videos",
+                f"{s_cnt:,} Shorts",
+                f"{combined_total:,} Total Combined Videos",
+            ]
+            header_text = f"📊 Channel Total: {' | '.join(totals_parts)}"
+            if getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False):
+                badge = getattr(channel, "new_badge_text", "") or "🔥 New Videos Available"
+                header_text = f"{header_text}  •  {badge}"
+            totals_lbl.configure(
+                text=header_text,
+                text_color=("#16A34A", "#4ADE80") if (getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False)) else ("#1D4ED8", "#93C5FD"),
+            )
+
+        _update_totals_display()
+
         stats = self.channel_stats_line(channel.name)
         if stats:
             ctk.CTkLabel(
@@ -1416,27 +1459,6 @@ class ChannelsView(ctk.CTkFrame):
                 text=stats,
                 font=ctk.CTkFont(size=12, slant="italic"),
             ).pack(anchor="w", pady=(2, 0))
-
-        ev, es, et = self.get_existing_video_counts_for_channel(channel.name)
-        v_cnt = channel.total_videos if channel.total_videos is not None else ev
-        s_cnt = channel.total_shorts if channel.total_shorts is not None else es
-        combined_total = v_cnt + s_cnt
-
-        totals_parts = [
-            f"{v_cnt:,} Videos",
-            f"{s_cnt:,} Shorts",
-            f"{combined_total:,} Total Combined Videos",
-        ]
-        header_text = f"📊 Channel Total: {' | '.join(totals_parts)}"
-        if getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False):
-            badge = getattr(channel, "new_badge_text", "") or "🔥 New Videos Available"
-            header_text = f"{header_text}  •  {badge}"
-        ctk.CTkLabel(
-            header,
-            text=header_text,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=("#16A34A", "#4ADE80") if (getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False)) else ("#1D4ED8", "#93C5FD"),
-        ).pack(anchor="w", pady=(2, 0))
 
         fetch_settings_frame = ctk.CTkFrame(modal, fg_color=("gray90", "gray18"), corner_radius=8)
 
@@ -1546,6 +1568,7 @@ class ChannelsView(ctk.CTkFrame):
         scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
 
         def _refresh_modal_videos():
+            _update_totals_display()
             for w in scroll.winfo_children():
                 w.destroy()
 
