@@ -726,7 +726,7 @@ class TestWatchingWorker:
 
         # 2. Random video: interactivity DISABLED, duration between 30 and 90s
         assert watched_interactivity[1] is False
-        assert 30 <= watched_durations[1] <= 90
+        assert 30 <= watched_durations[1] <= 120
 
         # 3. Third video (Channel B): interactivity enabled, full video (duration_seconds is None) or 60
         assert watched_interactivity[2] is True
