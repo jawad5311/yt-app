@@ -71,6 +71,19 @@ def test_dashboard_unlimited_browsing_checked_by_default_on_app_open(ctk_app):
     # Checkbox MUST be checked by default
     assert view.browsing_unlimited_cb.get() == 1
     assert view.browsing_limit_entry.cget("state") == "disabled"
+
+    # Verify Start Browsing, Stop, and Pause buttons are all placed in one line (row 0, columns 0, 1, 2)
+    start_info = view.start_watching_btn.grid_info()
+    stop_info = view.stop_btn.grid_info()
+    pause_info = view.pause_btn.grid_info()
+
+    assert start_info["row"] == 0
+    assert start_info["column"] == 0
+    assert stop_info["row"] == 0
+    assert stop_info["column"] == 1
+    assert pause_info["row"] == 0
+    assert pause_info["column"] == 2
+
     view.destroy()
 
 

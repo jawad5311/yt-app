@@ -84,12 +84,11 @@ class DashboardView(ctk.CTkFrame):
         )
         self.browsing_hint.pack(side="left")
 
-        # Action buttons:
-        # Row 0: Start Browsing (full width)
-        # Row 1: Stop | Pause
+        # Action buttons in one line:
+        # Col 0: Start Browsing | Col 1: Stop | Col 2: Pause
         self.btn_grid = ctk.CTkFrame(self.action_frame, fg_color="transparent")
         self.btn_grid.pack(padx=30, pady=(10, 10), fill="x")
-        self.btn_grid.grid_columnconfigure((0, 1), weight=1, uniform="btn_col")
+        self.btn_grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="btn_col")
 
         self.btn_row = self.btn_grid
         self.stop_row = self.btn_grid
@@ -103,7 +102,7 @@ class DashboardView(ctk.CTkFrame):
             height=45,
             command=self.app_controller.start_watching,
         )
-        self.start_watching_btn.grid(row=0, column=0, columnspan=2, padx=0, pady=(0, 6), sticky="ew")
+        self.start_watching_btn.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="ew")
 
         self.stop_btn = ctk.CTkButton(
             self.btn_grid,
@@ -115,7 +114,7 @@ class DashboardView(ctk.CTkFrame):
             state="disabled",
             command=self.app_controller.stop_automation,
         )
-        self.stop_btn.grid(row=1, column=0, padx=(0, 6), pady=(6, 0), sticky="ew")
+        self.stop_btn.grid(row=0, column=1, padx=5, pady=0, sticky="ew")
 
         self.pause_btn = ctk.CTkButton(
             self.btn_grid,
@@ -127,7 +126,7 @@ class DashboardView(ctk.CTkFrame):
             state="disabled",
             command=self.app_controller.toggle_pause_watching,
         )
-        self.pause_btn.grid(row=1, column=1, padx=(6, 0), pady=(6, 0), sticky="ew")
+        self.pause_btn.grid(row=0, column=2, padx=(5, 0), pady=0, sticky="ew")
 
         # Progress Bar
         self.progress_label = ctk.CTkLabel(self.action_frame, text="Ready to launch tasks.", font=ctk.CTkFont(size=13))
