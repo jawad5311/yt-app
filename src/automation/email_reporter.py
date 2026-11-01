@@ -723,7 +723,8 @@ class EmailReporter:
             target_url = thread_url
             if not target_url and subject:
                 clean_subj = subject.strip().replace('"', '')
-                target_url = f"https://mail.google.com/mail/u/0/#search/{quote('subject:"' + clean_subj + '"')}"
+                search_query = f'subject:"{clean_subj}"'
+                target_url = f"https://mail.google.com/mail/u/0/#search/{quote(search_query)}"
 
             if not target_url:
                 return False
