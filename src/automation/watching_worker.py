@@ -30,7 +30,12 @@ from ..config.manager import ConfigManager
 from ..config.stats_store import StatsStore
 from ..models.account import Account
 from ..models.channel import Channel, parse_channel_identity
-from ..models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, VideoTask
+from ..models.video_task import (
+    DEFAULT_MAX_RUNS,
+    DEFAULT_SHORTS_MAX_RUNS,
+    DEFAULT_TARGET_MULTIPLIER,
+    VideoTask,
+)
 from ..models.watch_stats import TaskOutcome, WatchResult, resolve_video_key
 from ..utils.helpers import extract_video_id, human_like_delay
 from ..utils.logger import emit
@@ -1230,6 +1235,7 @@ class WatchingWorker:
         task: Optional[VideoTask] = None,
         playback_finished: bool = False,
         interrupted: bool = False,
+        runs: Optional[int] = None,
     ) -> None:
         if not self.stats_store:
             return
@@ -1256,6 +1262,7 @@ class WatchingWorker:
                 ad_seconds=ad_seconds,
                 video_duration=duration,
                 playback_finished=playback_finished,
+                runs=runs,
             )
             self.stats_store.record(outcome)
         except Exception as exc:
@@ -2263,6 +2270,15 @@ class WatchingWorker:
                 return "channel_disabled"
             return None
 
+        def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
+            if registered_task and self.stats_store:
+                self.stats_store.record_view(registered_task, views=1)
+                emit(
+                    self.log_queue,
+                    f"Credited 1 view to Target Short '{registered_task.title}' (Loop {loop_num}, reached {cur_t:.1f}s / {dur:.1f}s).",
+                    logging.INFO,
+                )
+
         watch_res = watch_short(
             self.driver,
             target_loops=target_loops,
@@ -2272,6 +2288,7 @@ class WatchingWorker:
             should_stop_callback=_is_short_channel_disabled,
             on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
             like_short=True,
+            on_view_counted=_on_short_view_counted,
         )
         self.channel_tracker.set_active_channel(None)
 
@@ -2284,6 +2301,7 @@ class WatchingWorker:
         actual_ad = float(watch_res.ad_seconds or 0.0)
         actual_dur = float(watch_res.video_duration or 0.0)
 
+        views_done = getattr(watch_res, "views_counted", 0)
         self._record_watch(
             title=title,
             channel_name=ch_name,
@@ -2294,6 +2312,7 @@ class WatchingWorker:
             playback_finished=watch_res.playback_finished,
             interrupted=watch_res.interrupted,
             task=registered_task,
+            runs=0 if (views_done > 0 or getattr(registered_task, "is_short", False)) else None,
         )
         self._update_task_duration(registered_task, actual_dur)
 
@@ -2469,6 +2488,8 @@ class WatchingWorker:
                         title=title,
                         channel=ch_display,
                         enabled=True,
+                        max_runs=DEFAULT_SHORTS_MAX_RUNS,
+                        target_multiplier=0.0,
                     )
                     registered_task = self._ensure_video_in_queue(new_task)
 
@@ -2482,6 +2503,15 @@ class WatchingWorker:
                         return "channel_disabled"
                     return None
 
+                def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
+                    if registered_task and self.stats_store:
+                        self.stats_store.record_view(registered_task, views=1)
+                        emit(
+                            self.log_queue,
+                            f"Credited 1 view to Target Short '{registered_task.title}' (Loop {loop_num}, reached {cur_t:.1f}s / {dur:.1f}s).",
+                            logging.INFO,
+                        )
+
                 watch_res = watch_short(
                     self.driver,
                     target_loops=target_loops,
@@ -2491,6 +2521,7 @@ class WatchingWorker:
                     should_stop_callback=_is_short_channel_disabled,
                     on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_display, d),
                     like_short=True,
+                    on_view_counted=_on_short_view_counted,
                 )
                 self.channel_tracker.set_active_channel(None)
 
@@ -2503,6 +2534,7 @@ class WatchingWorker:
                 actual_ad = float(watch_res.ad_seconds or 0.0)
                 actual_dur = float(watch_res.video_duration or 0.0)
 
+                views_done = getattr(watch_res, "views_counted", 0)
                 self._record_watch(
                     title=title,
                     channel_name=ch_display,
@@ -2513,6 +2545,7 @@ class WatchingWorker:
                     playback_finished=watch_res.playback_finished,
                     interrupted=watch_res.interrupted,
                     task=registered_task,
+                    runs=0 if (views_done > 0 or getattr(registered_task, "is_short", False)) else None,
                 )
                 self._update_task_duration(registered_task, actual_dur)
 

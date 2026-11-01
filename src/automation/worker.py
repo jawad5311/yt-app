@@ -346,6 +346,15 @@ class AutomationWorker:
                     ch_name = task.channel or "Uncategorized"
                     self.channel_tracker.set_active_channel(ch_name)
                     if getattr(task, 'is_short', False) or ('/shorts/' in (getattr(task, 'url', '') or '')):
+                        def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
+                            if task and hasattr(self, 'stats_store') and self.stats_store:
+                                self.stats_store.record_view(task, views=1)
+                                emit(
+                                    self.log_queue,
+                                    f"Credited 1 view to Short '{task.title}' (Loop {loop_num}, reached {cur_t:.1f}s / {dur:.1f}s).",
+                                    logging.INFO,
+                                )
+
                         result = watch_short(
                             self.driver,
                             stop_event=self.stop_event,
@@ -353,7 +362,9 @@ class AutomationWorker:
                             pause_event=self.pause_event,
                             should_stop_callback=_is_task_channel_disabled,
                             on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                            on_view_counted=_on_short_view_counted,
                         )
+                        outcome.runs = 0
                     else:
                         result = watch_video(
                             self.driver,

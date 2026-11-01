@@ -853,11 +853,13 @@ def watch_short(
     on_watch_tick: Optional[Callable[[float], None]] = None,
     max_duration_seconds: int = 180,
     like_short: bool = False,
+    on_view_counted: Optional[Callable[[int, float, float], None]] = None,
 ) -> WatchResult:
     """
     Watch a YouTube Short for a random (1-3) or specified number of loop repetitions in a single go.
     Tracks player state and wrap-around transitions when the short loops back to start.
     Optionally likes the Short from targeted channel if not already liked.
+    Continuously checks playback time every 5 seconds, and counts 1 view as soon as 80% duration is reached.
     """
     if target_loops is None or target_loops < 1:
         target_loops = random.randint(1, 3)
@@ -867,6 +869,7 @@ def watch_short(
     playback_meter = PlaybackMeter()
     started_at = time.monotonic()
     last_tick = started_at
+    last_5s_check = started_at
     total_watched_seconds = 0.0
     current_loop = 1
     completed_loops = 0
@@ -876,6 +879,8 @@ def watch_short(
     video_missing_since: Optional[float] = None
     last_progress_log = 0.0
     like_attempted = False
+    views_counted = 0
+    loops_credited: Set[int] = set()
 
     try:
         ensure_video_playing(driver, log_queue=log_queue)
@@ -899,6 +904,7 @@ def watch_short(
             video_duration=last_known_duration,
             final_current_time=last_known_current_time,
             playback_finished=finished,
+            views_counted=views_counted,
         )
 
     while True:
@@ -994,6 +1000,35 @@ def watch_short(
         if curr_time > highest_time_in_loop:
             highest_time_in_loop = curr_time
 
+        # Continuous 5-second playback time check & status log
+        if now - last_5s_check >= 5.0:
+            last_5s_check = now
+            if last_known_duration > 0:
+                pct = (curr_time / last_known_duration * 100.0)
+                emit(
+                    log_queue,
+                    f"Short time check (5s): {curr_time:.1f}s / {last_known_duration:.1f}s ({pct:.0f}%) — Loop {current_loop}/{target_loops}",
+                )
+
+        # 80% View Threshold Check:
+        # As soon as the short reaches 80% of its length, consider it a view.
+        if last_known_duration > 0 and current_loop not in loops_credited:
+            threshold_80 = 0.80 * last_known_duration
+            effective_loop_time = max(curr_time, highest_time_in_loop)
+            if effective_loop_time >= threshold_80:
+                loops_credited.add(current_loop)
+                views_counted += 1
+                emit(
+                    log_queue,
+                    f"Short reached 80% of its length ({effective_loop_time:.1f}s / {last_known_duration:.1f}s) — 1 view counted! (Loop {current_loop}/{target_loops})",
+                    logging.INFO,
+                )
+                if on_view_counted is not None:
+                    try:
+                        on_view_counted(current_loop, effective_loop_time, last_known_duration)
+                    except Exception as exc:
+                        logging.debug(f"on_view_counted callback error: {exc}")
+
         # Loop wrap-around detection:
         min_loop_thresh = max(3.0, last_known_duration * 0.70) if last_known_duration > 0 else 5.0
         wrap_around = (highest_time_in_loop >= min_loop_thresh and curr_time < highest_time_in_loop - 2.5)
@@ -1015,7 +1050,7 @@ def watch_short(
             if current_loop >= target_loops:
                 emit(
                     log_queue,
-                    f"Finished watching Short ({completed_loops} loop(s) completed, total {total_watched_seconds:.1f}s).",
+                    f"Finished watching Short ({completed_loops} loop(s) completed, total {total_watched_seconds:.1f}s, {views_counted} view(s) counted).",
                 )
                 return _result(True, "shorts_loops_completed", finished=True)
 

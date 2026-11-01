@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from ...models.video_task import (
     DEFAULT_MAX_RUNS,
+    DEFAULT_SHORTS_MAX_RUNS,
     DEFAULT_TARGET_MULTIPLIER,
     DEFAULT_WATCHTIME_DURATION,
     WATCHTIME_OPTIONS,
@@ -389,8 +390,8 @@ class ChannelImportModal(ctk.CTkToplevel):
                     duration_seconds=video.duration_seconds,
                     duration_text=video.duration_text,
                     enabled=True,
-                    target_multiplier=DEFAULT_TARGET_MULTIPLIER,
-                    max_runs=DEFAULT_MAX_RUNS,
+                    target_multiplier=0.0 if is_s else DEFAULT_TARGET_MULTIPLIER,
+                    max_runs=DEFAULT_SHORTS_MAX_RUNS if is_s else DEFAULT_MAX_RUNS,
                 )
                 tasks_to_add.append(task)
 
