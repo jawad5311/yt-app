@@ -26,6 +26,7 @@ from ...utils.channel_fetcher import (
     fetch_channel_videos,
 )
 from ...utils.helpers import extract_video_id
+from ..tooltip import add_tooltip
 from .channel_import_modal import ChannelImportModal
 
 # Called with the saved channel so callers (e.g. the queue modal) can react.
@@ -109,13 +110,18 @@ class ChannelsView(ctk.CTkFrame):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
 
-        ctk.CTkButton(
+        add_btn = ctk.CTkButton(
             btn_frame,
             text="+ Add Channel",
             command=lambda: self.open_channel_modal(),
-        ).pack(side="left", padx=(0, 10))
+        )
+        add_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            add_btn,
+            "Add a new channel to track and automate.\nOptionally configure target watch goals and fetch videos.",
+        )
 
-        ctk.CTkButton(
+        check_btn = ctk.CTkButton(
             btn_frame,
             text="🔍 Check New",
             width=105,
@@ -123,9 +129,14 @@ class ChannelsView(ctk.CTkFrame):
             hover_color="#0F766E",
             font=ctk.CTkFont(weight="bold"),
             command=self.sync_all_channel_data,
-        ).pack(side="left", padx=(0, 10))
+        )
+        check_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            check_btn,
+            "Scan YouTube to check for newly published content\nacross all saved channels since the last check.",
+        )
 
-        ctk.CTkButton(
+        sync_data_btn = ctk.CTkButton(
             btn_frame,
             text="⚡ Sync Data All",
             width=120,
@@ -133,7 +144,12 @@ class ChannelsView(ctk.CTkFrame):
             hover_color="#144870",
             font=ctk.CTkFont(weight="bold"),
             command=self.sync_data_all,
-        ).pack(side="left", padx=(0, 10))
+        )
+        sync_data_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            sync_data_btn,
+            "Fetch and synchronize public videos and shorts\nacross all channels into your playback queue.",
+        )
 
         self.current_tab = "Active"
         self.tab_selector = ctk.CTkSegmentedButton(
@@ -143,14 +159,23 @@ class ChannelsView(ctk.CTkFrame):
         )
         self.tab_selector.set("Active")
         self.tab_selector.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            self.tab_selector,
+            "Switch between Active tracked channels\nand Archived (paused) channels.",
+        )
 
-        ctk.CTkButton(
+        clear_btn = ctk.CTkButton(
             btn_frame,
             text="🗑 Clear All",
             fg_color="#D32F2F",
             hover_color="#9A0007",
             command=self.clear_channels,
-        ).pack(side="right")
+        )
+        clear_btn.pack(side="right")
+        add_tooltip(
+            clear_btn,
+            "Permanently remove all channels from your list.\nAssociated queued videos will be unassigned.",
+        )
 
         # Channel list
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="Saved Channels")
@@ -656,9 +681,14 @@ class ChannelsView(ctk.CTkFrame):
         btn_text = "Save Changes" if is_editing else "Add Channel"
         btn_color = "#1F6AA5" if is_editing else "#2FA572"
         btn_hover = "#144870" if is_editing else "#1E7B52"
-        ctk.CTkButton(
+        submit_btn = ctk.CTkButton(
             modal, text=btn_text, fg_color=btn_color, hover_color=btn_hover, command=on_submit
-        ).pack(pady=10)
+        )
+        submit_btn.pack(pady=10)
+        add_tooltip(
+            submit_btn,
+            "Save channel settings and optionally import\nits public videos and shorts into the queue.",
+        )
 
         # Notify the opener once the dialog goes away (saved or cancelled),
         # so it can restore its own input grab.
@@ -785,16 +815,21 @@ class ChannelsView(ctk.CTkFrame):
                 on_imported=on_imported,
             )
 
-        ctk.CTkButton(
+        cancel_btn = ctk.CTkButton(
             btn_frame,
             text="Cancel",
             width=90,
             fg_color="#555555",
             hover_color="#333333",
             command=_on_cancel,
-        ).pack(side="right", padx=(10, 0))
+        )
+        cancel_btn.pack(side="right", padx=(10, 0))
+        add_tooltip(
+            cancel_btn,
+            "Close this window without fetching any\nchannel content from YouTube.",
+        )
 
-        ctk.CTkButton(
+        fetch_btn = ctk.CTkButton(
             btn_frame,
             text="⚡ Fetch",
             width=110,
@@ -802,7 +837,12 @@ class ChannelsView(ctk.CTkFrame):
             fg_color="#2FA572",
             hover_color="#1E7B52",
             command=_on_fetch,
-        ).pack(side="right")
+        )
+        fetch_btn.pack(side="right")
+        add_tooltip(
+            fetch_btn,
+            "Retrieve public videos and shorts from YouTube\nmatching the selected quantity limits.",
+        )
 
     def fetch_data_for_channel(
         self,
@@ -1441,14 +1481,19 @@ class ChannelsView(ctk.CTkFrame):
                 on_saved=lambda _: _refresh_modal_videos(),
             )
 
-        ctk.CTkButton(
+        new_video_btn = ctk.CTkButton(
             modal_actions,
             text="+ New Video",
             font=ctk.CTkFont(weight="bold"),
             fg_color="#2FA572",
             hover_color="#1E7B52",
             command=_add_video_for_channel,
-        ).pack(side="left")
+        )
+        new_video_btn.pack(side="left")
+        add_tooltip(
+            new_video_btn,
+            "Manually add a single video task URL\nor search keyword under this channel.",
+        )
 
         def _do_fetch_data():
             if not channel.url:
@@ -1488,6 +1533,10 @@ class ChannelsView(ctk.CTkFrame):
         )
         if channel.url:
             fetch_data_btn.pack(side="left", padx=(8, 0))
+        add_tooltip(
+            fetch_data_btn,
+            "Fetch recent videos and shorts for this channel\nusing the limits configured above.",
+        )
 
         scroll = ctk.CTkScrollableFrame(modal, label_text=f"Videos under '{channel.name}'")
         scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
@@ -1589,7 +1638,7 @@ class ChannelsView(ctk.CTkFrame):
                 can_m_up = (pos > 1)
                 can_m_down = (pos < total_chan_vids)
 
-                ctk.CTkButton(
+                btn_m_up = ctk.CTkButton(
                     card_btns,
                     text="▲",
                     width=30,
@@ -1599,9 +1648,11 @@ class ChannelsView(ctk.CTkFrame):
                     hover_color="#4B5563" if can_m_up else "gray30",
                     state="normal" if can_m_up else "disabled",
                     command=_move_modal_up,
-                ).pack(side="left", padx=(0, 2))
+                )
+                btn_m_up.pack(side="left", padx=(0, 2))
+                add_tooltip(btn_m_up, "Move this video higher in the channel queue order.")
 
-                ctk.CTkButton(
+                btn_m_down = ctk.CTkButton(
                     card_btns,
                     text="▼",
                     width=30,
@@ -1611,7 +1662,9 @@ class ChannelsView(ctk.CTkFrame):
                     hover_color="#4B5563" if can_m_down else "gray30",
                     state="normal" if can_m_down else "disabled",
                     command=_move_modal_down,
-                ).pack(side="left", padx=(0, 6))
+                )
+                btn_m_down.pack(side="left", padx=(0, 6))
+                add_tooltip(btn_m_down, "Move this video lower in the channel queue order.")
 
                 def _edit(idx_to_edit=real_idx):
                     if queue is not None:
@@ -1626,23 +1679,30 @@ class ChannelsView(ctk.CTkFrame):
                         _refresh_modal_videos()
                         self.refresh_list()
 
-                ctk.CTkButton(
+                btn_edit = ctk.CTkButton(
                     card_btns,
                     text="✏ Edit",
                     width=60,
                     fg_color="#1F6AA5",
                     hover_color="#144870",
                     command=_edit,
-                ).pack(side="left", padx=(0, 4))
+                )
+                btn_edit.pack(side="left", padx=(0, 4))
+                add_tooltip(
+                    btn_edit,
+                    "Edit titles, search keywords, watch multiplier,\nor run limits for this video task.",
+                )
 
-                ctk.CTkButton(
+                btn_del = ctk.CTkButton(
                     card_btns,
                     text="🗑 Delete",
                     width=60,
                     fg_color="#D32F2F",
                     hover_color="#9A0007",
                     command=_delete,
-                ).pack(side="left")
+                )
+                btn_del.pack(side="left")
+                add_tooltip(btn_del, "Delete this video task from the channel queue.")
 
             self.refresh_list()
 
@@ -2139,6 +2199,10 @@ class ChannelsView(ctk.CTkFrame):
             command=_on_cancel,
         )
         cancel_btn.pack(pady=(0, 10))
+        add_tooltip(
+            cancel_btn,
+            "Cancel the current background fetch operation\nand keep items discovered so far.",
+        )
 
         def _close_loading():
             try:
@@ -2692,7 +2756,7 @@ class ChannelsView(ctk.CTkFrame):
             can_up = (pos > 1)
             can_down = (pos < total_items)
 
-            ctk.CTkButton(
+            btn_up = ctk.CTkButton(
                 action_frame,
                 text="▲",
                 width=30,
@@ -2702,9 +2766,14 @@ class ChannelsView(ctk.CTkFrame):
                 hover_color="#4B5563" if can_up else "gray30",
                 state="normal" if can_up else "disabled",
                 command=_move_channel_up,
-            ).pack(side="left", padx=(0, 2))
+            )
+            btn_up.pack(side="left", padx=(0, 2))
+            add_tooltip(
+                btn_up,
+                "Move this channel up in list order\nto prioritize it during playback cycles.",
+            )
 
-            ctk.CTkButton(
+            btn_down = ctk.CTkButton(
                 action_frame,
                 text="▼",
                 width=30,
@@ -2714,10 +2783,15 @@ class ChannelsView(ctk.CTkFrame):
                 hover_color="#4B5563" if can_down else "gray30",
                 state="normal" if can_down else "disabled",
                 command=_move_channel_down,
-            ).pack(side="left", padx=(0, 6))
+            )
+            btn_down.pack(side="left", padx=(0, 6))
+            add_tooltip(
+                btn_down,
+                "Move this channel down in list order\nto deprioritize it during playback cycles.",
+            )
 
             has_url = bool((channel.url or "").strip())
-            ctk.CTkButton(
+            sync_all_btn = ctk.CTkButton(
                 action_frame,
                 text="⚡ Sync All",
                 width=75,
@@ -2725,7 +2799,12 @@ class ChannelsView(ctk.CTkFrame):
                 hover_color="#1D4ED8" if has_url else "gray30",
                 state="normal" if has_url else "disabled",
                 command=lambda ch=channel: self.sync_channel_all(ch),
-            ).pack(side="left", padx=(0, 4))
+            )
+            sync_all_btn.pack(side="left", padx=(0, 4))
+            add_tooltip(
+                sync_all_btn,
+                "Fetch and sync all public long-form videos\nand shorts from this channel into the queue.",
+            )
 
             has_new = getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False) or getattr(channel, "has_new_shorts", False)
             sync_btn = ctk.CTkButton(
@@ -2738,33 +2817,50 @@ class ChannelsView(ctk.CTkFrame):
                 command=lambda ch=channel: self.sync_single_channel_data(ch),
             )
             sync_btn.pack(side="left", padx=(0, 4))
-
-
+            add_tooltip(
+                sync_btn,
+                "Fetch newly published videos or shorts\navailable on YouTube for this channel.",
+            )
 
             if channel.archived:
-                ctk.CTkButton(
+                restore_btn = ctk.CTkButton(
                     action_frame,
                     text="📂 Restore",
                     width=70,
                     fg_color="#059669",
                     hover_color="#047857",
                     command=lambda i=real_idx: self.unarchive_channel(i),
-                ).pack(side="left", padx=(0, 4))
+                )
+                restore_btn.pack(side="left", padx=(0, 4))
+                add_tooltip(
+                    restore_btn,
+                    "Restore this archived channel back\nto the active channel list.",
+                )
             else:
-                ctk.CTkButton(
+                archive_btn = ctk.CTkButton(
                     action_frame,
                     text="📁 Archive",
                     width=68,
                     fg_color="#D97706",
                     hover_color="#B45309",
                     command=lambda i=real_idx: self.archive_channel(i),
-                ).pack(side="left", padx=(0, 4))
+                )
+                archive_btn.pack(side="left", padx=(0, 4))
+                add_tooltip(
+                    archive_btn,
+                    "Archive this channel to pause automation\nwithout losing its saved statistics.",
+                )
 
-            ctk.CTkButton(
+            del_btn = ctk.CTkButton(
                 action_frame,
                 text="🗑 Delete",
                 width=65,
                 fg_color="#D32F2F",
                 hover_color="#9A0007",
                 command=lambda i=real_idx: self.remove_channel(i),
-            ).pack(side="left")
+            )
+            del_btn.pack(side="left")
+            add_tooltip(
+                del_btn,
+                "Permanently delete this channel\nand remove it from your saved list.",
+            )
