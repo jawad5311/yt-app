@@ -951,6 +951,26 @@ class TestWatchingWorker:
         assert "--- Watching Video:" not in log_str
         assert "Disabled YouTube native autoplay toggle." not in log_str
 
+    @patch("src.automation.watching_worker.setup_driver")
+    @patch("src.automation.watching_worker.close_driver")
+    def test_run_does_not_send_report_modal_if_driver_fails_to_start(self, mock_close, mock_setup, worker):
+        mock_setup.side_effect = RuntimeError("Profile 'profile_test' is currently locked by another application instance")
+        worker._send_session_report = MagicMock()
+
+        worker.run()
+
+        # _send_session_report must NOT be called when driver launch fails
+        worker._send_session_report.assert_not_called()
+        assert worker.has_started_browsing is False
+
+        # No report_generating event should be emitted to event_queue
+        events = []
+        while not worker.event_queue.empty():
+            events.append(worker.event_queue.get_nowait())
+        event_types = [e[0] for e in events]
+        assert "report_generating" not in event_types
+
+
 
 class TestDashboardButtonsAndState:
     def test_dashboard_view_buttons(self, tmp_path):

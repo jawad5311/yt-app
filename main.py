@@ -37,7 +37,10 @@ def main():
 
     config_mgr = ConfigManager()
     app = YTBotApp(config_mgr=config_mgr)
-    app.mainloop()
+    try:
+        app.mainloop()
+    finally:
+        sys.exit(0)
 
 
 if __name__ == "__main__":

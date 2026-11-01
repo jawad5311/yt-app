@@ -219,20 +219,24 @@ def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None)
     if driver is not None:
         profile_lock = getattr(driver, "_profile_lock", None)
         browser_pid = getattr(driver, "browser_pid", None)
+        service = getattr(driver, "service", None)
+        service_pid = service.process.pid if service and getattr(service, "process", None) else None
         try:
             driver.quit()
         except Exception as exc:
             logging.debug(f"driver.quit() exception: {exc}")
         finally:
-            if browser_pid and os.name == "nt":
-                try:
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(browser_pid)],
-                        capture_output=True,
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
+            if os.name == "nt":
+                for pid in (browser_pid, service_pid):
+                    if pid:
+                        try:
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                                capture_output=True,
+                                timeout=5,
+                            )
+                        except Exception:
+                            pass
             if profile_lock:
                 try:
                     profile_lock.release()

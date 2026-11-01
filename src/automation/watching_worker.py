@@ -589,6 +589,7 @@ class WatchingWorker:
         self.session_thread_info: Dict[str, Any] = {}
         self.reporting_driver: Optional[Any] = None
         self.reporting_thread: Optional[threading.Thread] = None
+        self.has_started_browsing = False
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -2163,6 +2164,7 @@ class WatchingWorker:
             known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
             known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
             self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
+            self.has_started_browsing = True
 
             if self.stop_event.is_set():
                 return
@@ -2534,7 +2536,9 @@ class WatchingWorker:
                 self.driver = None
 
             # Deliver session report via the persistent headless browser parked on the email thread
-            self._send_session_report(status=session_status, error=session_err)
+            # ONLY if browsing successfully started and was not aborted during setup/driver launch
+            if getattr(self, "has_started_browsing", False):
+                self._send_session_report(status=session_status, error=session_err)
 
             # Wait briefly if background start notification thread is still finishing
             rep_thread = getattr(self, "reporting_thread", None)
