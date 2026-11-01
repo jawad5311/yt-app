@@ -71,6 +71,7 @@ class AutomationWorker:
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
         self.reporting_driver: Optional[Any] = None
+        self.reporting_thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------ events
 
@@ -405,22 +406,14 @@ class AutomationWorker:
         emit(self.log_queue, f"Starting automation session for account: {self.account.email}")
         direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", False)
 
-        # Initialize persistent headless reporting browser before visible driver
+        # Send start notification in headless browser asynchronously without blocking visible browser launch
         if self.worker_id == 0:
-            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
-            if "headless" in method.lower():
-                try:
-                    self.reporting_driver = EmailReporter.create_headless_reporting_driver(
-                        account=self.account,
-                        log_queue=self.log_queue,
-                    )
-                except Exception as exc:
-                    logging.debug(f"Could not create persistent reporting driver: {exc}")
-                    self.reporting_driver = None
-
-        # Send start notification in headless browser (driver kept running in background)
-        if self.worker_id == 0:
-            self._send_start_notification()
+            self.reporting_thread = threading.Thread(
+                target=self._async_init_and_send_start_notification,
+                name="ReportingStartNotificationThread",
+                daemon=True,
+            )
+            self.reporting_thread.start()
 
         if self.dispatcher is not None:
             total = self.dispatcher.register_worker(self.worker_id)
@@ -579,10 +572,33 @@ class AutomationWorker:
             # Deliver session report via the persistent headless browser parked on the email thread
             self._send_session_report(status=session_status, error=session_err)
 
+            # Wait briefly if background start notification thread is still finishing
+            rep_thread = getattr(self, "reporting_thread", None)
+            if rep_thread and rep_thread.is_alive():
+                rep_thread.join(timeout=5)
+
             # Close persistent headless reporting browser
             if self.reporting_driver:
                 close_driver(self.reporting_driver, log_queue=self.log_queue)
                 self.reporting_driver = None
+
+    def _async_init_and_send_start_notification(self) -> None:
+        """Initialize headless reporting browser and send start notification asynchronously in background."""
+        try:
+            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
+            if "headless" in method.lower() and not getattr(self, "reporting_driver", None):
+                try:
+                    self.reporting_driver = EmailReporter.create_headless_reporting_driver(
+                        account=self.account,
+                        log_queue=self.log_queue,
+                    )
+                except Exception as exc:
+                    logging.debug(f"Could not create persistent reporting driver: {exc}")
+                    self.reporting_driver = None
+
+            self._send_start_notification()
+        except Exception as exc:
+            logging.debug(f"Failed in async start notification dispatch: {exc}")
 
     def _send_start_notification(self) -> None:
         """Deliver start notification email via headless browser."""
@@ -648,6 +664,11 @@ class AutomationWorker:
         if not hasattr(self, "channel_tracker") or not self.channel_tracker:
             self._emit_event(("report_sent", False, "No session tracking data."))
             return
+
+        # If background start notification thread is still active, wait briefly for it to complete
+        rep_thread = getattr(self, "reporting_thread", None)
+        if rep_thread and rep_thread.is_alive():
+            rep_thread.join(timeout=15)
 
         try:
             report_data = self.channel_tracker.get_session_report_data()

@@ -202,6 +202,29 @@ class TestWatchingWorker:
         mock_login.assert_called_once()
         mock_close.assert_called_once_with(mock_driver, log_queue=worker.log_queue)
 
+    @patch("src.automation.watching_worker.setup_driver")
+    @patch("src.automation.watching_worker.perform_google_login", return_value=False)
+    @patch("src.automation.watching_worker.close_driver")
+    def test_start_notification_runs_asynchronously_without_blocking_browser_setup(
+        self, mock_close, mock_login, mock_setup, worker
+    ):
+        mock_driver = MagicMock()
+        mock_setup.return_value = mock_driver
+
+        async_called = False
+        def fake_async_init():
+            nonlocal async_called
+            async_called = True
+
+        worker._async_init_and_send_start_notification = MagicMock(side_effect=fake_async_init)
+        worker.run()
+
+        # Visible setup_driver must be called immediately without waiting for notification
+        mock_setup.assert_called_once()
+        # Async notification thread must have been spawned
+        assert worker.reporting_thread is not None
+        assert worker._async_init_and_send_start_notification.called
+
     @patch("src.automation.watching_worker.human_like_delay")
     @patch("src.automation.watching_worker.setup_driver")
     @patch("src.automation.watching_worker.perform_google_login")
