@@ -1080,6 +1080,11 @@ class WatchingWorker:
         # Fallback to direct navigation if click fails or navigation was not detected
         if href:
             full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
+            emit(
+                self.log_queue,
+                f"⚠️ [Direct Navigation Fallback Triggered] In-page click on Home video failed to navigate. Navigating directly to: {full_url} (traffic source may register as Direct/External instead of Home Feed).",
+                logging.WARNING,
+            )
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
             return True
         return False
@@ -1220,6 +1225,11 @@ class WatchingWorker:
 
         if href:
             full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
+            emit(
+                self.log_queue,
+                f"⚠️ [Direct Navigation Fallback Triggered] In-page click on Suggested video failed to navigate. Navigating directly to: {full_url} (traffic source may register as Direct/External instead of Suggested).",
+                logging.WARNING,
+            )
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
             return True
         return False
@@ -1863,7 +1873,11 @@ class WatchingWorker:
         clicked = self.click_recommended_video(card_info)
         cur_url = getattr(self.driver, "current_url", "") or ""
         if target_rec_id and target_rec_id not in cur_url:
-            emit(self.log_queue, f"Navigation not detected after click, navigating directly to: {full_url}", logging.INFO)
+            emit(
+                self.log_queue,
+                f"⚠️ [Direct Navigation Fallback Triggered] Navigation not detected after click, navigating directly to: {full_url} (traffic source may register as Direct/External).",
+                logging.WARNING,
+            )
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
 
         try:
@@ -1953,7 +1967,11 @@ class WatchingWorker:
         cur_url = getattr(self.driver, "current_url", "") or ""
         cur_id = extract_video_id(cur_url)
         if target_vid_id and cur_id != target_vid_id:
-            emit(self.log_queue, f"Navigation not detected after click, navigating directly to: {full_url}", logging.INFO)
+            emit(
+                self.log_queue,
+                f"⚠️ [Direct Navigation Fallback Triggered] In-page click did not trigger watch navigation. Navigating directly to: {full_url} (traffic source may register as Direct/External).",
+                logging.WARNING,
+            )
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
 
         try:
@@ -2260,7 +2278,11 @@ class WatchingWorker:
 
         full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
         if full_url:
-            emit(self.log_queue, f"Navigating directly to short: {full_url}")
+            emit(
+                self.log_queue,
+                f"⚠️ [Direct Navigation Fallback Triggered] In-page click on Home Short failed to navigate. Navigating directly to short: {full_url} (traffic source may register as Direct/External instead of Home Feed).",
+                logging.WARNING,
+            )
             safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
             human_like_delay(1.5, 2.5)
             return True
