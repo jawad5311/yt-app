@@ -19,7 +19,7 @@ from .email_reporter import EmailReporter, SessionReport
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
 from .session_tracker import SessionChannelTracker
-from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_video
+from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_short, watch_video
 
 # Retry a failed task across up to 3 titles, with 3 attempts per title (up to 9 attempts total).
 ATTEMPTS_PER_TITLE = 3
@@ -345,21 +345,31 @@ class AutomationWorker:
                     enable_interactivity, interactivity_cfg = self._interactivity_settings()
                     ch_name = task.channel or "Uncategorized"
                     self.channel_tracker.set_active_channel(ch_name)
-                    result = watch_video(
-                        self.driver,
-                        task.parse_duration_seconds(),
-                        log_queue=self.log_queue,
-                        stop_event=self.stop_event,
-                        full_timeout_seconds=self._full_video_timeout_seconds(),
-                        skip_ads=self.skip_ads,
-                        max_ad_seconds=self.max_ad_seconds,
-                        end_buffer_seconds=self._end_buffer_seconds(),
-                        enable_interactivity=enable_interactivity,
-                        interactivity_config=interactivity_cfg,
-                        pause_event=self.pause_event,
-                        should_stop_callback=_is_task_channel_disabled,
-                        on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
-                    )
+                    if getattr(task, 'is_short', False) or ('/shorts/' in (getattr(task, 'url', '') or '')):
+                        result = watch_short(
+                            self.driver,
+                            stop_event=self.stop_event,
+                            log_queue=self.log_queue,
+                            pause_event=self.pause_event,
+                            should_stop_callback=_is_task_channel_disabled,
+                            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                        )
+                    else:
+                        result = watch_video(
+                            self.driver,
+                            task.parse_duration_seconds(),
+                            log_queue=self.log_queue,
+                            stop_event=self.stop_event,
+                            full_timeout_seconds=self._full_video_timeout_seconds(),
+                            skip_ads=self.skip_ads,
+                            max_ad_seconds=self.max_ad_seconds,
+                            end_buffer_seconds=self._end_buffer_seconds(),
+                            enable_interactivity=enable_interactivity,
+                            interactivity_config=interactivity_cfg,
+                            pause_event=self.pause_event,
+                            should_stop_callback=_is_task_channel_disabled,
+                            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                        )
                     self.channel_tracker.set_active_channel(None)
                     outcome.watched_seconds += max(0.0, result.watched_seconds)
                     outcome.ad_seconds += max(0.0, result.ad_seconds)

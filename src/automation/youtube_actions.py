@@ -841,3 +841,182 @@ def watch_video(
             return _result(False, "interrupted", interrupted=True)
 
         time.sleep(3)
+
+
+def watch_short(
+    driver: Any,
+    target_loops: Optional[int] = None,
+    stop_event: Optional[threading.Event] = None,
+    log_queue: Optional[queue.Queue] = None,
+    pause_event: Optional[threading.Event] = None,
+    should_stop_callback: Optional[Callable[[], Optional[str]]] = None,
+    on_watch_tick: Optional[Callable[[float], None]] = None,
+    max_duration_seconds: int = 180,
+) -> WatchResult:
+    """
+    Watch a YouTube Short for a random (1-3) or specified number of loop repetitions in a single go.
+    Tracks player state and wrap-around transitions when the short loops back to start.
+    """
+    if target_loops is None or target_loops < 1:
+        target_loops = random.randint(1, 3)
+
+    emit(log_queue, f"Starting Shorts playback: watching for {target_loops} loop(s) in a single go.")
+
+    playback_meter = PlaybackMeter()
+    started_at = time.monotonic()
+    last_tick = started_at
+    total_watched_seconds = 0.0
+    current_loop = 1
+    completed_loops = 0
+    highest_time_in_loop = 0.0
+    last_known_duration = 0.0
+    last_known_current_time = 0.0
+    video_missing_since: Optional[float] = None
+    last_progress_log = 0.0
+
+    try:
+        ensure_video_playing(driver, log_queue=log_queue)
+    except Exception:
+        pass
+
+    def _result(completed: bool, reason: str, interrupted: bool = False, finished: bool = False) -> WatchResult:
+        return WatchResult(
+            completed=completed,
+            interrupted=interrupted,
+            watched_seconds=total_watched_seconds,
+            ad_seconds=0.0,
+            reason=reason,
+            video_duration=last_known_duration,
+            final_current_time=last_known_current_time,
+            playback_finished=finished,
+        )
+
+    while True:
+        if stop_event is not None and stop_event.is_set():
+            emit(log_queue, "Shorts watch interrupted by user.")
+            return _result(False, "interrupted", interrupted=True)
+
+        if should_stop_callback is not None:
+            stop_reason = should_stop_callback()
+            if stop_reason:
+                reason_str = stop_reason if isinstance(stop_reason, str) else "playback_stopped"
+                emit(log_queue, f"Playback stopped: {reason_str.replace('_', ' ')}.")
+                return _result(False, reason_str, interrupted=True)
+
+        if pause_event is not None and pause_event.is_set():
+            playback_meter.reset()
+            emit(log_queue, "Short playback paused by user.")
+            pause_start = time.monotonic()
+            try:
+                driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
+            except Exception:
+                pass
+            while pause_event.is_set():
+                if stop_event is not None and stop_event.is_set():
+                    return _result(False, "interrupted", interrupted=True)
+                if should_stop_callback is not None and should_stop_callback():
+                    return _result(False, "playback_stopped", interrupted=True)
+                time.sleep(0.5)
+            started_at += max(0.0, time.monotonic() - pause_start)
+            last_tick = time.monotonic()
+            emit(log_queue, "Short playback resumed by user.")
+            try:
+                ensure_video_playing(driver, log_queue=log_queue)
+            except Exception:
+                pass
+
+        now = time.monotonic()
+        delta = max(0.0, now - last_tick)
+        last_tick = now
+        elapsed = now - started_at
+
+        try:
+            video_state = driver.execute_script(PLAYER_STATE_JS)
+        except Exception:
+            video_state = {"found": False}
+
+        if not video_state.get("found"):
+            if video_missing_since is None:
+                video_missing_since = now
+            elif now - video_missing_since >= 15:
+                emit(log_queue, "No video element found on Short page. Aborting.", logging.WARNING)
+                return _result(False, "no_video")
+            time.sleep(1.0)
+            continue
+
+        video_missing_since = None
+
+        curr_time = float(video_state.get("currentTime", 0.0))
+        duration = float(video_state.get("duration", 0.0))
+        ended = bool(video_state.get("ended", False))
+        paused = bool(video_state.get("paused", False))
+
+        if duration > 0:
+            last_known_duration = duration
+        if curr_time > 0:
+            last_known_current_time = curr_time
+
+        measured = playback_meter.sample(video_state, now)
+        if measured > 0:
+            total_watched_seconds += measured
+            if on_watch_tick is not None:
+                try:
+                    on_watch_tick(measured)
+                except Exception:
+                    pass
+
+        # If paused unexpectedly, resume
+        if paused and not ended and elapsed < max_duration_seconds:
+            try:
+                ensure_video_playing(driver)
+            except Exception:
+                pass
+
+        # Update highest time seen in this loop
+        if curr_time > highest_time_in_loop:
+            highest_time_in_loop = curr_time
+
+        # Loop wrap-around detection:
+        min_loop_thresh = max(3.0, last_known_duration * 0.70) if last_known_duration > 0 else 5.0
+        wrap_around = (highest_time_in_loop >= min_loop_thresh and curr_time < highest_time_in_loop - 2.5)
+
+        # Final loop completion detection (before or at wrap-around or ended):
+        final_loop_ended = (
+            current_loop == target_loops and
+            last_known_duration > 0 and
+            (curr_time >= max(1.0, last_known_duration - 1.0) or ended)
+        )
+
+        if wrap_around or final_loop_ended or (ended and current_loop < target_loops):
+            completed_loops += 1
+            emit(
+                log_queue,
+                f"Completed loop {current_loop}/{target_loops} of Short "
+                f"({highest_time_in_loop:.1f}s / {last_known_duration:.1f}s).",
+            )
+            if current_loop >= target_loops:
+                emit(
+                    log_queue,
+                    f"Finished watching Short ({completed_loops} loop(s) completed, total {total_watched_seconds:.1f}s).",
+                )
+                return _result(True, "shorts_loops_completed", finished=True)
+
+            current_loop += 1
+            highest_time_in_loop = curr_time
+
+        # Periodic progress logging
+        if now - last_progress_log >= 15.0:
+            last_progress_log = now
+            dur_fmt = _format_clock(last_known_duration) if last_known_duration > 0 else "--:--"
+            emit(
+                log_queue,
+                f"Shorts progress: Loop {current_loop}/{target_loops} — {_format_clock(curr_time)} / {dur_fmt}",
+            )
+
+        # Safety timeout based on target loops and duration
+        timeout_budget = max(45, int(target_loops * ((last_known_duration or 60) + 10)))
+        if elapsed >= min(max_duration_seconds, timeout_budget):
+            emit(log_queue, f"Short reached safety limit ({elapsed:.0f}s). Completing.", logging.INFO)
+            return _result(True, "shorts_timeout", finished=True)
+
+        time.sleep(0.5)

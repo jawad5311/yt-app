@@ -45,6 +45,7 @@ from .youtube_actions import (
     DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     click_element,
     ensure_video_playing,
+    watch_short,
     watch_video,
 )
 
@@ -398,6 +399,90 @@ return (function() {
 })();
 """
 
+
+
+HOME_SHORTS_JS = r"""
+return (function() {
+    var results = [];
+    var seenIds = {};
+
+    function extractVideoId(href) {
+        if (!href) return '';
+        var m = href.match(/\/shorts\/([A-Za-z0-9_\-]{11})/);
+        return m ? m[1] : '';
+    }
+
+    var shelves = document.querySelectorAll(
+        'ytd-rich-shelf-renderer[is-shorts], ytd-rich-section-renderer ytd-rich-shelf-renderer, ytd-reel-shelf-renderer'
+    );
+
+    var cardElements = [];
+    if (shelves.length > 0) {
+        for (var s = 0; s < shelves.length; s++) {
+            var items = shelves[s].querySelectorAll(
+                'ytd-rich-item-renderer, ytd-reel-item-renderer, ytm-shorts-lockup-view-model-v2, ytm-shorts-lockup-view-model'
+            );
+            for (var i = 0; i < items.length; i++) {
+                cardElements.push(items[i]);
+            }
+        }
+    }
+
+    var directLockups = document.querySelectorAll(
+        'ytm-shorts-lockup-view-model-v2, ytm-shorts-lockup-view-model, ytd-rich-item-renderer[is-slim-media]'
+    );
+    for (var j = 0; j < directLockups.length; j++) {
+        cardElements.push(directLockups[j]);
+    }
+
+    for (var idx = 0; idx < cardElements.length; idx++) {
+        var card = cardElements[idx];
+        if (!card) continue;
+
+        if (card.closest && card.closest('ytd-ad-slot-renderer, [layout*="ad"]')) continue;
+
+        var linkEl = card.querySelector(
+            'a.shortsLockupViewModelHostEndpoint, a.reel-item-endpoint, a[href*="/shorts/"]'
+        );
+        if (!linkEl && card.tagName === 'A' && (card.getAttribute('href') || '').indexOf('/shorts/') !== -1) {
+            linkEl = card;
+        }
+        if (!linkEl) continue;
+
+        var href = linkEl.getAttribute('href') || '';
+        var vidId = extractVideoId(href);
+        if (!vidId || seenIds[vidId]) continue;
+        seenIds[vidId] = true;
+
+        var titleEl = card.querySelector(
+            'h3.shortsLockupViewModelHostMetadataTitle a, h3 a, a.shortsLockupViewModelHostOutsideMetadataEndpoint, h3, #video-title'
+        );
+        var title = '';
+        if (titleEl) {
+            title = (titleEl.getAttribute('title') || titleEl.textContent || '').trim();
+        }
+        if (!title && linkEl) {
+            title = (linkEl.getAttribute('title') || linkEl.getAttribute('aria-label') || '').trim();
+        }
+
+        var viewsEl = card.querySelector(
+            '.shortsLockupViewModelHostOutsideMetadataSubhead, #metadata-line, .ytContentMetadataViewModelMetadataRow'
+        );
+        var viewsText = viewsEl ? (viewsEl.textContent || '').trim() : '';
+
+        results.push({
+            index: idx,
+            href: href,
+            video_id: vidId,
+            url: href.startsWith('http') ? href : ('https://www.youtube.com' + href),
+            title: title || ('Short ' + vidId),
+            views: viewsText
+        });
+    }
+
+    return results;
+})();
+"""
 
 
 def is_candidate_ad(item: Dict[str, Any]) -> bool:
@@ -1962,6 +2047,202 @@ class WatchingWorker:
         )
         return watch_res
 
+
+    def fetch_home_shorts(self) -> List[Dict[str, Any]]:
+        """Extract candidate shorts from YouTube Home page shelves."""
+        try:
+            items = self.driver.execute_script(HOME_SHORTS_JS)
+            return items if isinstance(items, list) else []
+        except Exception as exc:
+            emit(self.log_queue, f"Error fetching home shorts: {exc}", logging.DEBUG)
+            return []
+
+    def get_target_shorts(self) -> List[VideoTask]:
+        """Retrieve all enabled target shorts configured in the app."""
+        target_shorts: List[VideoTask] = []
+        if self.config_mgr:
+            try:
+                raw_queue = self.config_mgr.get_video_queue()
+                for item in raw_queue:
+                    if not isinstance(item, dict):
+                        continue
+                    task = VideoTask.from_dict(item)
+                    if task.enabled and (task.is_short or "/shorts/" in (task.url or "")):
+                        target_shorts.append(task)
+            except Exception as exc:
+                emit(self.log_queue, f"Error loading target shorts from queue: {exc}", logging.DEBUG)
+        return target_shorts
+
+    def match_home_short(
+        self,
+        candidate_shorts: List[Dict[str, Any]],
+        target_shorts: List[VideoTask],
+        session_watched_keys: Optional[Set[str]] = None,
+    ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
+        """
+        Match candidate shorts on the home page against target shorts configured in the app by URL/Video ID.
+        If multiple match, picks randomly among un-watched or least-watched candidates.
+        """
+        if not candidate_shorts or not target_shorts:
+            return None
+
+        watched_keys = session_watched_keys or set()
+        matches: List[Tuple[Dict[str, Any], VideoTask]] = []
+
+        target_by_id: Dict[str, VideoTask] = {}
+        for t in target_shorts:
+            vid_id = extract_video_id(t.url)
+            if vid_id:
+                target_by_id[vid_id] = t
+
+        for candidate in candidate_shorts:
+            cand_id = candidate.get("video_id") or extract_video_id(candidate.get("href", ""))
+            if cand_id and cand_id in target_by_id:
+                matches.append((candidate, target_by_id[cand_id]))
+
+        if not matches:
+            return None
+
+        unwatched = [
+            m for m in matches
+            if (m[0].get("video_id") not in watched_keys and m[0].get("url") not in watched_keys)
+        ]
+        candidates_pool = unwatched if unwatched else matches
+        return random.choice(candidates_pool)
+
+    def click_home_short(self, short_info: Dict[str, Any]) -> bool:
+        """Click on the target short card on the home page and verify navigation."""
+        href = short_info.get("href", "")
+        vid_id = short_info.get("video_id") or extract_video_id(href)
+        try:
+            if vid_id:
+                matched_el = self.driver.execute_script(r"""
+                    var vidId = arguments[0];
+                    var links = document.querySelectorAll(
+                        'ytd-rich-shelf-renderer[is-shorts] a[href*="' + vidId + '"], ' +
+                        'ytd-rich-section-renderer a[href*="' + vidId + '"], ' +
+                        'ytm-shorts-lockup-view-model-v2 a[href*="' + vidId + '"], ' +
+                        'ytm-shorts-lockup-view-model a[href*="' + vidId + '"], ' +
+                        'a[href*="/shorts/' + vidId + '"]'
+                    );
+                    for (var i = 0; i < links.length; i++) {
+                        var l = links[i];
+                        if (l.closest && l.closest('ytd-ad-slot-renderer, [layout*="ad"]')) continue;
+                        return l;
+                    }
+                    return null;
+                """, vid_id)
+
+                if matched_el:
+                    try:
+                        self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", matched_el)
+                        human_like_delay(0.5, 1.0)
+                    except Exception:
+                        pass
+                    try:
+                        ActionChains(self.driver).move_to_element(matched_el).pause(0.2).click().perform()
+                    except Exception:
+                        try:
+                            matched_el.click()
+                        except Exception:
+                            click_element(self.driver, matched_el)
+
+                    for _ in range(8):
+                        cur = getattr(self.driver, "current_url", "") or ""
+                        if ("/shorts/" in cur) or (vid_id and vid_id in cur):
+                            return True
+                        time.sleep(0.3)
+        except Exception as exc:
+            emit(self.log_queue, f"Error clicking home short: {exc}", logging.DEBUG)
+
+        full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
+        if full_url:
+            emit(self.log_queue, f"Navigating directly to short: {full_url}")
+            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
+            human_like_delay(1.5, 2.5)
+            return True
+        return False
+
+    def _play_target_short(
+        self,
+        short_info: Dict[str, Any],
+        task: VideoTask,
+        session_watched_keys: Set[str],
+    ) -> bool:
+        """Watch a matched short for 1-3 loops randomly in a single go and record stats."""
+        title = short_info.get("title") or task.title or "Short"
+        vid_id = short_info.get("video_id") or extract_video_id(task.url)
+        full_url = short_info.get("url") or task.url or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
+
+        emit(self.log_queue, f"=== Opening Target Short from Home Feed: '{title}' ({full_url}) ===")
+        nav_ok = self.click_home_short(short_info)
+        if not nav_ok:
+            emit(self.log_queue, f"Failed to navigate to short '{title}'.", logging.WARNING)
+            return False
+
+        human_like_delay(1.5, 2.5)
+        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
+        target_loops = random.randint(1, 3)
+        ch_name = task.channel or "Shorts Channel"
+        self.channel_tracker.set_active_channel(ch_name)
+
+        registered_task = self._ensure_video_in_queue(task)
+
+        def _is_short_channel_disabled() -> Optional[str]:
+            target_channels = self.get_target_channels()
+            ch_names = {c.name.strip().lower() for c in target_channels if c.name}
+            if ch_name.strip().lower() not in ch_names and ch_name != "Shorts Channel":
+                return "channel_disabled"
+            return None
+
+        watch_res = watch_short(
+            self.driver,
+            target_loops=target_loops,
+            stop_event=self.stop_event,
+            log_queue=self.log_queue,
+            pause_event=self.pause_event,
+            should_stop_callback=_is_short_channel_disabled,
+            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+        )
+        self.channel_tracker.set_active_channel(None)
+
+        if vid_id:
+            session_watched_keys.add(vid_id)
+        if full_url:
+            session_watched_keys.add(full_url)
+
+        actual_watched = float(watch_res.watched_seconds or 0.0)
+        actual_ad = float(watch_res.ad_seconds or 0.0)
+        actual_dur = float(watch_res.video_duration or 0.0)
+
+        self._record_watch(
+            title=title,
+            channel_name=ch_name,
+            watch_seconds=actual_watched,
+            ad_seconds=actual_ad,
+            duration=actual_dur,
+            completed=watch_res.completed,
+            playback_finished=watch_res.playback_finished,
+            interrupted=watch_res.interrupted,
+            task=registered_task,
+        )
+        self._update_task_duration(registered_task, actual_dur)
+
+        if hasattr(self, "channel_tracker") and self.channel_tracker and (actual_watched > 0 or watch_res.completed):
+            self.channel_tracker.record_video_watched(
+                is_short=True,
+                channel_name=ch_name,
+                source="home",
+                is_random=False,
+            )
+
+        emit(
+            self.log_queue,
+            f"Logged Target Short view ({actual_watched:.0f}s watched, {target_loops} loop(s)).",
+        )
+        return watch_res.completed or watch_res.playback_finished
+
     def search_youtube_query(self, query: str) -> bool:
         """Type and execute a YouTube search for the given query."""
         return perform_youtube_search(self.driver, query, log_queue=None)
@@ -2429,6 +2710,10 @@ class WatchingWorker:
                 # -------------------------------------------------------------
                 # Case 2: Home feed discovery (startup or Home navigation)
                 # -------------------------------------------------------------
+                target_shorts = self.get_target_shorts()
+                candidate_shorts = self.fetch_home_shorts() if target_shorts else []
+                matched_short = self.match_home_short(candidate_shorts, target_shorts, session_watched_keys) if candidate_shorts else None
+
                 matched_home = self._scan_home_feed_for_target(
                     session_watched_keys=session_watched_keys,
                     last_watched_channel=last_watched_channel,
@@ -2436,6 +2721,45 @@ class WatchingWorker:
                     channel_consecutive_counts=channel_buffer_counts,
                     max_attempts=3,
                 )
+
+                if not matched_short and target_shorts:
+                    candidate_shorts = self.fetch_home_shorts()
+                    matched_short = self.match_home_short(candidate_shorts, target_shorts, session_watched_keys)
+
+                chosen_action = None
+                if matched_home and matched_short:
+                    chosen_action = random.choice(["video", "short"])
+                elif matched_home:
+                    chosen_action = "video"
+                elif matched_short:
+                    chosen_action = "short"
+
+                if chosen_action == "short" and matched_short:
+                    short_item, short_task = matched_short
+                    emit(self.log_queue, f"Selected matching Short from Home feed: '{short_task.title or short_item.get('title')}'")
+                    target_attempts += 1
+                    self.target_attempts = target_attempts
+                    self.watched_count = target_attempts
+                    prog_total = self.target_limit if not self.is_unlimited else 0
+                    self._emit_event(("progress", 0, target_attempts, prog_total))
+
+                    played_ok = self._play_target_short(
+                        short_info=short_item,
+                        task=short_task,
+                        session_watched_keys=session_watched_keys,
+                    )
+
+                    ch_display = short_task.channel or short_item.get("channel") or "Shorts Channel"
+                    ch_canon = SessionChannelTracker._canon_name(ch_display)
+                    channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
+                    last_watched_channel = ch_display
+                    consecutive_target_watched += 1
+                    suggested_miss_count = 0
+
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(2.0, 3.5)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                    continue
 
                 if matched_home:
                     item, match_obj, full_url, title, ch_display = matched_home

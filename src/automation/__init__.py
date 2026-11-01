@@ -19,7 +19,7 @@ from .navigation import (
 )
 from .watching_worker import WatchingWorker, match_channel
 from .worker import AutomationWorker
-from .youtube_actions import ensure_video_playing, watch_video
+from .youtube_actions import ensure_video_playing, watch_short, watch_video
 
 __all__ = [
     "setup_driver",
@@ -31,6 +31,7 @@ __all__ = [
     "find_channel_video_on_home",
     "find_and_click_suggested_video",
     "watch_video",
+    "watch_short",
     "ensure_video_playing",
     "AutomationWorker",
     "BrowsingWorker",
