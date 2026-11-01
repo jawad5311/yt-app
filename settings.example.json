@@ -21,7 +21,8 @@
     "LikeVideo": true,
     "AdjustQuality": true,
     "QualityLevel": "360p",
-    "RandomMicroPauses": true
+    "RandomMicroPauses": true,
+    "NonTargetShortsLimit": 5
   },
   "accounts": [],
   "videos": [],

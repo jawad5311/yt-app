@@ -22,6 +22,7 @@ import time
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -481,6 +482,47 @@ return (function() {
     }
 
     return results;
+})();
+"""
+
+
+GET_ACTIVE_SHORT_INFO_JS = r"""
+return (function() {
+    var activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
+    var scope = activeReel || document;
+
+    var chLink = scope.querySelector(
+        'ytd-reel-player-header-renderer ytd-channel-name a, ' +
+        'ytd-reel-player-header-renderer a[href*="/@"], ' +
+        'ytd-reel-player-header-renderer a[href*="/channel/"], ' +
+        'ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"]'
+    );
+
+    var channelName = '';
+    var channelUrl = '';
+    if (chLink) {
+        channelName = (chLink.textContent || '').trim();
+        channelUrl = chLink.getAttribute('href') || '';
+    }
+    if (!channelName) {
+        var chEl = scope.querySelector('ytd-channel-name #text, ytd-channel-name, #channel-name');
+        if (chEl) {
+            channelName = (chEl.textContent || '').trim();
+        }
+    }
+
+    var titleEl = scope.querySelector(
+        'ytd-reel-player-header-renderer h2, h2.title, #video-title, .title.ytd-reel-player-header-renderer'
+    );
+    var title = titleEl ? (titleEl.textContent || '').trim() : '';
+
+    return {
+        found: true,
+        channel_name: channelName,
+        channel_url: channelUrl,
+        title: title,
+        url: window.location.href
+    };
 })();
 """
 
@@ -2234,7 +2276,203 @@ class WatchingWorker:
             self.log_queue,
             f"Logged Target Short view ({actual_watched:.0f}s watched, {target_loops} loop(s)).",
         )
+        # Continue into the Shorts reel loop:
+        self._run_shorts_reel_loop(session_watched_keys=session_watched_keys)
+
         return watch_res.completed or watch_res.playback_finished
+
+
+    def get_active_short_info(self) -> Dict[str, Any]:
+        """Extract metadata of the currently active Short in the reel."""
+        try:
+            info = self.driver.execute_script(GET_ACTIVE_SHORT_INFO_JS)
+            if isinstance(info, dict):
+                curr_url = getattr(self.driver, "current_url", "") or info.get("url", "")
+                info["url"] = curr_url
+                info["video_id"] = extract_video_id(curr_url)
+                return info
+        except Exception as exc:
+            emit(self.log_queue, f"Error getting active short info: {exc}", logging.DEBUG)
+        curr_url = getattr(self.driver, "current_url", "")
+        return {
+            "found": False,
+            "channel_name": "",
+            "channel_url": "",
+            "title": "",
+            "url": curr_url,
+            "video_id": extract_video_id(curr_url),
+        }
+
+    def scroll_to_next_short(self, prev_url: Optional[str] = None) -> bool:
+        """Scroll down to the next Short in the YouTube Shorts reel and verify progression."""
+        prev = prev_url or getattr(self.driver, "current_url", "")
+        clicked = False
+        try:
+            clicked = self.driver.execute_script(r"""
+                var btn = document.querySelector('ytd-shorts #navigation-button-down button, #navigation-button-down button, button.navigation-button-down');
+                if (btn && btn.offsetParent !== null) {
+                    btn.click();
+                    return true;
+                }
+                return false;
+            """)
+        except Exception:
+            clicked = False
+
+        if not clicked:
+            try:
+                ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
+            except Exception:
+                try:
+                    self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ARROW_DOWN)
+                except Exception:
+                    try:
+                        self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
+                    except Exception:
+                        pass
+
+        for _ in range(10):
+            time.sleep(0.2)
+            curr = getattr(self.driver, "current_url", "")
+            if curr and curr != prev:
+                break
+        return True
+
+    def _run_shorts_reel_loop(
+        self,
+        session_watched_keys: Set[str],
+    ) -> int:
+        """
+        Continuously navigate and watch Shorts on the Shorts reel:
+        - If active Short is from a targeted channel: watch for 1-3 loops randomly, sync stats, scroll down.
+        - If active Short is NOT from a targeted channel: skip immediately and scroll down.
+        - Exits once non-target shorts limit (NonTargetShortsLimit) is reached or stopped.
+        Returns the number of target shorts watched.
+        """
+        max_non_target = self.config_mgr.get_int("NonTargetShortsLimit", 5) if self.config_mgr else 5
+        non_target_count = 0
+        target_shorts_watched = 0
+        target_channels = self.get_target_channels()
+        target_shorts_queue = self.get_target_shorts()
+
+        emit(self.log_queue, f"=== Entering YouTube Shorts Reel Loop (Max non-target skips: {max_non_target}) ===")
+
+        while not self.stop_event.is_set():
+            self.check_pause()
+            if self.stop_event.is_set():
+                break
+
+            short_info = self.get_active_short_info()
+            ch_name = short_info.get("channel_name", "")
+            ch_url = short_info.get("channel_url", "")
+            title = short_info.get("title", "") or "Short"
+            vid_id = short_info.get("video_id") or extract_video_id(short_info.get("url", ""))
+            full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
+
+            # Match against targeted channels
+            matched_channel = match_channel(ch_name, ch_url, target_channels) if (ch_name or ch_url) else None
+
+            # Or match against Shorts queue tasks
+            matched_task = None
+            if vid_id:
+                for t in target_shorts_queue:
+                    if extract_video_id(t.url) == vid_id:
+                        matched_task = t
+                        break
+
+            is_target = bool(matched_channel or matched_task)
+
+            if is_target:
+                ch_display = (matched_channel.name if matched_channel else (matched_task.channel if matched_task else ch_name)) or "Target Channel"
+                emit(self.log_queue, f"Short matches targeted channel '{ch_display}': '{title}' ({full_url})")
+
+                target_loops = random.randint(1, 3)
+                self.channel_tracker.set_active_channel(ch_display)
+
+                task_obj = matched_task or VideoTask(
+                    url=full_url,
+                    title=title,
+                    channel=ch_display,
+                    enabled=True,
+                )
+                registered_task = self._ensure_video_in_queue(task_obj)
+
+                def _is_short_channel_disabled() -> Optional[str]:
+                    target_ch_list = self.get_target_channels()
+                    ch_names = {c.name.strip().lower() for c in target_ch_list if c.name}
+                    if ch_display.strip().lower() not in ch_names and ch_display != "Target Channel":
+                        return "channel_disabled"
+                    return None
+
+                watch_res = watch_short(
+                    self.driver,
+                    target_loops=target_loops,
+                    stop_event=self.stop_event,
+                    log_queue=self.log_queue,
+                    pause_event=self.pause_event,
+                    should_stop_callback=_is_short_channel_disabled,
+                    on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_display, d),
+                )
+                self.channel_tracker.set_active_channel(None)
+
+                if vid_id:
+                    session_watched_keys.add(vid_id)
+                if full_url:
+                    session_watched_keys.add(full_url)
+
+                actual_watched = float(watch_res.watched_seconds or 0.0)
+                actual_ad = float(watch_res.ad_seconds or 0.0)
+                actual_dur = float(watch_res.video_duration or 0.0)
+
+                self._record_watch(
+                    title=title,
+                    channel_name=ch_display,
+                    watch_seconds=actual_watched,
+                    ad_seconds=actual_ad,
+                    duration=actual_dur,
+                    completed=watch_res.completed,
+                    playback_finished=watch_res.playback_finished,
+                    interrupted=watch_res.interrupted,
+                    task=registered_task,
+                )
+                self._update_task_duration(registered_task, actual_dur)
+
+                if hasattr(self, "channel_tracker") and self.channel_tracker and (actual_watched > 0 or watch_res.completed):
+                    self.channel_tracker.record_video_watched(
+                        is_short=True,
+                        channel_name=ch_display,
+                        source="shorts_reel",
+                        is_random=False,
+                    )
+
+                target_shorts_watched += 1
+                self.target_attempts += 1
+                self.watched_count = self.target_attempts
+                prog_total = self.target_limit if not self.is_unlimited else 0
+                self._emit_event(("progress", 0, self.target_attempts, prog_total))
+
+                emit(self.log_queue, f"Logged Short view ({actual_watched:.0f}s, {target_loops} loop(s)). Moving to next Short...")
+            else:
+                non_target_count += 1
+                ch_label = ch_name or "Unknown Channel"
+                emit(
+                    self.log_queue,
+                    f"Short from '{ch_label}' is not in targeted channels list. Skipping ({non_target_count}/{max_non_target})...",
+                    logging.INFO,
+                )
+                if non_target_count >= max_non_target:
+                    emit(
+                        self.log_queue,
+                        f"Reached limit of {max_non_target} non-target Short(s) from outside targeted list. Exiting Shorts reel.",
+                        logging.INFO,
+                    )
+                    break
+
+            prev_url = full_url or getattr(self.driver, "current_url", "")
+            self.scroll_to_next_short(prev_url=prev_url)
+            human_like_delay(1.2, 2.0)
+
+        return target_shorts_watched
 
     def search_youtube_query(self, query: str) -> bool:
         """Type and execute a YouTube search for the given query."""
@@ -2589,6 +2827,14 @@ class WatchingWorker:
                 # -------------------------------------------------------------
                 # Case 1: Watch page flow
                 # -------------------------------------------------------------
+                if "/shorts" in current_url:
+                    emit(self.log_queue, "Currently on Shorts page. Entering Shorts reel loop...")
+                    self._run_shorts_reel_loop(session_watched_keys=session_watched_keys)
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(2.0, 3.5)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                    continue
+
                 if "/watch" in current_url:
                     # 1. Check if random buffer video condition met
                     buffered = self._check_and_play_random_buffer_video(

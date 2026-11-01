@@ -193,7 +193,7 @@ def test_match_home_short_matches_first_short_only():
 
 
 def test_play_target_short_integration():
-    """Test _play_target_short records watch stats and updates session tracker identically to standard videos."""
+    """Test _play_target_short records watch stats and triggers reel loop."""
     worker = WatchingWorker.__new__(WatchingWorker)
     worker.driver = MagicMock()
     worker.log_queue = queue.Queue()
@@ -218,6 +218,7 @@ def test_play_target_short_integration():
     worker._ensure_video_in_queue = MagicMock(return_value=task)
     worker._update_task_duration = MagicMock()
     worker.click_home_short = MagicMock(return_value=True)
+    worker._run_shorts_reel_loop = MagicMock(return_value=1)
 
     with patch("src.automation.watching_worker.watch_short") as mock_ws, \
          patch("src.automation.watching_worker.dismiss_youtube_dialogs"), \
@@ -241,3 +242,63 @@ def test_play_target_short_integration():
         worker._update_task_duration.assert_called_once_with(task, 15.0)
         # Check stats store recorded outcome
         worker.stats_store.record.assert_called_once()
+        # Check that shorts reel loop was entered
+        worker._run_shorts_reel_loop.assert_called_once_with(session_watched_keys=watched_keys)
+
+
+def test_shorts_reel_loop_skips_non_target_until_limit():
+    """Verify shorts reel loop skips non-target shorts and exits when NonTargetShortsLimit is reached."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.stats_store = MagicMock()
+    worker.target_attempts = 0
+    worker.target_limit = 5
+    worker.is_unlimited = False
+    worker._emit_event = MagicMock()
+    worker.check_pause = MagicMock()
+    worker.channel_tracker = SessionChannelTracker(channels=[Channel(name="Target Channel", enabled=True)])
+    worker.get_target_channels = MagicMock(return_value=[Channel(name="Target Channel", enabled=True)])
+    worker.get_target_shorts = MagicMock(return_value=[])
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 3  # Limit of 3 non-target shorts
+    worker.config_mgr = config_mgr
+
+    # Sequence of 4 shorts:
+    # 1. Non-target Short (skip 1)
+    # 2. Target Short (watched for 1-3 loops)
+    # 3. Non-target Short (skip 2)
+    # 4. Non-target Short (skip 3 -> reaches limit of 3, exits loop!)
+    reel_shorts = [
+        {"found": True, "channel_name": "Random Creator 1", "channel_url": "/@random1", "title": "Random 1", "video_id": "r1"},
+        {"found": True, "channel_name": "Target Channel", "channel_url": "/@target", "title": "Target 1", "video_id": "t1"},
+        {"found": True, "channel_name": "Random Creator 2", "channel_url": "/@random2", "title": "Random 2", "video_id": "r2"},
+        {"found": True, "channel_name": "Random Creator 3", "channel_url": "/@random3", "title": "Random 3", "video_id": "r3"},
+    ]
+
+    worker.get_active_short_info = MagicMock(side_effect=lambda: reel_shorts.pop(0) if reel_shorts else {"found": False})
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+    worker._ensure_video_in_queue = MagicMock(side_effect=lambda t: t)
+    worker._update_task_duration = MagicMock()
+    worker._record_watch = MagicMock()
+
+    with patch("src.automation.watching_worker.watch_short") as mock_ws, \
+         patch("src.automation.watching_worker.human_like_delay"):
+        from src.models.watch_stats import WatchResult
+        mock_ws.return_value = WatchResult(
+            completed=True,
+            watched_seconds=25.0,
+            video_duration=12.0,
+            playback_finished=True,
+            reason="shorts_loops_completed",
+        )
+        watched_keys = set()
+        count = worker._run_shorts_reel_loop(session_watched_keys=watched_keys)
+
+        assert count == 1  # 1 target short watched
+        assert mock_ws.call_count == 1  # watch_short only called for target short
+        assert worker.scroll_to_next_short.call_count == 3  # scrolled 3 times; breaks on 3rd non-target (short #4)
+        assert "t1" in watched_keys
