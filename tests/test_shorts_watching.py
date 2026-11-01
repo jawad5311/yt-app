@@ -267,16 +267,18 @@ def test_shorts_reel_loop_skips_non_target_until_limit():
     config_mgr.get_int.return_value = 3  # Limit of 3 non-target shorts
     worker.config_mgr = config_mgr
 
-    # Sequence of 4 shorts:
-    # 1. Non-target Short (skip 1)
-    # 2. Target Short (watched for 1-3 loops)
-    # 3. Non-target Short (skip 2)
-    # 4. Non-target Short (skip 3 -> reaches limit of 3, exits loop!)
+    # Sequence of 5 shorts demonstrating counter reset:
+    # 1. Non-target Short (non_target_count becomes 1) -> scroll
+    # 2. Target Short (target found -> non_target_count RESETS to 0!) -> scroll
+    # 3. Non-target Short (non_target_count becomes 1) -> scroll
+    # 4. Non-target Short (non_target_count becomes 2) -> scroll
+    # 5. Non-target Short (non_target_count reaches limit of 3 -> exits loop without scroll!)
     reel_shorts = [
         {"found": True, "channel_name": "Random Creator 1", "channel_url": "/@random1", "title": "Random 1", "video_id": "r1"},
         {"found": True, "channel_name": "Target Channel", "channel_url": "/@target", "title": "Target 1", "video_id": "t1"},
         {"found": True, "channel_name": "Random Creator 2", "channel_url": "/@random2", "title": "Random 2", "video_id": "r2"},
         {"found": True, "channel_name": "Random Creator 3", "channel_url": "/@random3", "title": "Random 3", "video_id": "r3"},
+        {"found": True, "channel_name": "Random Creator 4", "channel_url": "/@random4", "title": "Random 4", "video_id": "r4"},
     ]
 
     worker.get_active_short_info = MagicMock(side_effect=lambda: reel_shorts.pop(0) if reel_shorts else {"found": False})
@@ -302,7 +304,7 @@ def test_shorts_reel_loop_skips_non_target_until_limit():
 
         assert count == 1  # 1 target short watched
         assert mock_ws.call_count == 1  # watch_short only called for target short
-        assert worker.scroll_to_next_short.call_count == 3  # scrolled 3 times; breaks on 3rd non-target (short #4)
+        assert worker.scroll_to_next_short.call_count == 4  # scrolled 4 times; breaks on 3rd non-target after reset (short #5)
         assert "t1" in watched_keys
         # ensure_video_playing should have been called for non-target shorts
         assert mock_evp.call_count >= 1
@@ -611,3 +613,58 @@ def test_reel_short_already_in_shorts_queue_updates_stats():
         )
 
 
+
+
+def test_target_short_resets_non_target_counter_example():
+    """Verify that watching a target short resets non_target_count back to 0 as requested in user example."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.stats_store = MagicMock()
+    worker.target_attempts = 0
+    worker.target_limit = 10
+    worker.is_unlimited = False
+    worker._emit_event = MagicMock()
+    worker.check_pause = MagicMock()
+    worker.channel_tracker = SessionChannelTracker(channels=[Channel(name="Target Channel", enabled=True)])
+    worker.get_target_channels = MagicMock(return_value=[Channel(name="Target Channel", enabled=True)])
+    worker.get_target_shorts = MagicMock(return_value=[])
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 10  # Max non-target limit of 10
+    worker.config_mgr = config_mgr
+
+    # User scenario:
+    # 8 non-target shorts (counts 1 to 8)
+    # 9th short is from target channel -> resets count to 0!
+    # 10 non-target shorts follow -> reaches 10, then exits loop
+    reel = []
+    for i in range(1, 9):
+        reel.append({"found": True, "channel_name": f"Other {i}", "title": f"Other {i}", "video_id": f"other_{i}"})
+    # Target short at #9
+    reel.append({"found": True, "channel_name": "Target Channel", "title": "Target Short", "video_id": "target_9"})
+    for i in range(10, 21):
+        reel.append({"found": True, "channel_name": f"Other {i}", "title": f"Other {i}", "video_id": f"other_{i}"})
+
+    worker.get_active_short_info = MagicMock(side_effect=lambda: reel.pop(0) if reel else {"found": False})
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+    worker._ensure_video_in_queue = MagicMock(side_effect=lambda t: t)
+    worker._update_task_duration = MagicMock()
+    worker._record_watch = MagicMock()
+
+    with patch("src.automation.watching_worker.watch_short") as mock_ws, \
+         patch("src.automation.watching_worker.human_like_delay"), \
+         patch("src.automation.watching_worker.ensure_video_playing"), \
+         patch("src.automation.watching_worker.time.sleep"):
+        from src.models.watch_stats import WatchResult
+        mock_ws.return_value = WatchResult(completed=True, watched_seconds=15.0, video_duration=10.0, playback_finished=True)
+        watched_keys = set()
+        count = worker._run_shorts_reel_loop(session_watched_keys=watched_keys)
+
+        assert count == 1
+        assert "target_9" in watched_keys
+        # 8 skips + 1 target watch + 10 skips = 19 shorts processed.
+        # It scrolls 18 times and breaks on the 10th non-target after target short.
+        assert worker.scroll_to_next_short.call_count == 18

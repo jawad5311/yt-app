@@ -2184,6 +2184,35 @@ class WatchingWorker:
 
         return None
 
+    def find_target_short_on_home(
+        self,
+        session_watched_keys: Optional[Set[str]] = None,
+        max_scrolls: int = 3,
+    ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
+        """Scan YouTube Home page shelves for targeted shorts, scrolling down up to max_scrolls times if needed."""
+        target_shorts = self.get_target_shorts()
+        if not target_shorts:
+            return None
+
+        for scroll_idx in range(max_scrolls + 1):
+            candidate_shorts = self.fetch_home_shorts()
+            for cand in candidate_shorts:
+                m = self.match_home_short([cand], target_shorts, session_watched_keys)
+                if m:
+                    return m
+            if scroll_idx < max_scrolls and not self.stop_event.is_set():
+                emit(self.log_queue, f"Shorts shelf not yet visible in Home feed (attempt {scroll_idx + 1}/{max_scrolls + 1}). Scrolling feed down...")
+                try:
+                    self.driver.execute_script("window.scrollBy({top: 800, behavior: 'smooth'});")
+                except Exception:
+                    try:
+                        self.driver.execute_script("window.scrollBy(0, 800);")
+                    except Exception:
+                        pass
+                human_like_delay(1.5, 2.5)
+
+        return None
+
     def click_home_short(self, short_info: Dict[str, Any]) -> bool:
         """Click on the target short card on the home page and verify navigation."""
         href = short_info.get("href", "")
@@ -2468,6 +2497,12 @@ class WatchingWorker:
             is_target = bool(matched_channel or matched_task)
 
             if is_target:
+                non_target_count = 0
+                emit(
+                    self.log_queue,
+                    f"Target Short found! Reset non-target skips counter back to 0/{max_non_target}.",
+                    logging.INFO,
+                )
                 ch_display = (matched_channel.name if matched_channel else (matched_task.channel if matched_task else ch_name)) or "Target Channel"
 
                 if matched_task is not None:
@@ -2593,7 +2628,7 @@ class WatchingWorker:
                 if non_target_count >= max_non_target:
                     emit(
                         self.log_queue,
-                        f"Reached limit of {max_non_target} non-target Short(s) from outside targeted list. Exiting Shorts reel.",
+                        f"Reached limit of {max_non_target} non-target Short(s) from outside targeted list. Exiting Shorts reel and moving to watching long-form videos.",
                         logging.INFO,
                     )
                     break
@@ -2934,6 +2969,15 @@ class WatchingWorker:
             suggested_miss_count: int = 0
             max_suggested_misses: int = random.randint(2, 3)
 
+            # Cycle tracking: watch 3 to 5 targeted long-form videos across target channels before switching to Shorts
+            cycle_long_vids_watched: int = 0
+            target_long_vids_cycle: int = random.randint(3, 5)
+            emit(
+                self.log_queue,
+                f"Starting long-form video cycle: will watch {target_long_vids_cycle} targeted long-form video(s) before switching to Shorts.",
+                logging.INFO,
+            )
+
             while not self.stop_event.is_set():
                 if self._is_target_limit_reached(target_attempts):
                     emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
@@ -2963,6 +3007,13 @@ class WatchingWorker:
                     safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
                     human_like_delay(2.0, 3.5)
                     dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                    cycle_long_vids_watched = 0
+                    target_long_vids_cycle = random.randint(3, 5)
+                    emit(
+                        self.log_queue,
+                        f"Exited Shorts reel. Starting new long-form cycle: will watch {target_long_vids_cycle} targeted long video(s).",
+                        logging.INFO,
+                    )
                     continue
 
                 if "/watch" in current_url:
@@ -3032,11 +3083,25 @@ class WatchingWorker:
                         last_watched_channel = ch_display
                         consecutive_target_watched += 1
                         suggested_miss_count = 0
+                        cycle_long_vids_watched += 1
 
                         emit(
                             self.log_queue,
-                            f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                            f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
+                            f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
+                            f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
                         )
+
+                        if cycle_long_vids_watched >= target_long_vids_cycle:
+                            emit(
+                                self.log_queue,
+                                f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Navigating to YouTube Home to switch to Shorts...",
+                                logging.INFO,
+                            )
+                            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                            human_like_delay(2.0, 3.5)
+                            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
                         continue
                     else:
                         # NOT found in suggestions: do NOT watch random video; do YouTube search!
@@ -3060,11 +3125,24 @@ class WatchingWorker:
                             channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
                             last_watched_channel = played_ch
                             consecutive_target_watched += 1
+                            cycle_long_vids_watched += 1
 
                             emit(
                                 self.log_queue,
-                                f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                                f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
+                                f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
+                                f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
                             )
+
+                            if cycle_long_vids_watched >= target_long_vids_cycle:
+                                emit(
+                                    self.log_queue,
+                                    f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Navigating to YouTube Home to switch to Shorts...",
+                                    logging.INFO,
+                                )
+                                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                                human_like_delay(2.0, 3.5)
+                                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
                         else:
                             emit(
                                 self.log_queue,
@@ -3079,10 +3157,67 @@ class WatchingWorker:
                 # -------------------------------------------------------------
                 # Case 2: Home feed discovery (startup or Home navigation)
                 # -------------------------------------------------------------
-                target_shorts = self.get_target_shorts()
-                candidate_shorts = self.fetch_home_shorts() if target_shorts else []
-                matched_short = self.match_home_short(candidate_shorts, target_shorts, session_watched_keys) if candidate_shorts else None
+                # If we completed the long-form video cycle target (3 to 5 videos), prioritize finding and playing Shorts!
+                if cycle_long_vids_watched >= target_long_vids_cycle:
+                    emit(
+                        self.log_queue,
+                        f"Searching YouTube Home feed for Shorts section ({cycle_long_vids_watched}/{target_long_vids_cycle} long-form videos watched)...",
+                        logging.INFO,
+                    )
+                    matched_short = self.find_target_short_on_home(
+                        session_watched_keys=session_watched_keys,
+                        max_scrolls=3,
+                    )
 
+                    if matched_short:
+                        short_item, short_task = matched_short
+                        emit(
+                            self.log_queue,
+                            f"Selected matching Short from Home feed: '{short_task.title or short_item.get('title')}' ({short_item.get('url') or short_task.url}). Clicking to play...",
+                            logging.INFO,
+                        )
+                        target_attempts += 1
+                        self.target_attempts = target_attempts
+                        self.watched_count = target_attempts
+                        prog_total = self.target_limit if not self.is_unlimited else 0
+                        self._emit_event(("progress", 0, target_attempts, prog_total))
+
+                        played_ok = self._play_target_short(
+                            short_info=short_item,
+                            task=short_task,
+                            session_watched_keys=session_watched_keys,
+                        )
+
+                        ch_display = short_task.channel or short_item.get("channel") or "Shorts Channel"
+                        ch_canon = SessionChannelTracker._canon_name(ch_display)
+                        channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
+                        last_watched_channel = ch_display
+                        consecutive_target_watched += 1
+                        suggested_miss_count = 0
+
+                        # Cycle completed! Reset counter and pick new random target of 3 to 5 long videos
+                        cycle_long_vids_watched = 0
+                        target_long_vids_cycle = random.randint(3, 5)
+                        emit(
+                            self.log_queue,
+                            f"Exited Shorts reel. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
+                            logging.INFO,
+                        )
+
+                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                        human_like_delay(2.0, 3.5)
+                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                        continue
+                    else:
+                        emit(
+                            self.log_queue,
+                            "No targeted Short found in Home feed Shorts shelves. Moving to long-form video watching...",
+                            logging.INFO,
+                        )
+                        cycle_long_vids_watched = 0
+                        target_long_vids_cycle = random.randint(3, 5)
+
+                # Otherwise (or if no Short found on Home), look for long-form video on Home feed
                 matched_home = self._scan_home_feed_for_target(
                     session_watched_keys=session_watched_keys,
                     last_watched_channel=last_watched_channel,
@@ -3091,48 +3226,9 @@ class WatchingWorker:
                     max_attempts=3,
                 )
 
-                if not matched_short and target_shorts:
-                    candidate_shorts = self.fetch_home_shorts()
-                    matched_short = self.match_home_short(candidate_shorts, target_shorts, session_watched_keys)
-
-                chosen_action = None
-                if matched_home and matched_short:
-                    chosen_action = random.choice(["video", "short"])
-                elif matched_home:
-                    chosen_action = "video"
-                elif matched_short:
-                    chosen_action = "short"
-
-                if chosen_action == "short" and matched_short:
-                    short_item, short_task = matched_short
-                    emit(self.log_queue, f"Selected matching Short from Home feed: '{short_task.title or short_item.get('title')}'")
-                    target_attempts += 1
-                    self.target_attempts = target_attempts
-                    self.watched_count = target_attempts
-                    prog_total = self.target_limit if not self.is_unlimited else 0
-                    self._emit_event(("progress", 0, target_attempts, prog_total))
-
-                    played_ok = self._play_target_short(
-                        short_info=short_item,
-                        task=short_task,
-                        session_watched_keys=session_watched_keys,
-                    )
-
-                    ch_display = short_task.channel or short_item.get("channel") or "Shorts Channel"
-                    ch_canon = SessionChannelTracker._canon_name(ch_display)
-                    channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
-                    last_watched_channel = ch_display
-                    consecutive_target_watched += 1
-                    suggested_miss_count = 0
-
-                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                    human_like_delay(2.0, 3.5)
-                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                    continue
-
                 if matched_home:
                     item, match_obj, full_url, title, ch_display = matched_home
-                    emit(self.log_queue, "Found video on Home page")
+                    emit(self.log_queue, f"Found long-form video on Home page: '{title}' ({full_url})")
                     target_attempts += 1
                     self.target_attempts = target_attempts
                     self.watched_count = target_attempts
@@ -3151,11 +3247,25 @@ class WatchingWorker:
                     last_watched_channel = ch_display
                     consecutive_target_watched += 1
                     suggested_miss_count = 0
+                    cycle_long_vids_watched += 1
 
                     emit(
                         self.log_queue,
-                        f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                        f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
+                        f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
+                        f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
                     )
+
+                    if cycle_long_vids_watched >= target_long_vids_cycle:
+                        emit(
+                            self.log_queue,
+                            f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Navigating to YouTube Home to switch to Shorts...",
+                            logging.INFO,
+                        )
+                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                        human_like_delay(2.0, 3.5)
+                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
                     continue
                 else:
                     # Not found on Home feed after 3 attempts: fall back to YouTube search!
