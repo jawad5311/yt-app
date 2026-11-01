@@ -431,3 +431,183 @@ def test_channel_bar_handle_matching():
     assert matched is not None
     assert matched.name == "Love Guru"
 
+
+def test_reel_short_added_to_shorts_queue_when_not_present():
+    """Verify that a Short from a targeted channel not yet in the Shorts queue is added to the queue and stats updated."""
+    from src.models.watch_stats import WatchResult
+
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.check_pause = MagicMock()
+    worker.target_attempts = 0
+    worker.watched_count = 0
+    worker.target_limit = 10
+    worker.is_unlimited = False
+    worker._emit_event = MagicMock()
+
+    target_ch = Channel(name="Love Guru", url="https://www.youtube.com/@love_guru_161", enabled=True)
+    worker.get_target_channels = MagicMock(return_value=[target_ch])
+    worker.get_target_shorts = MagicMock(return_value=[])
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 1
+    config_mgr.get_video_queue.return_value = []
+    worker.config_mgr = config_mgr
+
+    channel_tracker = MagicMock()
+    worker.channel_tracker = channel_tracker
+
+    active_short = {
+        "found": True,
+        "channel_name": "@love_guru_161",
+        "channel_url": "/@love_guru_161/shorts",
+        "title": "New Love Guru Short",
+        "video_id": "lg_new_01",
+        "url": "https://www.youtube.com/shorts/lg_new_01",
+    }
+    # First active short is target, next iteration stop_event triggers
+    call_count = [0]
+    def mock_get_info():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return active_short
+        worker.stop_event.set()
+        return {"found": False}
+
+    worker.get_active_short_info = MagicMock(side_effect=mock_get_info)
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+
+    added_task = VideoTask(
+        url="https://www.youtube.com/shorts/lg_new_01",
+        title="New Love Guru Short",
+        channel="Love Guru",
+        enabled=True,
+    )
+    worker._ensure_video_in_queue = MagicMock(return_value=added_task)
+    worker._record_watch = MagicMock()
+    worker._update_task_duration = MagicMock()
+
+    with patch("src.automation.watching_worker.watch_short") as mock_ws, \
+         patch("src.automation.watching_worker.human_like_delay"):
+        mock_ws.return_value = WatchResult(
+            completed=True,
+            watched_seconds=18.5,
+            video_duration=18.5,
+            playback_finished=True,
+            reason="shorts_loops_completed",
+        )
+        watched_keys = set()
+        count = worker._run_shorts_reel_loop(session_watched_keys=watched_keys)
+
+        assert count == 1
+        # Added to queue because it was not in queue
+        worker._ensure_video_in_queue.assert_called_once()
+        queued_task = worker._ensure_video_in_queue.call_args[0][0]
+        assert queued_task.channel == "Love Guru"
+        assert queued_task.url == "https://www.youtube.com/shorts/lg_new_01"
+
+        # Watched and stats updated
+        worker._record_watch.assert_called_once()
+        assert worker._record_watch.call_args[1]["task"] == added_task
+        assert worker._record_watch.call_args[1]["channel_name"] == "Love Guru"
+        worker._update_task_duration.assert_called_once_with(added_task, 18.5)
+        channel_tracker.record_video_watched.assert_called_once_with(
+            is_short=True,
+            channel_name="Love Guru",
+            source="shorts_reel",
+            is_random=False,
+        )
+
+
+def test_reel_short_already_in_shorts_queue_updates_stats():
+    """Verify that a Short already in the Shorts queue is not re-added, but watched and stats updated."""
+    from src.models.watch_stats import WatchResult
+
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.check_pause = MagicMock()
+    worker.target_attempts = 0
+    worker.watched_count = 0
+    worker.target_limit = 10
+    worker.is_unlimited = False
+    worker._emit_event = MagicMock()
+
+    target_ch = Channel(name="Love Guru", url="https://www.youtube.com/@love_guru_161", enabled=True)
+    existing_task = VideoTask(
+        url="https://www.youtube.com/shorts/lg_exist0001",
+        title="Existing Guru Short",
+        channel="Love Guru",
+        enabled=True,
+    )
+
+    worker.get_target_channels = MagicMock(return_value=[target_ch])
+    worker.get_target_shorts = MagicMock(return_value=[existing_task])
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 1
+    config_mgr.get_video_queue.return_value = [existing_task.to_dict()]
+    worker.config_mgr = config_mgr
+
+    channel_tracker = MagicMock()
+    worker.channel_tracker = channel_tracker
+
+    active_short = {
+        "found": True,
+        "channel_name": "@love_guru_161",
+        "channel_url": "/@love_guru_161/shorts",
+        "title": "Existing Guru Short",
+        "video_id": "lg_exist0001",
+        "url": "https://www.youtube.com/shorts/lg_exist0001",
+    }
+    call_count = [0]
+    def mock_get_info():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return active_short
+        worker.stop_event.set()
+        return {"found": False}
+
+    worker.get_active_short_info = MagicMock(side_effect=mock_get_info)
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+
+    worker._ensure_video_in_queue = MagicMock()
+    worker._record_watch = MagicMock()
+    worker._update_task_duration = MagicMock()
+
+    with patch("src.automation.watching_worker.watch_short") as mock_ws, \
+         patch("src.automation.watching_worker.human_like_delay"):
+        mock_ws.return_value = WatchResult(
+            completed=True,
+            watched_seconds=30.0,
+            video_duration=15.0,
+            playback_finished=True,
+            reason="shorts_loops_completed",
+        )
+        watched_keys = set()
+        count = worker._run_shorts_reel_loop(session_watched_keys=watched_keys)
+
+        assert count == 1
+        # Because it is already in the queue, _ensure_video_in_queue MUST NOT be called!
+        worker._ensure_video_in_queue.assert_not_called()
+
+        # Stats MUST be updated with the existing task
+        worker._record_watch.assert_called_once()
+        assert worker._record_watch.call_args[1]["task"].url == existing_task.url
+        assert worker._record_watch.call_args[1]["channel_name"] == "Love Guru"
+        worker._update_task_duration.assert_called_once()
+        assert worker._update_task_duration.call_args[0][0].url == existing_task.url
+        assert worker._update_task_duration.call_args[0][1] == 15.0
+        channel_tracker.record_video_watched.assert_called_once_with(
+            is_short=True,
+            channel_name="Love Guru",
+            source="shorts_reel",
+            is_random=False,
+        )
+
+

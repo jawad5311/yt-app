@@ -2406,8 +2406,6 @@ class WatchingWorker:
         max_non_target = self.config_mgr.get_int("NonTargetShortsLimit", 5) if self.config_mgr else 5
         non_target_count = 0
         target_shorts_watched = 0
-        target_channels = self.get_target_channels()
-        target_shorts_queue = self.get_target_shorts()
 
         emit(self.log_queue, f"=== Entering YouTube Shorts Reel Loop (Max non-target skips: {max_non_target}) ===")
 
@@ -2415,6 +2413,9 @@ class WatchingWorker:
             self.check_pause()
             if self.stop_event.is_set():
                 break
+
+            target_channels = self.get_target_channels()
+            target_shorts_queue = self.get_target_shorts()
 
             short_info = self.get_active_short_info()
             ch_name = short_info.get("channel_name", "")
@@ -2427,11 +2428,21 @@ class WatchingWorker:
             ch_lookup_url = ch_url or (f"/{ch_name}" if ch_name.startswith("@") else "")
             matched_channel = match_channel(ch_name, ch_lookup_url, target_channels) if (ch_name or ch_lookup_url) else None
 
-            # Or match against Shorts queue tasks
+            # Check if this Short is already in the Shorts queue
             matched_task = None
-            if vid_id:
+            if vid_id and self.config_mgr:
+                try:
+                    for item in self.config_mgr.get_video_queue():
+                        if isinstance(item, dict):
+                            t = VideoTask.from_dict(item)
+                            if vid_id in (t.url or "") or extract_video_id(t.url) == vid_id or resolve_video_key(t, t.url) == vid_id:
+                                matched_task = t
+                                break
+                except Exception:
+                    pass
+            if matched_task is None and vid_id:
                 for t in target_shorts_queue:
-                    if extract_video_id(t.url) == vid_id:
+                    if vid_id in (t.url or "") or extract_video_id(t.url) == vid_id or resolve_video_key(t, t.url) == vid_id:
                         matched_task = t
                         break
 
@@ -2439,18 +2450,30 @@ class WatchingWorker:
 
             if is_target:
                 ch_display = (matched_channel.name if matched_channel else (matched_task.channel if matched_task else ch_name)) or "Target Channel"
-                emit(self.log_queue, f"Short matches targeted channel '{ch_display}': '{title}' ({full_url})")
+
+                if matched_task is not None:
+                    registered_task = matched_task
+                    emit(
+                        self.log_queue,
+                        f"Short '{title}' ({full_url}) from targeted channel '{ch_display}' is already in Shorts queue. Playing and updating stats...",
+                        logging.INFO,
+                    )
+                else:
+                    emit(
+                        self.log_queue,
+                        f"Short '{title}' ({full_url}) from targeted channel '{ch_display}' is not in Shorts queue. Adding to Shorts queue...",
+                        logging.INFO,
+                    )
+                    new_task = VideoTask(
+                        url=full_url,
+                        title=title,
+                        channel=ch_display,
+                        enabled=True,
+                    )
+                    registered_task = self._ensure_video_in_queue(new_task)
 
                 target_loops = random.randint(1, 3)
                 self.channel_tracker.set_active_channel(ch_display)
-
-                task_obj = matched_task or VideoTask(
-                    url=full_url,
-                    title=title,
-                    channel=ch_display,
-                    enabled=True,
-                )
-                registered_task = self._ensure_video_in_queue(task_obj)
 
                 def _is_short_channel_disabled() -> Optional[str]:
                     target_ch_list = self.get_target_channels()
@@ -2507,7 +2530,7 @@ class WatchingWorker:
                 prog_total = self.target_limit if not self.is_unlimited else 0
                 self._emit_event(("progress", 0, self.target_attempts, prog_total))
 
-                emit(self.log_queue, f"Logged Short view ({actual_watched:.0f}s, {target_loops} loop(s)). Moving to next Short...")
+                emit(self.log_queue, f"Updated stats for Short '{title}' ({full_url}): {actual_watched:.0f}s watched ({target_loops} loop(s)). Moving to next Short...")
             else:
                 non_target_count += 1
                 ch_label = ch_name or "Unknown Channel"
