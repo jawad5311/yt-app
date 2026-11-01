@@ -87,6 +87,29 @@ def test_dashboard_unlimited_browsing_checked_by_default_on_app_open(ctk_app):
     view.destroy()
 
 
+def test_settings_view_removed_loop_and_browsing_target_limits_kept_unlimited_switch(ctk_app):
+    from unittest.mock import MagicMock
+    from src.ui.views.settings_view import SettingsView
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_setting.return_value = "5m"
+    app.config_mgr.get_int.return_value = 5
+    app.config_mgr.get_bool.return_value = True
+
+    view = SettingsView(app, app)
+
+    # loop_entry and browsing_limit_entry must be removed from SettingsView
+    assert not hasattr(view, "loop_entry")
+    assert not hasattr(view, "browsing_limit_entry")
+
+    # browsing_unlimited_switch must be present
+    assert hasattr(view, "browsing_unlimited_switch")
+    assert view.browsing_unlimited_switch.get() == 1
+
+    view.destroy()
+
+
 def test_test_suite_module_count():
     repo_root = Path(__file__).resolve().parent.parent
     test_files = list((repo_root / "tests").glob("test_*.py"))

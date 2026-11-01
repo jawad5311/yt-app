@@ -227,38 +227,7 @@ class SettingsView(ctk.CTkFrame):
         self.duration_menu.set(configured_duration if configured_duration in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION)
         self.duration_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Default Automation Loops (Recurring Runs)
-        ctk.CTkLabel(
-            scroll_playback,
-            text="Default Automation Loops (how many times to loop all tasks):",
-            font=ctk.CTkFont(weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(5, 2))
-        ctk.CTkLabel(
-            scroll_playback,
-            text="Number of times to loop through all queued tasks during automation (1-1000).",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.loop_entry = ctk.CTkEntry(scroll_playback, width=100)
-        self.loop_entry.insert(0, str(self.config_mgr.get_int("AutomationLoops", 1)))
-        self.loop_entry.pack(anchor="w", padx=15, pady=(0, 15))
-
-        # Default Browsing Target Limit (1-1000)
-        ctk.CTkLabel(
-            scroll_playback,
-            text="Default Browsing Target Limit (target videos per session, 1-1000):",
-            font=ctk.CTkFont(weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(5, 2))
-        ctk.CTkLabel(
-            scroll_playback,
-            text="Target number of videos to watch per browsing session.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.browsing_limit_entry = ctk.CTkEntry(scroll_playback, width=100)
-        self.browsing_limit_entry.insert(0, str(self.config_mgr.get_int("BrowsingTargetLimit", 1)))
-        self.browsing_limit_entry.pack(anchor="w", padx=15, pady=(0, 6))
-
+        # Default Browsing Unlimited
         self.browsing_unlimited_switch = ctk.CTkSwitch(
             scroll_playback,
             text="Default Browsing Unlimited (run until stopped or targets achieved)",
@@ -267,7 +236,7 @@ class SettingsView(ctk.CTkFrame):
             self.browsing_unlimited_switch.select()
         else:
             self.browsing_unlimited_switch.deselect()
-        self.browsing_unlimited_switch.pack(anchor="w", padx=15, pady=(0, 15))
+        self.browsing_unlimited_switch.pack(anchor="w", padx=15, pady=(5, 15))
 
         # Full Video safety timeout
         ctk.CTkLabel(scroll_playback, text="Full Video Timeout (minutes, 0 = unlimited):", font=ctk.CTkFont(weight="bold")).pack(
@@ -623,20 +592,21 @@ class SettingsView(ctk.CTkFrame):
             messagebox.showerror("Error", "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
             return
 
-        # 9. Automation loops (1 - 1000)
-        raw_loops = self.loop_entry.get().strip()
-        try:
-            if not raw_loops or "." in raw_loops:
-                raise ValueError
-            loop_val = int(raw_loops)
-            if loop_val < 1 or loop_val > 1000:
-                raise ValueError
-            validated["AutomationLoops"] = loop_val
-        except (ValueError, TypeError):
-            messagebox.showerror("Error", "Automation Loops must be a valid positive integer between 1 and 1000.")
-            return
+        # 9. Automation loops (if present)
+        if hasattr(self, "loop_entry"):
+            raw_loops = self.loop_entry.get().strip()
+            try:
+                if not raw_loops or "." in raw_loops:
+                    raise ValueError
+                loop_val = int(raw_loops)
+                if loop_val < 1 or loop_val > 1000:
+                    raise ValueError
+                validated["AutomationLoops"] = loop_val
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "Automation Loops must be a valid positive integer between 1 and 1000.")
+                return
 
-        # 10. Browsing target limit (1 - 1000) & Unlimited
+        # 10. Browsing target limit & Unlimited
         if hasattr(self, "browsing_limit_entry"):
             raw_browsing = self.browsing_limit_entry.get().strip()
             try:
