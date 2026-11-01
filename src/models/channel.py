@@ -181,6 +181,13 @@ class Channel:
     has_new_shorts: bool = False
 
     @property
+    def total_combined_videos(self) -> Optional[int]:
+        """Total combined count of regular videos and shorts."""
+        if self.total_videos is None and self.total_shorts is None:
+            return None
+        return (self.total_videos or 0) + (self.total_shorts or 0)
+
+    @property
     def has_new_content(self) -> bool:
         """Whether new regular videos or shorts are available for this channel."""
         return bool(self.has_new_videos or self.has_new_shorts)

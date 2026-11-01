@@ -19,6 +19,8 @@ def test_channel_model_stores_and_serializes_video_totals():
     reloaded = Channel.from_dict(d)
     assert reloaded.total_videos == 142
     assert reloaded.total_shorts == 58
+    assert ch.total_combined_videos == 200
+    assert reloaded.total_combined_videos == 200
 
 
 def test_fetch_channel_data_api_calculates_totals():
@@ -112,6 +114,7 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
     assert "Channel Total:" in card_text
     assert "1,420 Videos" in card_text
     assert "580 Shorts" in card_text
+    assert "2,000 Total Combined Videos" in card_text
 
     # Verify modal header also displays totals
     view.open_channel_videos_modal(channel)
@@ -134,6 +137,7 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
     assert "Channel Total:" in modal_text
     assert "1,420 Videos" in modal_text
     assert "580 Shorts" in modal_text
+    assert "2,000 Total Combined Videos" in modal_text
 
     modal.destroy()
     view.destroy()
