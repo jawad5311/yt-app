@@ -641,9 +641,12 @@ class AutomationWorker:
 
     def _send_session_report(self, status: str = "Completed", error: Optional[str] = None) -> None:
         """Deliver session watch time report."""
+        self._emit_event(("report_generating", "Generating session report... Please do not close the app."))
         if not self.config_mgr:
+            self._emit_event(("report_sent", False, "No configuration manager available."))
             return
         if not hasattr(self, "channel_tracker") or not self.channel_tracker:
+            self._emit_event(("report_sent", False, "No session tracking data."))
             return
 
         try:
@@ -681,8 +684,12 @@ class AutomationWorker:
             )
             if not ok:
                 emit(self.log_queue, "Session report email delivery could not be completed.", logging.WARNING)
+                self._emit_event(("report_sent", False, "Session report email delivery could not be completed."))
+            else:
+                self._emit_event(("report_sent", True, "Session report sent successfully!"))
         except Exception as exc:
             emit(self.log_queue, f"Failed dispatching session email report: {exc}", logging.WARNING)
+            self._emit_event(("report_sent", False, f"Failed dispatching session email report: {exc}"))
 
     def stop(self) -> None:
         """Stop worker execution."""

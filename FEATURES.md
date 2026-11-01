@@ -86,7 +86,7 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 - **Watch abort guard** — if no `<video>` element is found for 60s the watch fails cleanly instead of hanging, and the task becomes retryable.
 - **Full Video early stop buffer & safety timeout** — full-length watching stops before the video ends via `FullVideoStopBufferSeconds` (default 10s, `0` = randomized 7–12s) to prevent autoplay transitions. Safety timeout is capped by `FullVideoTimeoutMinutes` (default 5 min, clamped 0–1440, `0` = unlimited).
 - **Dedicated profile locks & positive sign-in** — profile directories (`profile_<safe_email>_<hash>`) are locked using cross-thread and cross-process exclusive lockfiles (`.app_profile.lock`). Stale locks are verified against active process PIDs without killing unrelated Chrome processes. Positive sign-in and account identity verification are confirmed before tasks begin.
-- **Independent Queue & Browsing Limits** — queue repetitions (`AutomationLoops`, default 1) and continuous browsing limits (`BrowsingTargetLimit`, default 1 attempt; or `BrowsingUnlimited`) operate independently.
+- **Independent Browsing Limits** — continuous browsing limits (`BrowsingTargetLimit`, default 1 attempt; or `BrowsingUnlimited`) are separate from the legacy queue-worker setting (`AutomationLoops`). The Dashboard exposes the browsing flow on this branch.
 - **Sign-in failure surfaced in the UI** — a failed login/CAPTCHA shows up on the Dashboard status line (red) rather than only in the log file.
 - **Thread-safe UI event queue** — workers stream `progress` / `status` / `finished` events; all Tk updates happen on the main thread.
 - **Atomic config writes** — settings and credentials are written to a temp file and swapped into place.
@@ -144,7 +144,7 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 | Auto-Skip Ads | Switch | `true` | Script-based native skip clicks *Skip Ad* after 5–10s; off = watch ads up to cap |
 | Max Ad Watch (seconds) | Entry | `32` | Cumulative ad watch budget while *Auto-Skip Ads* is off; clamped 0–3600, `0` = unlimited |
 | Full Video Stop Buffer (seconds) | Entry | `10` | Early stop buffer before video ends to avoid autoplay; `0` = randomized 7–12s |
-| Default Automation Loops | Entry | `1` | Repetitions for queue automation mode (1–1000) |
+| Default Automation Loops | Entry | `1` | Legacy queue-worker setting retained for compatibility; the Dashboard starts browsing |
 | Default Browsing Target Limit | Entry | `1` | Target channel video attempts per browsing session (1–1000) |
 | Default Browsing Unlimited | Switch | `false` | Explicit option for continuous browsing until stopped or targets achieved |
 | Video Rewatch Cooldown (hours) | Entry | `12` | Cooldown between rewatches; supports fractionals (e.g. 1.5h), `0` = no cooldown |
@@ -214,7 +214,7 @@ Watches a queued video until playback actually finishes instead of for a fixed d
 
 Autonomous watching workflow triggered by the **▶ Start Browsing** button on the Dashboard. Rather than executing a predefined queue of video tasks or fixed search keywords, it dynamically browses YouTube like an organic viewer and continuously discovers and watches videos belonging to your configured channels.
 
-- **Trigger & Prerequisites**: Started from the Dashboard via **▶ Start Browsing** (adjacent to **Start Automation**). Requires at least one checked/enabled channel under the **📺 Channels** tab (dynamically refreshed each cycle).
+- **Trigger & Prerequisites**: Started from the Dashboard via **▶ Start Browsing**. Requires at least one checked/enabled channel under the **📺 Channels** tab (dynamically refreshed each cycle). The legacy queue-worker entry point remains available to compatibility callers but is not a Dashboard action on this branch.
 - **Workflow & Lifecycle**:
   1. **Google Account Authentication**: Signs in using the account credentials and dedicated profile (`runtime/chrome_profiles/profile_<safe_email>_<hash>/`), verifies positive sign-in against the expected identity, and waits up to 3 minutes for manual 2FA/CAPTCHA resolution.
   2. **Homepage Hydration**: Navigates to `https://www.youtube.com/`, dismisses any cookie consent dialogs, and waits **5 seconds** for the homepage layout and initial feeds to fully load.

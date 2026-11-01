@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from tkinter import messagebox
 import customtkinter as ctk
 
 from ..automation.dispatcher import TaskDispatcher
@@ -100,6 +101,7 @@ class YTBotApp(ctk.CTk):
         self._close_check_job: Optional[str] = None
         self._close_start_time: float = 0.0
         self._close_timeout: float = 20.0
+        self.report_modal: Optional[Any] = None
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -686,11 +688,57 @@ class YTBotApp(ctk.CTk):
             if "dashboard" in self.views and hasattr(self.views["dashboard"], "set_paused_state"):
                 self.views["dashboard"].set_paused_state(True)
 
+    def show_report_modal(self, message: str = "Generating report... Please do not close the app.") -> None:
+        """Display the modal pop-up indicating report generation in progress."""
+        if self.__dict__.get("report_modal", None) is not None:
+            try:
+                if self.report_modal.winfo_exists():
+                    self.report_modal.lift()
+                    return
+            except Exception:
+                pass
+        try:
+            from .views.report_modal import ReportProgressModal
+
+            self.report_modal = ReportProgressModal(
+                parent=self,
+                title="Generating Report",
+                message=message,
+                on_close_callback=self._on_report_modal_closed,
+            )
+        except Exception as exc:
+            logging.debug(f"Could not open ReportProgressModal (headless or mock): {exc}")
+            self.report_modal = None
+
+    def update_report_modal_completed(self, success: bool, message: str = "") -> None:
+        """Update the report modal to indicate report completion and enable exit."""
+        if self.__dict__.get("report_modal", None) is not None:
+            try:
+                if self.report_modal.winfo_exists():
+                    title = "Report Sent Successfully!" if success else "Session Wrap-up Finished"
+                    user_msg = (
+                        "The session report has been sent to your email.\nYou may now safely close the app."
+                        if success
+                        else (message or "Session wrap-up finished. You may now close the app.")
+                    )
+                    self.report_modal.set_completed(success=success, title=title, message=user_msg)
+                    return
+            except Exception as exc:
+                logging.debug(f"Could not update report modal: {exc}")
+                self.report_modal = None
+
+    def _on_report_modal_closed(self) -> None:
+        """Callback when report modal is dismissed."""
+        self.report_modal = None
+        if self.__dict__.get("is_closing", False):
+            self.on_closing()
+
     def stop_automation(self):
         if not self.is_running:
             return
         mode_label = "browsing" if getattr(self, "current_mode", "automation") == "watching" else "automation"
         emit(self.log_queue, f"Stopping {mode_label} session... Please wait for workers to cleanup.")
+        self.show_report_modal("Generating report... Please do not close the app.")
         dashboard = self.views.get("dashboard")
         if dashboard is not None:
             dashboard.set_status("Stopping session... Cleaning up.", "warning")
@@ -796,10 +844,19 @@ class YTBotApp(ctk.CTk):
         elif kind == "status" and len(event) == 3:
             _, message, level = event
             self.views["dashboard"].set_status(message, level)
+        elif kind == "report_generating":
+            msg = event[1] if len(event) > 1 else "Generating session report... Please do not close the app."
+            self.show_report_modal(msg)
+        elif kind == "report_sent":
+            ok = event[1] if len(event) > 1 else True
+            msg = event[2] if len(event) > 2 else ""
+            self.update_report_modal_completed(ok, msg)
         elif kind == "finished":
             error_msg = event[1] if len(event) > 1 else None
+            if self.__dict__.get("report_modal", None) is not None and getattr(self.report_modal, "is_generating", False):
+                self.update_report_modal_completed(error_msg is None, error_msg or "Session finished.")
             dashboard = self.views.get("dashboard")
-            if dashboard is not None:
+            if dashboard is not None and not self.__dict__.get("is_closing", False):
                 try:
                     dashboard.set_running_state(False)
                 except Exception:
@@ -901,48 +958,60 @@ class YTBotApp(ctk.CTk):
 
     def on_closing(self) -> None:
         """Orderly application shutdown handler registered with WM_DELETE_WINDOW."""
+        if self.__dict__.get("report_modal", None) is not None:
+            try:
+                if self.report_modal.winfo_exists() and getattr(self.report_modal, "is_generating", False):
+                    self.report_modal.lift()
+                    try:
+                        messagebox.showwarning(
+                            "Please Wait",
+                            "Generating session report.\nPlease do not close the app until the email has been sent.",
+                            parent=self,
+                        )
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
         if self.__dict__.get("is_closing", False):
             return
 
         self.is_closing = True
 
-        # Check if any session is actively running
         active_threads = self._get_owned_threads()
-        if not self.is_running and not active_threads:
-            # Idle: clean exit immediately
-            self._cancel_scheduled_callbacks()
-            self.destroy()
-            return
-
-        # Active session: signal stop and release pause
-        self.pause_event.clear()
-        self.stop_event.set()
-
-        for worker in list(self.__dict__.get("active_workers", [])):
-            if hasattr(worker, "stop"):
+        if self.is_running or active_threads:
+            self.stop_automation()
+            emit(self.log_queue, "Closing application... Shutting down active session safely.")
+            dashboard = self.views.get("dashboard")
+            if dashboard is not None:
                 try:
-                    worker.stop()
+                    dashboard.set_status("Closing application... Waiting for report to be sent.", "warning")
                 except Exception:
                     pass
+            self._close_start_time = time.monotonic()
+            self._check_shutdown_progress()
+            return
 
-        emit(self.log_queue, "Closing application... Shutting down active session safely.")
-        dashboard = self.views.get("dashboard")
-        if dashboard is not None:
-            try:
-                dashboard.set_status("Closing application... Waiting for workers to finish.", "warning")
-            except Exception:
-                pass
-
-        self._close_start_time = time.monotonic()
-        self._check_shutdown_progress()
+        # Idle: clean exit immediately
+        self._cancel_scheduled_callbacks()
+        self.destroy()
 
     def _check_shutdown_progress(self) -> None:
         if not self.__dict__.get("is_closing", False):
             return
 
         living_threads = self._get_owned_threads()
-        if not living_threads:
-            # All session threads finished cleanly!
+        is_modal_busy = False
+        if self.__dict__.get("report_modal", None) is not None:
+            try:
+                if self.report_modal.winfo_exists() and getattr(self.report_modal, "is_generating", False):
+                    is_modal_busy = True
+            except Exception:
+                pass
+
+        if not living_threads and not is_modal_busy:
+            # All session threads finished cleanly and report sent!
             self._cancel_scheduled_callbacks()
             self.destroy()
             return
