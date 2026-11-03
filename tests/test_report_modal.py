@@ -25,7 +25,8 @@ class TestReportProgressModal:
 
             assert modal.is_generating is True
 
-            # When window close attempted while generating, show warning and do not close
+            # When window close attempted while generating and parent not closing, show warning
+            parent.is_closing = False
             with patch("tkinter.messagebox.showwarning") as mock_warn, \
                  patch.object(modal, "close_modal") as mock_close:
                 modal._on_window_delete()
@@ -95,17 +96,17 @@ class TestAppReportModalIntegration:
             fake_app._handle_worker_event(("report_sent", True, "Delivered"))
             mock_update.assert_called_once_with(True, "Delivered")
 
-    def test_on_closing_blocked_while_report_is_generating(self, fake_app):
+    def test_on_closing_during_report_generation_transitions_to_shutdown(self, fake_app):
         mock_modal = MagicMock()
         mock_modal.winfo_exists.return_value = True
         mock_modal.is_generating = True
         fake_app.report_modal = mock_modal
 
-        with patch("tkinter.messagebox.showwarning") as mock_warn:
+        with patch.object(fake_app, "_check_shutdown_progress") as mock_check:
             fake_app.on_closing()
-            mock_warn.assert_called_once()
-            # App should not have been destroyed or set to closing
-            assert fake_app.is_closing is False
+            assert fake_app.is_closing is True
+            mock_check.assert_called_once()
+            mock_modal.title.assert_called_with("Closing Application")
 
     def test_on_closing_allowed_when_report_modal_is_completed(self, fake_app):
         mock_modal = MagicMock()

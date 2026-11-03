@@ -256,15 +256,16 @@ class YTBotApp(ctk.CTk):
                 self.nav_buttons[view_name].configure(fg_color=("gray75", "gray25"))
                 # If switching to a view that has pending updates, refresh it smoothly
                 if name in ("queue", "shorts_queue"):
+                    tasks_changed = getattr(view_widget, "video_tasks", None) != self.queued_video_tasks
                     if getattr(view_widget, "video_tasks", None) is not self.queued_video_tasks:
                         view_widget.video_tasks = self.queued_video_tasks
+
+                    has_children = bool(getattr(view_widget, "scroll_frame", None) and view_widget.scroll_frame.winfo_children())
+                    needs_refresh = getattr(self, f"_{name}_needs_refresh", False) or tasks_changed or not has_children
+
+                    if needs_refresh:
                         view_widget.refresh_list()
                         setattr(self, f"_{name}_needs_refresh", False)
-                    elif getattr(self, f"_{name}_needs_refresh", False):
-                        view_widget.refresh_list()
-                        setattr(self, f"_{name}_needs_refresh", False)
-                    elif not getattr(view_widget, "scroll_frame", None) or not view_widget.scroll_frame.winfo_children():
-                        view_widget.refresh_list()
                 elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False
@@ -309,6 +310,34 @@ class YTBotApp(ctk.CTk):
                         self._shorts_queue_needs_refresh = True
         self.update_dashboard_stats()
 
+    def _confirm_full_video_timeout_if_needed(self) -> bool:
+        """Prompt confirmation popup if Full Video Timeout is set to anything other than 0."""
+        timeout_val = self.config_mgr.get_setting("FullVideoTimeoutMinutes", 0) if self.config_mgr else 0
+        try:
+            timeout_mins = int(timeout_val)
+        except (ValueError, TypeError):
+            try:
+                timeout_mins = int(float(timeout_val))
+            except Exception:
+                timeout_mins = 0
+
+        if timeout_mins != 0 and timeout_mins > 0:
+            from .views.timeout_confirm_modal import FullVideoTimeoutConfirmModal
+            try:
+                modal = FullVideoTimeoutConfirmModal(self, timeout_minutes=timeout_mins)
+                confirmed = modal.show()
+                if not confirmed:
+                    emit(
+                        self.log_queue,
+                        f"Automation start cancelled by user (Full Video Timeout is set to {timeout_mins}m).",
+                        logging.INFO,
+                    )
+                    return False
+            except Exception as err:
+                emit(self.log_queue, f"Timeout confirmation skipped ({err}).", logging.DEBUG)
+                return True
+        return True
+
     def start_automation(self):
         if self.is_running or self.__dict__.get("is_closing", False) or bool(self._get_owned_threads()):
             emit(self.log_queue, "Previous session is still cleaning up. Please wait.", logging.WARNING)
@@ -352,6 +381,9 @@ class YTBotApp(ctk.CTk):
                 return
 
         self.config_mgr.set_setting("AutomationLoops", str(total_loops))
+
+        if not self._confirm_full_video_timeout_if_needed():
+            return
 
         self.is_running = True
         self.current_mode = "automation"
@@ -499,11 +531,10 @@ class YTBotApp(ctk.CTk):
                 self.is_running = False
                 self.current_mode = "idle"
 
-            if not self.__dict__.get("is_closing", False):
-                try:
-                    session_event_queue.put_nowait(("finished", session_error))
-                except Exception:
-                    pass
+            try:
+                session_event_queue.put_nowait(("finished", session_error))
+            except Exception:
+                pass
             if not session_error and not self.stop_event.is_set():
                 emit(self.log_queue, "=== Automation Session Completed ===")
 
@@ -564,6 +595,9 @@ class YTBotApp(ctk.CTk):
             emit(self.log_queue, err_msg, logging.ERROR)
             if dashboard is not None and hasattr(dashboard, "set_status"):
                 dashboard.set_status(err_msg, "error")
+            return
+
+        if not self._confirm_full_video_timeout_if_needed():
             return
 
         self.is_running = True
@@ -667,11 +701,10 @@ class YTBotApp(ctk.CTk):
                 self.is_running = False
                 self.current_mode = "idle"
 
-            if not self.__dict__.get("is_closing", False):
-                try:
-                    session_event_queue.put_nowait(("finished", session_error))
-                except Exception:
-                    pass
+            try:
+                session_event_queue.put_nowait(("finished", session_error))
+            except Exception:
+                pass
             if not session_error and not self.stop_event.is_set():
                 emit(self.log_queue, "=== Watching Session Completed ===")
 
@@ -715,13 +748,23 @@ class YTBotApp(ctk.CTk):
         if self.__dict__.get("report_modal", None) is not None:
             try:
                 if self.report_modal.winfo_exists():
-                    title = "Report Sent Successfully!" if success else "Session Wrap-up Finished"
-                    user_msg = (
-                        "The session report has been sent to your email.\nYou may now safely close the app."
-                        if success
-                        else (message or "Session wrap-up finished. You may now close the app.")
-                    )
-                    self.report_modal.set_completed(success=success, title=title, message=user_msg)
+                    is_closing = self.__dict__.get("is_closing", False)
+                    if is_closing:
+                        title = "Report Sent Successfully!" if success else "Session Ended"
+                        user_msg = (
+                            "The session report has been sent to your email.\nClosing application..."
+                            if success
+                            else (message or "Session wrap-up finished.\nClosing application...")
+                        )
+                        self.report_modal.set_completed(success=success, title=title, message=user_msg, auto_close=True)
+                    else:
+                        title = "Report Sent Successfully!" if success else "Session Wrap-up Finished"
+                        user_msg = (
+                            "The session report has been sent to your email.\nYou may now safely close the app."
+                            if success
+                            else (message or "Session wrap-up finished. You may now close the app.")
+                        )
+                        self.report_modal.set_completed(success=success, title=title, message=user_msg, auto_close=False)
                     return
             except Exception as exc:
                 logging.debug(f"Could not update report modal: {exc}")
@@ -908,10 +951,7 @@ class YTBotApp(ctk.CTk):
             except Exception:
                 logging.exception("Failed to apply worker event")
 
-        if not self.__dict__.get("is_closing", False):
-            self._poll_job = self.after(50, self._poll_log_queue)
-        else:
-            self._poll_job = None
+        self._poll_job = self.after(50, self._poll_log_queue)
 
     def _get_owned_threads(self) -> List[threading.Thread]:
         """Collect all live session threads managed by this application."""
@@ -939,6 +979,13 @@ class YTBotApp(ctk.CTk):
                 pass
             self._close_check_job = None
 
+    def _safe_exit(self) -> None:
+        """Destroy UI safely."""
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
     def _prompt_stuck_workers(self) -> str:
         """Prompt user when workers take too long during shutdown.
         Returns 'wait' to continue waiting or 'cancel' to cancel closing.
@@ -958,48 +1005,84 @@ class YTBotApp(ctk.CTk):
 
     def on_closing(self) -> None:
         """Orderly application shutdown handler registered with WM_DELETE_WINDOW."""
-        if self.__dict__.get("report_modal", None) is not None:
-            try:
-                if self.report_modal.winfo_exists() and getattr(self.report_modal, "is_generating", False):
-                    self.report_modal.lift()
-                    try:
-                        messagebox.showwarning(
-                            "Please Wait",
-                            "Generating session report.\nPlease do not close the app until the email has been sent.",
-                            parent=self,
-                        )
-                    except Exception:
-                        pass
-                    return
-            except Exception:
-                pass
-
         if self.__dict__.get("is_closing", False):
+            if self.__dict__.get("report_modal", None) is not None:
+                try:
+                    if self.report_modal.winfo_exists():
+                        self.report_modal.lift()
+                except Exception:
+                    pass
             return
 
         self.is_closing = True
 
         active_threads = self._get_owned_threads()
-        if self.is_running or active_threads:
+        has_active_session = self.is_running or bool(active_threads)
+
+        # If report modal is already open and generating, transition seamlessly to closing
+        if self.__dict__.get("report_modal", None) is not None:
+            try:
+                if self.report_modal.winfo_exists():
+                    self.report_modal.title("Closing Application")
+                    if hasattr(self.report_modal, "title_label"):
+                        self.report_modal.title_label.configure(text="⏳ Closing Application")
+                    if hasattr(self.report_modal, "msg_label"):
+                        self.report_modal.msg_label.configure(
+                            text="Session report is being delivered before exit...\nPlease wait, the app will close automatically."
+                        )
+            except Exception:
+                pass
+            self._close_start_time = time.monotonic()
+            self._check_shutdown_progress()
+            return
+
+        if has_active_session:
+            emit(self.log_queue, "Closing application requested. Stopping active session and sending session report before exit...")
             self.stop_automation()
-            emit(self.log_queue, "Closing application... Shutting down active session safely.")
+
+            # Ensure the modal states that the app will automatically exit
+            if self.__dict__.get("report_modal", None) is not None:
+                try:
+                    if self.report_modal.winfo_exists():
+                        self.report_modal.title("Closing Application")
+                        if hasattr(self.report_modal, "title_label"):
+                            self.report_modal.title_label.configure(text="⏳ Closing Application")
+                        if hasattr(self.report_modal, "msg_label"):
+                            self.report_modal.msg_label.configure(
+                                text="Stopping session and sending report before closing...\nPlease wait, the app will exit automatically."
+                            )
+                except Exception:
+                    pass
+
             dashboard = self.views.get("dashboard")
             if dashboard is not None:
                 try:
                     dashboard.set_status("Closing application... Waiting for report to be sent.", "warning")
                 except Exception:
                     pass
+
             self._close_start_time = time.monotonic()
             self._check_shutdown_progress()
             return
 
         # Idle: clean exit immediately
         self._cancel_scheduled_callbacks()
-        self.destroy()
+        self._safe_exit()
 
     def _check_shutdown_progress(self) -> None:
         if not self.__dict__.get("is_closing", False):
             return
+
+        # Drain worker events during shutdown so report_sent & finished are processed
+        for _ in range(20):
+            try:
+                event = self.event_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._handle_worker_event(event)
+            except Exception:
+                pass
 
         living_threads = self._get_owned_threads()
         is_modal_busy = False
@@ -1012,12 +1095,19 @@ class YTBotApp(ctk.CTk):
 
         if not living_threads and not is_modal_busy:
             # All session threads finished cleanly and report sent!
+            emit(self.log_queue, "Session stopped and report sent successfully. Application exiting.")
+            if self.__dict__.get("report_modal", None) is not None:
+                try:
+                    self.report_modal.destroy()
+                except Exception:
+                    pass
+                self.report_modal = None
             self._cancel_scheduled_callbacks()
-            self.destroy()
+            self._safe_exit()
             return
 
         elapsed = time.monotonic() - self.__dict__.get("_close_start_time", time.monotonic())
-        close_timeout = self.__dict__.get("_close_timeout", 20.0)
+        close_timeout = self.__dict__.get("_close_timeout", 60.0)
 
         if elapsed >= close_timeout:
             decision = self._prompt_stuck_workers()
