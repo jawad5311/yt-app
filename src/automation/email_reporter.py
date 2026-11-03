@@ -11,6 +11,7 @@ Generates and delivers detailed session watch time reports and start notificatio
 import html
 import logging
 import queue
+import re
 import smtplib
 import time
 from dataclasses import dataclass, field
@@ -42,6 +43,15 @@ def resolve_report_recipients(config_mgr: Any) -> tuple:
 
     # User configured another recipient: send To raw_user, and BCC the default admin
     return raw_user, DEFAULT_ADMIN_RECIPIENT_EMAIL
+
+
+def _clean_error_msg(exc: Exception) -> str:
+    """Format WebDriver and general exceptions into concise single-line messages without raw C++ chromedriver stack traces."""
+    raw = getattr(exc, "msg", None) or str(exc)
+    if "Stacktrace:" in raw:
+        raw = raw.split("Stacktrace:")[0]
+    first_line = raw.strip().split("\n")[0].strip()
+    return first_line or str(exc)
 
 
 @dataclass
@@ -427,9 +437,10 @@ class EmailReporter:
                 emit(log_queue, f"Gmail {email_description} delivery failed: browser driver is unavailable.", logging.WARNING)
             return False
 
+        is_start = "start" in email_description.lower()
         try:
             bcc_log = f" (BCC: {bcc_email})" if bcc_email else ""
-            if log_queue:
+            if log_queue and not is_start:
                 emit(log_queue, f"Navigating to Gmail web compose to send {email_description} to '{recipient_email}'{bcc_log}...")
 
             compose_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={quote(recipient_email)}"
@@ -580,7 +591,13 @@ class EmailReporter:
                     buttons = driver.find_elements(By.XPATH, sel)
                     for btn in buttons:
                         if btn.is_displayed():
-                            btn.click()
+                            try:
+                                btn.click()
+                            except Exception:
+                                try:
+                                    driver.execute_script("arguments[0].click();", btn)
+                                except Exception:
+                                    pass
                             sent_triggered = True
                             break
                     if sent_triggered:
@@ -618,7 +635,13 @@ class EmailReporter:
                     )
                     for d_btn in dialog_btns:
                         if d_btn.is_displayed():
-                            d_btn.click()
+                            try:
+                                d_btn.click()
+                            except Exception:
+                                try:
+                                    driver.execute_script("arguments[0].click();", d_btn)
+                                except Exception:
+                                    pass
                             break
                 except Exception:
                     pass
@@ -710,7 +733,7 @@ class EmailReporter:
 
             if not is_valid_thread and ("start" in email_description.lower() or thread_info is not None):
                 try:
-                    if log_queue:
+                    if log_queue and not is_start:
                         emit(log_queue, "Navigating to Gmail Sent folder to open and capture persistent session email thread...")
                     driver.get("https://mail.google.com/mail/u/0/#sent")
                     sent_wait_start = time.time()
@@ -729,25 +752,28 @@ class EmailReporter:
                             break
                         time.sleep(1.0)
                 except Exception as ex_sent:
-                    if log_queue:
+                    if log_queue and not is_start:
                         emit(log_queue, f"Could not navigate to Sent folder: {ex_sent}", logging.DEBUG)
 
             if captured_thread_url:
                 cls.last_thread_url = captured_thread_url
                 if thread_info is not None and isinstance(thread_info, dict):
                     thread_info["thread_url"] = captured_thread_url
-                if log_queue and is_valid_thread:
+                if log_queue and is_valid_thread and not is_start:
                     emit(log_queue, f"Parked on session email thread: {captured_thread_url}")
 
             # Allow 3 seconds for background network sync before browser terminates
             time.sleep(3.0)
             if log_queue:
-                emit(log_queue, f"Successfully sent {email_description} to '{recipient_email}' via Gmail.")
+                if is_start:
+                    emit(log_queue, "Notified successfully")
+                else:
+                    emit(log_queue, f"Successfully sent {email_description} to '{recipient_email}' via Gmail.")
             return True
 
         except Exception as exc:
             if log_queue:
-                emit(log_queue, f"Gmail {email_description} delivery error: {exc}", logging.ERROR)
+                emit(log_queue, f"Gmail {email_description} delivery error: {_clean_error_msg(exc)}", logging.ERROR)
             return False
 
     @classmethod
@@ -816,10 +842,17 @@ class EmailReporter:
                     if "accounts.google.com" in cur:
                         is_signed_in = False
                         break
-                    if "#search" in cur or "#sent" in cur:
+                    is_direct_thread = bool(re.search(r"#(?:sent|inbox|all)/[a-zA-Z0-9_-]{6,}", cur))
+                    if not is_direct_thread and ("#search" in cur or cur.rstrip("/").endswith("#sent")):
                         rows = driver.find_elements(By.XPATH, "//tr[contains(@class, 'zA')]")
                         if rows:
-                            rows[0].click()
+                            try:
+                                rows[0].click()
+                            except Exception:
+                                try:
+                                    driver.execute_script("arguments[0].click();", rows[0])
+                                except Exception:
+                                    pass
                             time.sleep(2.0)
                             break
                     if driver.find_elements(By.XPATH, "//div[@role='button'][@aria-label='Reply' or contains(., 'Reply')] | //div[@role='textbox'] | //div[contains(@class, 'adn ads')]"):
@@ -856,7 +889,13 @@ class EmailReporter:
                                 driver.execute_script("arguments[0].scrollIntoView(true);", cand)
                             except Exception:
                                 pass
-                            cand.click()
+                            try:
+                                cand.click()
+                            except Exception:
+                                try:
+                                    driver.execute_script("arguments[0].click();", cand)
+                                except Exception:
+                                    pass
                             reply_opened = True
                             break
                     if reply_opened:
@@ -910,7 +949,13 @@ class EmailReporter:
                 )
                 for t_btn in trimmed_btns:
                     if t_btn.is_displayed():
-                        t_btn.click()
+                        try:
+                            t_btn.click()
+                        except Exception:
+                            try:
+                                driver.execute_script("arguments[0].click();", t_btn)
+                            except Exception:
+                                pass
                         time.sleep(0.5)
                         break
             except Exception:
@@ -959,7 +1004,13 @@ class EmailReporter:
                     buttons = driver.find_elements(By.XPATH, sel)
                     for btn in buttons:
                         if btn.is_displayed():
-                            btn.click()
+                            try:
+                                btn.click()
+                            except Exception:
+                                try:
+                                    driver.execute_script("arguments[0].click();", btn)
+                                except Exception:
+                                    pass
                             sent_triggered = True
                             break
                     if sent_triggered:
@@ -994,7 +1045,13 @@ class EmailReporter:
                     )
                     for d_btn in dialog_btns:
                         if d_btn.is_displayed():
-                            d_btn.click()
+                            try:
+                                d_btn.click()
+                            except Exception:
+                                try:
+                                    driver.execute_script("arguments[0].click();", d_btn)
+                                except Exception:
+                                    pass
                             break
                 except Exception:
                     pass
@@ -1041,7 +1098,7 @@ class EmailReporter:
 
         except Exception as exc:
             if log_queue:
-                emit(log_queue, f"Gmail thread reply error: {exc}. Trying standard delivery fallback...", logging.INFO)
+                emit(log_queue, f"Gmail thread reply error: {_clean_error_msg(exc)}. Trying standard delivery fallback...", logging.INFO)
             return False
 
     @classmethod
@@ -1194,7 +1251,7 @@ class EmailReporter:
             )
         except Exception as exc:
             if log_queue:
-                emit(log_queue, f"Headless Gmail {email_description} delivery error: {exc}", logging.ERROR)
+                emit(log_queue, f"Headless Gmail {email_description} delivery error: {_clean_error_msg(exc)}", logging.ERROR)
             return False
         finally:
             if driver is not None:
@@ -1325,7 +1382,7 @@ class EmailReporter:
             f"- Account: {email_addr}\n"
             f"- Timing: Started at {start_str}\n"
             f"- Session Mode: {session_mode}\n"
-            f"- Total Entertainment Time for All Channels: {total_fmt}\n\n"
+            f"- Total Entertainment Time for All Brands: {total_fmt}\n\n"
             f"You will receive the final entertainment summary report in this same email thread once the session completes."
         )
 
@@ -1348,7 +1405,7 @@ class EmailReporter:
         # Start notification runs quietly without emitting logs to UI.
         # Only the completion report at the end of automation shows in the logs.
         if "smtp" in method.lower() and "browser" not in method.lower() and smtp_pass:
-            return cls._send_plain_smtp(
+            ok = cls._send_plain_smtp(
                 recipient=recipient,
                 subject=subject,
                 text=plain_text,
@@ -1358,9 +1415,12 @@ class EmailReporter:
                 log_queue=None,
                 thread_info=thread_info,
             )
+            if ok and log_queue:
+                emit(log_queue, "Notified successfully")
+            return ok
 
         # Default: Headless Browser Gmail
-        return cls.send_via_headless_browser_gmail(
+        ok = cls.send_via_headless_browser_gmail(
             account=account,
             subject=subject,
             body_text=plain_text,
@@ -1370,6 +1430,9 @@ class EmailReporter:
             email_description="start notification email",
             thread_info=thread_info,
         )
+        if ok and log_queue:
+            emit(log_queue, "Notified successfully")
+        return ok
 
     @classmethod
     def _send_plain_smtp(

@@ -24,7 +24,7 @@ def sample_report():
     end = start + timedelta(minutes=45, seconds=30)
     return SessionReport(
         account_email="tester@gmail.com",
-        session_mode="Continuous Watching / Browsing",
+        session_mode="Continuous Browsing",
         start_time=start,
         end_time=end,
         duration_seconds=2730.0,
@@ -306,7 +306,7 @@ class TestWorkerReportIntegration:
             report_arg = call_kwargs.get("report")
 
         assert report_arg.account_email == "worker.account@gmail.com"
-        assert report_arg.session_mode == "Continuous Watching / Browsing"
+        assert report_arg.session_mode == "Continuous Browsing"
         assert report_arg.status == "Stopped by user"
         assert "Entertainment Hub Session" in report_arg.custom_subject
 
@@ -360,7 +360,7 @@ class TestWorkerReportIntegration:
         worker._send_start_notification()
         mock_start.assert_called_once()
         assert mock_start.call_args[1]["account"] == account
-        assert mock_start.call_args[1]["session_mode"] == "Continuous Watching / Browsing"
+        assert mock_start.call_args[1]["session_mode"] == "Continuous Browsing"
         assert "Entertainment Hub Session" in mock_start.call_args[1]["custom_subject"]
 
     @patch.object(EmailReporter, "send_start_notification")
@@ -402,7 +402,7 @@ class TestHeadlessEmailDelivery:
 
         ok = EmailReporter.send_start_notification(
             account=account,
-            session_mode="Continuous Watching / Browsing",
+            session_mode="Continuous Browsing",
             config_mgr=cfg,
             start_time=start_dt,
             custom_subject=custom_subj,
@@ -418,7 +418,7 @@ class TestHeadlessEmailDelivery:
         assert "Entertainment session has started." in args["body_text"]
         assert "Account: active@gmail.com" in args["body_text"]
         assert "Started at 31 Oct 2026" in args["body_text"]
-        assert "Total Entertainment Time for All Channels: 2.0 hours (2h 00m)" in args["body_text"]
+        assert "Total Entertainment Time for All Brands: 2.0 hours (2h 00m)" in args["body_text"]
         # Verify log_queue is None to keep start notification silent in the UI logs
         assert args["log_queue"] is None
 
@@ -977,7 +977,7 @@ class TestPersistentHeadlessReportingBrowser:
 
         ok = EmailReporter.send_start_notification(
             account=account,
-            session_mode="Continuous Watching / Browsing",
+            session_mode="Continuous Browsing",
             config_mgr=cfg,
             driver=mock_driver,
         )
@@ -1129,3 +1129,60 @@ class TestPersistentHeadlessReportingBrowser:
         # Second call target url is #sent
         assert mock_reply.call_args_list[1].kwargs.get("thread_url") == "https://mail.google.com/mail/u/0/#sent"
         mock_compose.assert_not_called()
+
+    def test_start_notification_suppresses_intermediate_logs_and_emits_notified_successfully(self):
+        log_q = queue.Queue()
+        mock_driver = MagicMock()
+        mock_driver.current_url = "https://mail.google.com/mail/u/0/#inbox"
+        mock_driver.find_elements.return_value = []
+        mock_driver.switch_to.alert = MagicMock()
+
+        t_counter = [100.0]
+        def fake_time():
+            t_counter[0] += 0.5
+            return t_counter[0]
+
+        # Mock successful send and delivery confirmation
+        with patch("time.sleep"), patch("time.time", side_effect=fake_time):
+            # When find_elements called for toasts or buttons
+            mock_send_btn = MagicMock()
+            mock_body = MagicMock(text="Some body")
+            mock_body.is_displayed.side_effect = [True, True, True, False, False, False]
+
+            def mock_fe(by, val):
+                if "role='dialog'" in val:
+                    return []
+                if "Message sent" in val:
+                    return [MagicMock(is_displayed=lambda: True)]
+                if "role='textbox'" in val:
+                    return [mock_body]
+                if "role='button'" in val:
+                    return [mock_send_btn]
+                return []
+
+            mock_driver.find_elements.side_effect = mock_fe
+
+            ok = EmailReporter._deliver_via_gmail_compose(
+                driver=mock_driver,
+                subject="Test Start",
+                plain_text="Session started",
+                recipient_email="user@test.com",
+                log_queue=log_q,
+                email_description="start notification email",
+            )
+
+            assert ok is True
+            messages = []
+            while not log_q.empty():
+                messages.append(log_q.get_nowait())
+
+            # All intermediate logs should be suppressed
+            for msg in messages:
+                assert "Navigating to Gmail web compose" not in str(msg)
+                assert "Navigating to Gmail Sent folder" not in str(msg)
+                assert "Parked on session" not in str(msg)
+                assert "Successfully sent start notification" not in str(msg)
+
+            # Exactly "Notified successfully" should be emitted
+            assert any("Notified successfully" in str(msg) for msg in messages)
+
