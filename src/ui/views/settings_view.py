@@ -1,524 +1,464 @@
+from __future__ import annotations
+
 import math
-import sys
 from datetime import datetime
 from tkinter import messagebox
-from typing import Any, Dict, Optional
-
-import customtkinter as ctk
+from typing import Any, Dict, List, Optional
 
 from ...automation.email_reporter import EmailReporter, SessionReport
-from ...models.video_task import DEFAULT_WATCHTIME_DURATION, WATCHTIME_OPTIONS
+from ..components import (
+    Button,
+    CheckBox,
+    Entry,
+    Font,
+    Frame,
+    Label,
+    OptionMenu,
+    ScrollableFrame,
+    Switch,
+    Tabview,
+)
 
-APPEARANCE_OPTIONS = ["Dark", "Light", "System"]
-EMAIL_METHOD_OPTIONS = [
+APPEARANCE_OPTIONS: List[str] = ["Dark", "Light", "System"]
+WATCHTIME_OPTIONS: List[str] = [
+    "Full Video",
+    "30 seconds",
+    "1 minute",
+    "2 minutes",
+    "3 minutes",
+    "5 minutes",
+    "10 minutes",
+    "15 minutes",
+    "20 minutes",
+    "30 minutes",
+]
+QUALITY_OPTIONS: List[str] = ["360p", "480p", "Random (360p / 480p)"]
+EMAIL_METHOD_OPTIONS: List[str] = [
     "Headless Browser Gmail (Recommended)",
     "Active Browser Gmail",
     "SMTP Connection",
 ]
-QUALITY_OPTIONS = ["360p", "480p", "Random (360p / 480p)"]
 
 
-class SmoothScrollableFrame(ctk.CTkScrollableFrame):
-    """CTkScrollableFrame with accelerated velocity and 60fps exponential smooth easing."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._target_scroll_y: Optional[float] = None
-        self._scroll_anim_id: Optional[str] = None
-        self._scroll_step: float = 85.0  # Pixels per notch (~4x faster than CTk default 20px)
-
-        # Synchronize target position when scrollbar thumb is dragged directly
-        if hasattr(self, "_scrollbar") and self._scrollbar is not None:
-            orig_cmd = self._parent_canvas.yview
-
-            def on_scrollbar(*c_args):
-                if self._scroll_anim_id is not None:
-                    try:
-                        self.after_cancel(self._scroll_anim_id)
-                    except Exception:
-                        pass
-                    self._scroll_anim_id = None
-                self._target_scroll_y = None
-                return orig_cmd(*c_args)
-
-            self._scrollbar.configure(command=on_scrollbar)
-
-    def destroy(self):
-        if self._scroll_anim_id is not None:
-            try:
-                self.after_cancel(self._scroll_anim_id)
-            except Exception:
-                pass
-            self._scroll_anim_id = None
-        super().destroy()
-
-    def _mouse_wheel_all(self, event):
-        if not self.check_if_master_is_canvas(event.widget):
-            return
-
-        if self._shift_pressed:
-            super()._mouse_wheel_all(event)
-            return
-
-        if self._parent_canvas.yview() == (0.0, 1.0):
-            return
-
-        if sys.platform.startswith("win"):
-            delta = event.delta
-        elif sys.platform == "darwin":
-            delta = event.delta * 12
-        else:
-            delta = 120 if getattr(event, "num", None) == 4 else (-120 if getattr(event, "num", None) == 5 else getattr(event, "delta", 0) * 20)
-
-        bbox = self._parent_canvas.bbox("all")
-        if not bbox:
-            return
-        total_height = bbox[3] - bbox[1]
-        canvas_height = self._parent_canvas.winfo_height()
-        max_scroll_px = max(0, total_height - canvas_height)
-        if max_scroll_px <= 0:
-            return
-
-        current_y_px = self._parent_canvas.yview()[0] * total_height
-        if self._target_scroll_y is None:
-            self._target_scroll_y = current_y_px
-
-        step_px = - (delta / 120.0) * self._scroll_step
-        self._target_scroll_y = max(0.0, min(float(max_scroll_px), self._target_scroll_y + step_px))
-
-        if self._scroll_anim_id is None:
-            self._animate_scroll()
-
-    def _animate_scroll(self):
-        if not self.winfo_exists():
-            self._scroll_anim_id = None
-            return
-        try:
-            bbox = self._parent_canvas.bbox("all")
-            if not bbox or self._target_scroll_y is None:
-                self._scroll_anim_id = None
-                self._target_scroll_y = None
-                return
-
-            total_height = bbox[3] - bbox[1]
-            canvas_height = self._parent_canvas.winfo_height()
-            max_scroll_px = max(0, total_height - canvas_height)
-
-            current_y_px = self._parent_canvas.yview()[0] * total_height
-            diff = self._target_scroll_y - current_y_px
-
-            if abs(diff) <= 1.0 or max_scroll_px <= 0:
-                target_fraction = max(0.0, min(1.0, self._target_scroll_y / total_height)) if total_height > 0 else 0.0
-                self._parent_canvas.yview_moveto(target_fraction)
-                self._target_scroll_y = None
-                self._scroll_anim_id = None
-            else:
-                next_y_px = current_y_px + diff * 0.28
-                next_fraction = max(0.0, min(1.0, next_y_px / total_height)) if total_height > 0 else 0.0
-                self._parent_canvas.yview_moveto(next_fraction)
-                self._scroll_anim_id = self.after(16, self._animate_scroll)
-        except Exception:
-            self._scroll_anim_id = None
-            self._target_scroll_y = None
+class SmoothScrollableFrame(ScrollableFrame):
+    """High-performance TTK scrollable container for settings forms."""
+    pass
 
 
-class SettingsView(ctk.CTkFrame):
+class SettingsView(Frame):
     def __init__(self, parent, app_controller):
-        super().__init__(parent, corner_radius=10)
+        super().__init__(parent, style="TFrame")
         self.app_controller = app_controller
-        self.config_mgr = app_controller.config_mgr
+        self.config_mgr = app_controller.config_mgr if hasattr(app_controller, "config_mgr") else None
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
-        self.grid_rowconfigure(2, weight=0)
 
-        # Header
-        ctk.CTkLabel(
+        # Header Title
+        Label(
             self,
             text="Application Settings",
-            font=ctk.CTkFont(size=22, weight="bold"),
+            font=Font(size=22, weight="bold"),
+            style="Header.TLabel",
         ).grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
 
         # Sub-Tabs Container
-        self.tabview = ctk.CTkTabview(self, anchor="w")
+        self.tabview = Tabview(self, anchor="w")
         self.tabview.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="nsew")
 
         tab_general = self.tabview.add("General")
-        tab_playback = self.tabview.add("Playback & Queue")
+        tab_playback = self.tabview.add("Playback & Video")
+        # Compatibility alias for code checking "Playback & Queue"
+        self.tabview._tab_dict["Playback & Queue"] = tab_playback
+
+        tab_shorts = self.tabview.add("Shorts")
         tab_ads = self.tabview.add("Ads")
         tab_interactivity = self.tabview.add("Interactivity")
         tab_email = self.tabview.add("Email & Reports")
 
-        # Configure tab buttons to be larger, clear, and spacious
-        self.tabview._segmented_button.configure(
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=36,
-        )
-        self.tabview._segmented_button.update_idletasks()
-        for btn in self.tabview._segmented_button._buttons_dict.values():
-            btn.configure(width=max(80, btn.winfo_reqwidth() + 10))
-
         # ---------------------------------------------------------
         # Tab 1: General
         # ---------------------------------------------------------
-        scroll_general = SmoothScrollableFrame(tab_general, fg_color="transparent")
+        scroll_general = SmoothScrollableFrame(tab_general)
         scroll_general.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Appearance Mode
-        ctk.CTkLabel(scroll_general, text="Appearance Mode:", font=ctk.CTkFont(weight="bold")).pack(
+        Label(scroll_general, text="Appearance Mode:", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(10, 2)
         )
-        ctk.CTkLabel(
+        Label(
             scroll_general,
             text="Choose light, dark, or system theme for the application interface.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        appearance = self.config_mgr.get_setting("AppearanceMode", "Dark")
-        self.appearance_menu = ctk.CTkOptionMenu(scroll_general, values=APPEARANCE_OPTIONS, width=200)
+        appearance = self.config_mgr.get_setting("AppearanceMode", "Dark") if self.config_mgr else "Dark"
+        self.appearance_menu = OptionMenu(scroll_general, values=APPEARANCE_OPTIONS, width=200)
         self.appearance_menu.set(appearance if appearance in APPEARANCE_OPTIONS else "Dark")
         self.appearance_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Concurrency: Parallel Browsers Count
-        ctk.CTkLabel(scroll_general, text="Parallel Browsers Count (1-10):", font=ctk.CTkFont(weight="bold")).pack(
+        Label(scroll_general, text="Parallel Browsers Count (1-10):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
-        ctk.CTkLabel(
+        Label(
             scroll_general,
             text="Number of simultaneous automated browser instances running in parallel.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.threads_entry = ctk.CTkEntry(scroll_general, width=100)
-        self.threads_entry.insert(0, str(self.config_mgr.get_int("ParallelBrowsers", 1)))
+        self.threads_entry = Entry(scroll_general, width=100)
+        initial_threads = self.config_mgr.get_int("ParallelBrowsers", 1) if self.config_mgr else 1
+        self.threads_entry.insert(0, str(initial_threads))
         self.threads_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Search: Direct Link Fallback Toggle
-        self.fallback_switch = ctk.CTkSwitch(
+        self.fallback_switch = Switch(
             scroll_general,
             text="Enable Direct Link Fallback (if Organic Search finds no match)",
-            font=ctk.CTkFont(weight="bold"),
         )
-        if self.config_mgr.get_bool("DirectLinkFallback", False):
+        if self.config_mgr and self.config_mgr.get_bool("DirectLinkFallback", False):
             self.fallback_switch.select()
         else:
             self.fallback_switch.deselect()
         self.fallback_switch.pack(anchor="w", padx=15, pady=(5, 2))
-        ctk.CTkLabel(
+        Label(
             scroll_general,
             text="When enabled, if organic search yields no match, opens the video URL directly.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
-        # YouTube Data API Key
-        ctk.CTkLabel(scroll_general, text="YouTube Data API Key (Required for Channel Sync):", font=ctk.CTkFont(weight="bold")).pack(
+        Label(scroll_general, text="YouTube Data API Key (Required for Channel Sync):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
-        ctk.CTkLabel(
+        Label(
             scroll_general,
             text="Google YouTube Data API v3 key used to discover and sync videos and shorts from channels.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.youtube_api_key_entry = ctk.CTkEntry(scroll_general, width=400)
-        curr_api_key = self.config_mgr.get_setting("YouTubeApiKey", "") or ""
-        self.youtube_api_key_entry.insert(0, str(curr_api_key))
+        self.youtube_api_key_entry = Entry(scroll_general, width=350, placeholder_text="AIzaSy...")
+        api_key = self.config_mgr.get_setting("YouTubeApiKey", "") if self.config_mgr else ""
+        if api_key:
+            self.youtube_api_key_entry.insert(0, api_key)
         self.youtube_api_key_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
-        # Tab 2: Playback & Queue
+        # Tab 2: Playback & Video
         # ---------------------------------------------------------
-        scroll_playback = SmoothScrollableFrame(tab_playback, fg_color="transparent")
+        scroll_playback = SmoothScrollableFrame(tab_playback)
         scroll_playback.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Default Watch Duration
-        ctk.CTkLabel(scroll_playback, text="Default Watch Duration (new queue tasks):", font=ctk.CTkFont(weight="bold")).pack(
+        Label(scroll_playback, text="Default Watch Duration:", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(10, 2)
         )
-        self.duration_menu = ctk.CTkOptionMenu(scroll_playback, values=WATCHTIME_OPTIONS, width=200)
-        configured_duration = self.config_mgr.get_setting("WatchtimeDuration", DEFAULT_WATCHTIME_DURATION)
-        self.duration_menu.set(configured_duration if configured_duration in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION)
+        Label(
+            scroll_playback,
+            text="Controls playback duration per video (e.g. 'Full Video' or a fixed minute cap).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        duration = self.config_mgr.get_setting("WatchtimeDuration", "Full Video") if self.config_mgr else "Full Video"
+        self.duration_menu = OptionMenu(scroll_playback, values=WATCHTIME_OPTIONS, width=200)
+        self.duration_menu.set(duration if duration in WATCHTIME_OPTIONS else "Full Video")
         self.duration_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
         # Default Browsing Unlimited
-        self.browsing_unlimited_switch = ctk.CTkSwitch(
+        self.browsing_unlimited_switch = Switch(
             scroll_playback,
             text="Default Browsing Unlimited (run until stopped or targets achieved)",
         )
-        if self.config_mgr.get_bool("BrowsingUnlimited", False):
+        if self.config_mgr and self.config_mgr.get_bool("BrowsingUnlimited", False):
             self.browsing_unlimited_switch.select()
         else:
             self.browsing_unlimited_switch.deselect()
         self.browsing_unlimited_switch.pack(anchor="w", padx=15, pady=(5, 15))
 
-        # Full Video safety timeout
-        ctk.CTkLabel(scroll_playback, text="Full Video Timeout (minutes, 0 = unlimited):", font=ctk.CTkFont(weight="bold")).pack(
+        Label(scroll_playback, text="Max Ad Watch Time (seconds; 0 = unlimited):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
-        ctk.CTkLabel(
+        Label(
             scroll_playback,
-            text="Maximum watch duration before forcibly completing a full-video task.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            text="Maximum duration to watch an ad before attempting to skip it. 0 = watch entire ad.",
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.full_timeout_entry = ctk.CTkEntry(scroll_playback, width=100)
-        self.full_timeout_entry.insert(0, str(self.config_mgr.get_int("FullVideoTimeoutMinutes", 5)))
+        self.max_ad_entry = Entry(scroll_playback, width=100)
+        initial_max_ad = self.config_mgr.get_int("MaxAdWatchSeconds", 0) if self.config_mgr else 0
+        self.max_ad_entry.insert(0, str(initial_max_ad))
+        self.max_ad_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_playback, text="Full Video Timeout (minutes; 0 = unlimited):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_playback,
+            text="Maximum minutes to stay on a single video before forcing completion. 0 = disabled.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.full_timeout_entry = Entry(scroll_playback, width=100)
+        initial_timeout = self.config_mgr.get_int("FullVideoTimeoutMinutes", 0) if self.config_mgr else 0
+        self.full_timeout_entry.insert(0, str(initial_timeout))
         self.full_timeout_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Full Video early stop buffer (to avoid autoplay)
-        ctk.CTkLabel(
+        Label(scroll_playback, text="Autoplay Stop Buffer (seconds before video ends; 0 = 7-12s):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
             scroll_playback,
-            text="Full Video Stop Buffer (seconds before end, 0 = randomized 7-12s):",
-            font=ctk.CTkFont(weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(5, 2))
-        ctk.CTkLabel(
-            scroll_playback,
-            text="Stops playback slightly before video ends to avoid YouTube triggering autoplay.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            text="Stops playback N seconds before video ends to prevent YouTube autoplaying the next video.",
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.stop_buffer_entry = ctk.CTkEntry(scroll_playback, width=100)
-        self.stop_buffer_entry.insert(0, str(self.config_mgr.get_int("AutoplayEndBufferSeconds", 10)))
+        self.stop_buffer_entry = Entry(scroll_playback, width=100)
+        initial_buffer = self.config_mgr.get_int("AutoplayEndBufferSeconds", 0) if self.config_mgr else 0
+        self.stop_buffer_entry.insert(0, str(initial_buffer))
         self.stop_buffer_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Video Rewatch Cooldown (hours)
-        ctk.CTkLabel(
+        Label(scroll_playback, text="Video Rewatch Cooldown (hours; 0 = no cooldown):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
             scroll_playback,
-            text="Video Rewatch Cooldown (hours, 0 = no cooldown):",
-            font=ctk.CTkFont(weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(5, 2))
-        ctk.CTkLabel(
-            scroll_playback,
-            text="Minimum hours before a previously watched video can be scheduled/watched again.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            text="Hours before a completed video can run again. Decimal values like 1.5 are supported.",
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.cooldown_entry = ctk.CTkEntry(scroll_playback, width=100)
-        cooldown_val = self.config_mgr.get_float("VideoCooldownHours", 12.0)
-        cooldown_str = f"{cooldown_val:g}" if isinstance(cooldown_val, (int, float)) else str(cooldown_val)
-        self.cooldown_entry.insert(0, cooldown_str)
+        self.cooldown_entry = Entry(scroll_playback, width=100)
+        cd_val = self.config_mgr.get_float("VideoCooldownHours", 0.0) if self.config_mgr else 0.0
+        self.cooldown_entry.insert(0, str(int(cd_val)) if cd_val.is_integer() else str(cd_val))
         self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Max Non-Target Shorts Limit (Shorts Reel)
-        ctk.CTkLabel(
-            scroll_playback,
-            text="Max Non-Target Shorts Limit (exit reel after N non-target shorts):",
-            font=ctk.CTkFont(weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(5, 2))
-        ctk.CTkLabel(
-            scroll_playback,
-            text="When navigating YouTube Shorts, stops the reel loop after encountering this many non-target shorts.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+        # ---------------------------------------------------------
+        # Tab 3: Shorts
+        # ---------------------------------------------------------
+        scroll_shorts = SmoothScrollableFrame(tab_shorts)
+        scroll_shorts.pack(fill="both", expand=True, padx=5, pady=5)
+
+        Label(scroll_shorts, text="Target Shorts Per Cycle (±20% randomized):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(10, 2)
+        )
+        Label(
+            scroll_shorts,
+            text="Target number of target shorts to watch in a cycle before taking a break.",
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.non_target_shorts_limit_entry = ctk.CTkEntry(scroll_playback, width=100)
-        self.non_target_shorts_limit_entry.insert(0, str(self.config_mgr.get_int("NonTargetShortsLimit", 5)))
-        self.non_target_shorts_limit_entry.pack(anchor="w", padx=15, pady=(0, 15))
+        self.target_shorts_cycle_entry = Entry(scroll_shorts, width=100)
+        initial_target_shorts = self.config_mgr.get_int("TargetShortsPerCycle", 10) if self.config_mgr else 10
+        self.target_shorts_cycle_entry.insert(0, str(initial_target_shorts))
+        self.target_shorts_cycle_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_shorts, text="Non-Target Reels Limit (per reel session):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_shorts,
+            text="Maximum consecutive non-target shorts watched before returning to search.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.non_target_reels_limit_entry = Entry(scroll_shorts, width=100)
+        initial_reels_limit = self.config_mgr.get_int("NonTargetReelsLimit", 10) if self.config_mgr else 10
+        self.non_target_reels_limit_entry.insert(0, str(initial_reels_limit))
+        self.non_target_reels_limit_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_shorts, text="Total Non-Target Shorts Limit (overall session exit limit):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_shorts,
+            text="Cumulative non-target shorts limit across the entire session before terminating the reel loop.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.total_non_target_shorts_limit_entry = Entry(scroll_shorts, width=100)
+        initial_total_non_target = self.config_mgr.get_int("TotalNonTargetShortsLimit", 20) if self.config_mgr else 20
+        self.total_non_target_shorts_limit_entry.insert(0, str(initial_total_non_target))
+        self.total_non_target_shorts_limit_entry.pack(anchor="w", padx=15, pady=(0, 15))
+        # Alias for backward compatibility
+        self.non_target_shorts_limit_entry = self.total_non_target_shorts_limit_entry
 
         # ---------------------------------------------------------
-        # Tab 3: Ads
+        # Tab 4: Ads
         # ---------------------------------------------------------
-        scroll_ads = SmoothScrollableFrame(tab_ads, fg_color="transparent")
+        scroll_ads = SmoothScrollableFrame(tab_ads)
         scroll_ads.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Auto-Skip Ads toggle (script-based native skip)
-        self.skip_ads_switch = ctk.CTkSwitch(
+        self.skip_ads_switch = Switch(
             scroll_ads,
-            text="Auto-Skip Ads (automatically clicks Skip Ad after 5-10s)",
-            font=ctk.CTkFont(weight="bold"),
+            text="Skip / Block Advertisements automatically",
         )
-        if self.config_mgr.get_bool("SkipAds", True) or self.config_mgr.get_bool("BlockAds", False):
+        skip_ads = (self.config_mgr.get_bool("SkipAds", True) or self.config_mgr.get_bool("BlockAds", True)) if self.config_mgr else True
+        if skip_ads:
             self.skip_ads_switch.select()
         else:
             self.skip_ads_switch.deselect()
         self.skip_ads_switch.pack(anchor="w", padx=15, pady=(10, 2))
-
-        ctk.CTkLabel(
+        Label(
             scroll_ads,
-            text="Off = watch every ad with the escape cap below.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
-        ).pack(anchor="w", padx=15, pady=(0, 12))
-
-        # Max ad watch cap (Block Ads off)
-        ctk.CTkLabel(scroll_ads, text="Max Ad Watch (seconds, 0 = unlimited):", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
-        )
-        ctk.CTkLabel(
-            scroll_ads,
-            text="Maximum duration spent watching an ad before attempting to bypass or resume playback.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.max_ad_entry = ctk.CTkEntry(scroll_ads, width=100)
-        self.max_ad_entry.insert(0, str(self.config_mgr.get_int("MaxAdWatchSeconds", 32)))
-        self.max_ad_entry.pack(anchor="w", padx=15, pady=(0, 15))
+            text="When enabled, detects video ads and clicks 'Skip Ad' or closes overlays.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
-        # Tab 4: Interactivity
+        # Tab 5: Interactivity
         # ---------------------------------------------------------
-        scroll_interactivity = SmoothScrollableFrame(tab_interactivity, fg_color="transparent")
+        scroll_interactivity = SmoothScrollableFrame(tab_interactivity)
         scroll_interactivity.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Natural Human Interactivity Simulation
-        self.interactivity_switch = ctk.CTkSwitch(
+        self.interactivity_switch = Switch(
             scroll_interactivity,
-            text="Simulate Natural Human Interactivity (scrolling, speed/quality, micro-pauses)",
-            font=ctk.CTkFont(weight="bold"),
+            text="Enable Human-Like Interactivity",
         )
-        if self.config_mgr.get_bool("EnableHumanInteractivity", True):
+        if self.config_mgr and self.config_mgr.get_bool("EnableHumanInteractivity", True):
             self.interactivity_switch.select()
         else:
             self.interactivity_switch.deselect()
         self.interactivity_switch.pack(anchor="w", padx=15, pady=(10, 2))
-
-        ctk.CTkLabel(
+        Label(
             scroll_interactivity,
-            text="Simulates realistic human-like behaviors during video playback to mimic organic viewer activity.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            text="Master switch for human-like browsing behavior (scrolling, pauses, captions).",
+            font=Font(size=12),
+            style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
-        self.scroll_switch = ctk.CTkSwitch(
+        self.scroll_switch = Switch(
             scroll_interactivity,
-            text="Randomized Scrolling & Pausing (browse comments/description during long videos)",
+            text="Random In-Video Scrolling (simulates reading comments / related)",
         )
-        if self.config_mgr.get_bool("RandomScrolling", True):
+        if self.config_mgr and self.config_mgr.get_bool("RandomScrolling", True):
             self.scroll_switch.select()
         else:
             self.scroll_switch.deselect()
-        self.scroll_switch.pack(anchor="w", padx=30, pady=(2, 8))
-
-        self.caption_switch = ctk.CTkSwitch(
+        self.scroll_switch.pack(anchor="w", padx=15, pady=(5, 2))
+        Label(
             scroll_interactivity,
-            text="Toggle Closed Captions (occasionally enable or disable subtitles)",
+            text="Smoothly scrolls down the page and returns, simulating organic viewer behavior.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 15))
+
+        self.caption_switch = Switch(
+            scroll_interactivity,
+            text="Random Closed Captions / Subtitles Toggle",
         )
-        if self.config_mgr.get_bool("ToggleCaptions", True):
+        if self.config_mgr and self.config_mgr.get_bool("ToggleCaptions", True):
             self.caption_switch.select()
         else:
             self.caption_switch.deselect()
-        self.caption_switch.pack(anchor="w", padx=30, pady=(2, 8))
-
-        self.quality_switch = ctk.CTkSwitch(
+        self.caption_switch.pack(anchor="w", padx=15, pady=(5, 2))
+        Label(
             scroll_interactivity,
-            text="Bandwidth Saver Quality (adjust video quality to 360p or 480p)",
+            text="Occasionally toggles video subtitles/captions on or off.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 15))
+
+        self.quality_switch = Switch(
+            scroll_interactivity,
+            text="Adjust Video Playback Quality Automatically",
         )
-        if self.config_mgr.get_bool("AdjustQuality", True):
+        if self.config_mgr and self.config_mgr.get_bool("AdjustQuality", True):
             self.quality_switch.select()
         else:
             self.quality_switch.deselect()
-        self.quality_switch.pack(anchor="w", padx=30, pady=(2, 4))
+        self.quality_switch.pack(anchor="w", padx=15, pady=(5, 2))
 
-        ctk.CTkLabel(scroll_interactivity, text="Target Bandwidth-Saving Quality:", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", padx=45, pady=(2, 2)
+        Label(scroll_interactivity, text="Target Quality Level:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
         )
-        self.quality_menu = ctk.CTkOptionMenu(scroll_interactivity, values=QUALITY_OPTIONS, width=170)
-        configured_q = self.config_mgr.get_setting("QualityLevel", "360p")
-        self.quality_menu.set(configured_q if configured_q in QUALITY_OPTIONS else "360p")
-        self.quality_menu.pack(anchor="w", padx=45, pady=(0, 8))
+        quality = self.config_mgr.get_setting("QualityLevel", "360p") if self.config_mgr else "360p"
+        self.quality_menu = OptionMenu(scroll_interactivity, values=QUALITY_OPTIONS, width=150)
+        self.quality_menu.set(quality if quality in QUALITY_OPTIONS else "360p")
+        self.quality_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
-        self.micro_pause_switch = ctk.CTkSwitch(
+        self.micro_pause_switch = Switch(
             scroll_interactivity,
-            text="Random Micro-Pauses (brief 2-5s pause midway simulating human distraction)",
+            text="Random Micro-Pauses (simulates human distraction)",
         )
-        if self.config_mgr.get_bool("RandomMicroPauses", True):
+        if self.config_mgr and self.config_mgr.get_bool("RandomMicroPauses", True):
             self.micro_pause_switch.select()
         else:
             self.micro_pause_switch.deselect()
-        self.micro_pause_switch.pack(anchor="w", padx=30, pady=(2, 4))
+        self.micro_pause_switch.pack(anchor="w", padx=15, pady=(5, 2))
 
-        self.like_video_switch = ctk.CTkSwitch(
+        self.like_video_switch = Switch(
             scroll_interactivity,
-            text="Automatically Like Video (organic like during playback)",
+            text="Organic Video Liking (only when signed into a Google Account)",
         )
-        if self.config_mgr.get_bool("LikeVideo", True):
+        if self.config_mgr and self.config_mgr.get_bool("LikeVideo", True):
             self.like_video_switch.select()
         else:
             self.like_video_switch.deselect()
-        self.like_video_switch.pack(anchor="w", padx=30, pady=(2, 4))
+        self.like_video_switch.pack(anchor="w", padx=15, pady=(5, 2))
 
-        self.like_comments_switch = ctk.CTkSwitch(
+        self.like_comments_switch = Switch(
             scroll_interactivity,
-            text="Automatically Like Comments (like 1-2 comments while browsing comments)",
+            text="Organic Comment Liking (only when signed into a Google Account)",
         )
-        if self.config_mgr.get_bool("LikeComments", True):
+        if self.config_mgr and self.config_mgr.get_bool("LikeComments", True):
             self.like_comments_switch.select()
         else:
             self.like_comments_switch.deselect()
-        self.like_comments_switch.pack(anchor="w", padx=30, pady=(2, 15))
+        self.like_comments_switch.pack(anchor="w", padx=15, pady=(5, 15))
 
         # ---------------------------------------------------------
-        # Tab 5: Email & Reports
+        # Tab 6: Email & Reports
         # ---------------------------------------------------------
-        scroll_email = SmoothScrollableFrame(tab_email, fg_color="transparent")
+        scroll_email = SmoothScrollableFrame(tab_email)
         scroll_email.pack(fill="both", expand=True, padx=5, pady=5)
 
-        ctk.CTkLabel(
-            scroll_email,
-            text="Session Watch Time Email Reporting",
-            font=ctk.CTkFont(size=16, weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(15, 4))
-
-        ctk.CTkLabel(
-            scroll_email,
-            text="Reports are automatically sent to the email below when automation starts and finishes.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
-        ).pack(anchor="w", padx=15, pady=(0, 12))
-
-        ctk.CTkLabel(scroll_email, text="Send Report To (Recipient Email):", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
+        Label(scroll_email, text="Recipient Email Address:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(10, 2)
         )
-        self.recipient_email_entry = ctk.CTkEntry(scroll_email, width=320, placeholder_text="jawad@ytgrowthexpert.com")
-        self.recipient_email_entry.insert(0, self.config_mgr.get_setting("ReportRecipientEmail", "jawad@ytgrowthexpert.com"))
+        Label(
+            scroll_email,
+            text="Email where session watch time summaries and reports will be delivered.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.recipient_email_entry = Entry(scroll_email, width=280)
+        recipient = self.config_mgr.get_setting("ReportRecipientEmail", "") if self.config_mgr else ""
+        if recipient:
+            self.recipient_email_entry.insert(0, recipient)
         self.recipient_email_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        ctk.CTkLabel(scroll_email, text="Email Delivery Method:", font=ctk.CTkFont(weight="bold")).pack(
+        Label(scroll_email, text="Email Delivery Method:", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
-        self.email_method_menu = ctk.CTkOptionMenu(scroll_email, values=EMAIL_METHOD_OPTIONS, width=320)
-        configured_method = self.config_mgr.get_setting("ReportEmailMethod", EMAIL_METHOD_OPTIONS[0])
-        self.email_method_menu.set(configured_method if configured_method in EMAIL_METHOD_OPTIONS else EMAIL_METHOD_OPTIONS[0])
+        method = self.config_mgr.get_setting("ReportEmailMethod", EMAIL_METHOD_OPTIONS[0]) if self.config_mgr else EMAIL_METHOD_OPTIONS[0]
+        self.email_method_menu = OptionMenu(scroll_email, values=EMAIL_METHOD_OPTIONS, width=350)
+        self.email_method_menu.set(method if method in EMAIL_METHOD_OPTIONS else EMAIL_METHOD_OPTIONS[0])
         self.email_method_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Direct SMTP Configuration (Secondary / Custom Relay)
-        ctk.CTkLabel(
-            scroll_email,
-            text="Direct SMTP Relay Settings (used for SMTP Method or Direct Test Delivery):",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(anchor="w", padx=15, pady=(10, 4))
-
-        ctk.CTkLabel(scroll_email, text="SMTP Host:").pack(anchor="w", padx=15, pady=(2, 2))
-        self.smtp_host_entry = ctk.CTkEntry(scroll_email, width=280)
-        self.smtp_host_entry.insert(0, self.config_mgr.get_setting("SmtpHost", "smtp.gmail.com"))
+        Label(scroll_email, text="SMTP Server Host:").pack(anchor="w", padx=15, pady=(2, 2))
+        self.smtp_host_entry = Entry(scroll_email, width=280)
+        self.smtp_host_entry.insert(0, self.config_mgr.get_setting("SmtpHost", "smtp.gmail.com") if self.config_mgr else "smtp.gmail.com")
         self.smtp_host_entry.pack(anchor="w", padx=15, pady=(0, 10))
 
-        ctk.CTkLabel(scroll_email, text="SMTP Port (e.g. 587 for TLS, 465 for SSL):").pack(anchor="w", padx=15, pady=(2, 2))
-        self.smtp_port_entry = ctk.CTkEntry(scroll_email, width=120)
-        self.smtp_port_entry.insert(0, str(self.config_mgr.get_int("SmtpPort", 587)))
+        Label(scroll_email, text="SMTP Port:").pack(anchor="w", padx=15, pady=(2, 2))
+        self.smtp_port_entry = Entry(scroll_email, width=100)
+        self.smtp_port_entry.insert(0, str(self.config_mgr.get_int("SmtpPort", 587) if self.config_mgr else 587))
         self.smtp_port_entry.pack(anchor="w", padx=15, pady=(0, 10))
 
-        ctk.CTkLabel(scroll_email, text="SMTP Username / Sender Email:").pack(anchor="w", padx=15, pady=(2, 2))
-        self.smtp_user_entry = ctk.CTkEntry(scroll_email, width=280)
-        self.smtp_user_entry.insert(0, self.config_mgr.get_setting("SmtpUsername", self.config_mgr.get_setting("SenderEmail", "")))
+        Label(scroll_email, text="SMTP Username / Sender Email:").pack(anchor="w", padx=15, pady=(2, 2))
+        self.smtp_user_entry = Entry(scroll_email, width=280)
+        sender_email = (self.config_mgr.get_setting("SmtpUsername", self.config_mgr.get_setting("SenderEmail", "")) if self.config_mgr else "")
+        self.smtp_user_entry.insert(0, sender_email)
         self.smtp_user_entry.pack(anchor="w", padx=15, pady=(0, 10))
 
-        ctk.CTkLabel(scroll_email, text="SMTP App Password:").pack(anchor="w", padx=15, pady=(2, 2))
-        self.smtp_pass_entry = ctk.CTkEntry(scroll_email, width=280, show="*")
-        self.smtp_pass_entry.insert(0, self.config_mgr.get_setting("SmtpPassword", ""))
+        Label(scroll_email, text="SMTP App Password:").pack(anchor="w", padx=15, pady=(2, 2))
+        self.smtp_pass_entry = Entry(scroll_email, width=280, show="*")
+        self.smtp_pass_entry.insert(0, self.config_mgr.get_setting("SmtpPassword", "") if self.config_mgr else "")
         self.smtp_pass_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # Send Test Report Button
-        self.test_email_btn = ctk.CTkButton(
+        self.test_email_btn = Button(
             scroll_email,
             text="📧 Send Test Email Report",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color="#3B8ED0",
-            hover_color="#36719C",
+            font=Font(size=13, weight="bold"),
+            style="Primary.TButton",
             width=220,
-            height=36,
             command=self.send_test_report,
         )
         self.test_email_btn.pack(anchor="w", padx=15, pady=(5, 20))
@@ -526,17 +466,15 @@ class SettingsView(ctk.CTkFrame):
         # ---------------------------------------------------------
         # Footer Action Bar: Save Button
         # ---------------------------------------------------------
-        action_bar = ctk.CTkFrame(self, fg_color="transparent")
+        action_bar = Frame(self, style="Transparent.TFrame")
         action_bar.grid(row=2, column=0, padx=20, pady=(5, 15), sticky="ew")
 
-        ctk.CTkButton(
+        Button(
             action_bar,
             text="💾 Save Settings",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#2FA572",
-            hover_color="#1E7B52",
+            font=Font(size=14, weight="bold"),
+            style="Success.TButton",
             width=200,
-            height=38,
             command=self.save_settings,
         ).pack(side="left")
 
@@ -627,8 +565,47 @@ class SettingsView(ctk.CTkFrame):
             messagebox.showerror("Error", "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
             return
 
-        # 8b. Non-Target Shorts Limit (1 - 500)
-        if hasattr(self, "non_target_shorts_limit_entry"):
+        # 8b. Shorts limits
+        if hasattr(self, "target_shorts_cycle_entry"):
+            raw_target = self.target_shorts_cycle_entry.get().strip()
+            try:
+                if not raw_target or "." in raw_target:
+                    raise ValueError
+                target_val = int(raw_target)
+                if target_val < 1 or target_val > 100:
+                    raise ValueError
+                validated["TargetShortsPerCycle"] = target_val
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "Target Shorts Per Cycle must be a valid integer between 1 and 100.")
+                return
+
+        if hasattr(self, "non_target_reels_limit_entry"):
+            raw_reels = self.non_target_reels_limit_entry.get().strip()
+            try:
+                if not raw_reels or "." in raw_reels:
+                    raise ValueError
+                reels_val = int(raw_reels)
+                if reels_val < 1 or reels_val > 100:
+                    raise ValueError
+                validated["NonTargetReelsLimit"] = reels_val
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "Non-Target Reels Limit must be a valid integer between 1 and 100.")
+                return
+
+        if hasattr(self, "total_non_target_shorts_limit_entry"):
+            raw_non_target = self.total_non_target_shorts_limit_entry.get().strip()
+            try:
+                if not raw_non_target or "." in raw_non_target:
+                    raise ValueError
+                non_target_val = int(raw_non_target)
+                if non_target_val < 1 or non_target_val > 500:
+                    raise ValueError
+                validated["TotalNonTargetShortsLimit"] = non_target_val
+                validated["NonTargetShortsLimit"] = non_target_val
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "Total Non-Target Shorts Limit must be a valid integer between 1 and 500.")
+                return
+        elif hasattr(self, "non_target_shorts_limit_entry"):
             raw_non_target = self.non_target_shorts_limit_entry.get().strip()
             try:
                 if not raw_non_target or "." in raw_non_target:
@@ -679,11 +656,9 @@ class SettingsView(ctk.CTkFrame):
         validated["ToggleCaptions"] = bool(self.caption_switch.get())
         validated["AdjustQuality"] = bool(self.quality_switch.get())
 
-        # 11. Quality level
-        valid_quality = QUALITY_OPTIONS
         selected_quality = self.quality_menu.get()
-        if selected_quality not in valid_quality:
-            messagebox.showerror("Error", f"Target Quality must be one of: {', '.join(valid_quality)}.")
+        if selected_quality not in QUALITY_OPTIONS:
+            messagebox.showerror("Error", f"Target Quality must be one of: {', '.join(QUALITY_OPTIONS)}.")
             return
         validated["QualityLevel"] = selected_quality
 
@@ -735,12 +710,12 @@ class SettingsView(ctk.CTkFrame):
 
         # Atomic commit to settings
         try:
-            self.config_mgr.update_settings(validated)
+            if self.config_mgr:
+                self.config_mgr.update_settings(validated)
         except Exception as exc:
             messagebox.showerror("Error", f"Failed to persist settings: {exc}")
             return
 
-        # Apply appearance change only after persistence succeeds, avoiding a second hidden save
         if hasattr(self.app_controller, "apply_appearance_mode"):
             self.app_controller.apply_appearance_mode(selected_appearance, persist=False)
 

@@ -4,7 +4,8 @@ import webbrowser
 from tkinter import TclError, messagebox
 from typing import Any, Callable, List, Optional, Set, Tuple
 
-import customtkinter as ctk
+from .. import ttk_adapter as ctk
+from ..components import Frame
 
 from ...models.channel import (
     UNCATEGORIZED_LABEL,
@@ -85,7 +86,7 @@ def parse_fetch_limit(val_str: Any) -> Optional[int]:
         return 100
 
 
-class ChannelsView(ctk.CTkFrame):
+class ChannelsView(Frame):
     """Manage the named channels that queued videos are grouped under."""
 
     def __init__(self, parent, app_controller):

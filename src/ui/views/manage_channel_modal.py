@@ -10,13 +10,14 @@ Allows users to:
 from tkinter import messagebox
 from typing import Any, Callable, List, Optional, Tuple
 
-import customtkinter as ctk
+from .. import ttk_adapter as ctk
+from ..components import Toplevel
 
 from ...models.channel import Channel
 from ...models.video_task import VideoTask
 
 
-class ManageChannelModal(ctk.CTkToplevel):
+class ManageChannelModal(Toplevel):
     """Modal dialog for configuring channel-wide target multipliers, max views caps, and target watch time."""
 
     def __init__(

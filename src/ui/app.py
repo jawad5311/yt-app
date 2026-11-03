@@ -5,8 +5,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tkinter import messagebox
-import customtkinter as ctk
+import tkinter as tk
+from tkinter import messagebox, ttk
+from .theme import DARK_THEME, get_font, get_theme_colors, setup_ttk_styles
 
 from ..automation.dispatcher import TaskDispatcher
 from ..automation.watching_worker import WatchingWorker
@@ -60,7 +61,7 @@ def sanitize_error(exc: Any, accounts: Optional[List[Any]] = None) -> str:
     return msg
 
 
-class YTBotApp(ctk.CTk):
+class YTBotApp(tk.Tk):
     def __init__(self, config_mgr: Optional[ConfigManager] = None, stats_store: Optional[StatsStore] = None):
         super().__init__()
         self.config_mgr = config_mgr or ConfigManager()
@@ -71,7 +72,6 @@ class YTBotApp(ctk.CTk):
         self.minsize(950, 600)
 
         self.apply_appearance_mode(self.config_mgr.get_setting("AppearanceMode", "Dark"), persist=False)
-        ctk.set_default_color_theme("blue")
 
         self.log_file = init_logging()
         self.log_queue: queue.Queue = queue.Queue()
@@ -118,14 +118,15 @@ class YTBotApp(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
 
         # Navigation Sidebar
-        self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
+        self.sidebar = ttk.Frame(self, style="Sidebar.TFrame", width=200)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.sidebar.grid_rowconfigure(8, weight=1)
 
-        ctk.CTkLabel(
+        ttk.Label(
             self.sidebar,
             text="YT Organic Bot",
-            font=ctk.CTkFont(size=20, weight="bold"),
+            style="Sidebar.TLabel",
+            font=get_font(size=16, weight="bold"),
         ).grid(row=0, column=0, padx=20, pady=(20, 20))
 
         self.nav_buttons: Dict[str, Any] = {}
@@ -140,22 +141,17 @@ class YTBotApp(ctk.CTk):
         ]
 
         for idx, (name, label_text) in enumerate(nav_items, start=1):
-            btn = ctk.CTkButton(
+            btn = ttk.Button(
                 self.sidebar,
                 text=label_text,
-                height=40,
-                corner_radius=6,
-                fg_color="transparent",
-                text_color=("gray10", "gray90"),
-                hover_color=("gray70", "gray30"),
-                anchor="w",
+                style="Nav.TButton",
                 command=lambda n=name: self.show_view(n),
             )
             btn.grid(row=idx, column=0, padx=10, pady=5, sticky="ew")
             self.nav_buttons[name] = btn
 
         # Main Views Container
-        self.container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.container = ttk.Frame(self, style="Transparent.TFrame")
         self.container.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         self.container.grid_columnconfigure(0, weight=1)
         self.container.grid_rowconfigure(0, weight=1)
@@ -253,7 +249,8 @@ class YTBotApp(ctk.CTk):
         for view_name, view_widget in self.views.items():
             if view_name == name:
                 view_widget.tkraise()
-                self.nav_buttons[view_name].configure(fg_color=("gray75", "gray25"))
+                if view_name in self.nav_buttons:
+                    self.nav_buttons[view_name].configure(style="NavActive.TButton")
                 # If switching to a view that has pending updates, refresh it smoothly
                 if name in ("queue", "shorts_queue"):
                     tasks_changed = getattr(view_widget, "video_tasks", None) != self.queued_video_tasks
@@ -270,13 +267,20 @@ class YTBotApp(ctk.CTk):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False
             else:
-                self.nav_buttons[view_name].configure(fg_color="transparent")
+                if view_name in self.nav_buttons:
+                    self.nav_buttons[view_name].configure(style="Nav.TButton")
 
     def apply_appearance_mode(self, mode: str, persist: bool = True) -> None:
         """Apply and remember the appearance mode (Dark / Light / System)."""
         valid = ("Dark", "Light", "System")
         selected_mode = mode if mode in valid else "Dark"
-        ctk.set_appearance_mode(selected_mode)
+        effective_mode = selected_mode if selected_mode != "System" else "Dark"
+        setup_ttk_styles(self, mode=effective_mode)
+        colors = get_theme_colors(effective_mode)
+        try:
+            self.configure(background=colors["bg"])
+        except Exception:
+            pass
         if persist and hasattr(self, "config_mgr") and self.config_mgr is not None:
             self.config_mgr.set_setting("AppearanceMode", selected_mode)
 

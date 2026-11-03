@@ -1,12 +1,11 @@
 """Smooth and fast mouse wheel scrolling utility for CTkScrollableFrame."""
 
-from typing import Optional
+from typing import Any, Optional
 
-import customtkinter as ctk
 
 
 def setup_smooth_scrolling(
-    scroll_frame: ctk.CTkScrollableFrame,
+    scroll_frame: Any,
     notch_pixels: float = 120.0,
     damping: float = 0.35,
     max_accum: float = 600.0,

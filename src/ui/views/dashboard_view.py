@@ -1,23 +1,29 @@
-import customtkinter as ctk
+from __future__ import annotations
+
+import tkinter as tk
+from tkinter import ttk
+
+from ..components import Button, CheckBox, Entry, Font, Frame, Label, ProgressBar
 
 # Status line colours for (light, dark) appearance modes.
 STATUS_INFO_COLOR = ("#555555", "#BBBBBB")
 STATUS_ERROR_COLOR = ("#C62828", "#FF6B6B")
 
 
-class DashboardView(ctk.CTkFrame):
+class DashboardView(Frame):
     def __init__(self, parent, app_controller):
-        super().__init__(parent, corner_radius=10)
+        super().__init__(parent, style="TFrame")
         self.app_controller = app_controller
 
         self.grid_columnconfigure((0, 1, 2, 3), weight=1)
         self.grid_rowconfigure(2, weight=1)
 
         # Title
-        self.title_label = ctk.CTkLabel(
+        self.title_label = Label(
             self,
             text="Dashboard Overview",
-            font=ctk.CTkFont(size=22, weight="bold"),
+            font=Font(size=22, weight="bold"),
+            style="Header.TLabel",
         )
         self.title_label.grid(row=0, column=0, columnspan=4, padx=20, pady=(20, 10), sticky="w")
 
@@ -28,122 +34,118 @@ class DashboardView(ctk.CTkFrame):
         self.card_watch_time = self._create_card("Total Watch Time", "0s", row=1, col=3)
 
         # Action Frame
-        self.action_frame = ctk.CTkFrame(self, corner_radius=8)
+        self.action_frame = Frame(self, style="Card.TFrame")
         self.action_frame.grid(row=2, column=0, columnspan=4, padx=20, pady=20, sticky="nsew")
         self.action_frame.grid_columnconfigure(0, weight=1)
 
         # Queue Automation Passes Control (retained for backward test compatibility, not displayed)
-        self.loop_frame = ctk.CTkFrame(self.action_frame, fg_color="transparent")
-        self.loop_label = ctk.CTkLabel(
+        self.loop_frame = Frame(self.action_frame, style="CardInner.TFrame")
+        self.loop_label = Label(
             self.loop_frame,
             text="Automation Passes:",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=Font(size=14, weight="bold"),
+            style="Card.TLabel",
         )
-        initial_loops = self.app_controller.config_mgr.get_int("AutomationLoops", 1)
-        self.loop_entry = ctk.CTkEntry(self.loop_frame, width=80, font=ctk.CTkFont(size=13))
+        initial_loops = self.app_controller.config_mgr.get_int("AutomationLoops", 1) if hasattr(self.app_controller, "config_mgr") else 1
+        self.loop_entry = Entry(self.loop_frame, width=80, font=Font(size=13))
         self.loop_entry.insert(0, str(max(1, initial_loops)))
-        self.loop_hint = ctk.CTkLabel(
+        self.loop_hint = Label(
             self.loop_frame,
             text="(queue repetitions; e.g. 2 = run all queue tasks 2 times)",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            font=Font(size=12),
+            style="CardMuted.TLabel",
         )
 
         # Browsing Target Video Limit Control
-        self.browsing_limit_frame = ctk.CTkFrame(self.action_frame, fg_color="transparent")
+        self.browsing_limit_frame = Frame(self.action_frame, style="CardInner.TFrame")
         self.browsing_limit_frame.pack(padx=30, pady=(15, 10), fill="x")
 
-        self.browsing_limit_label = ctk.CTkLabel(
+        self.browsing_limit_label = Label(
             self.browsing_limit_frame,
             text="Browsing Target Limit:",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=Font(size=14, weight="bold"),
+            style="Card.TLabel",
         )
         self.browsing_limit_label.pack(side="left", padx=(0, 10))
 
-        initial_browsing_limit = self.app_controller.config_mgr.get_int("BrowsingTargetLimit", 1)
-        self.browsing_limit_entry = ctk.CTkEntry(self.browsing_limit_frame, width=80, font=ctk.CTkFont(size=13))
+        initial_browsing_limit = self.app_controller.config_mgr.get_int("BrowsingTargetLimit", 1) if hasattr(self.app_controller, "config_mgr") else 1
+        self.browsing_limit_entry = Entry(self.browsing_limit_frame, width=80, font=Font(size=13))
         self.browsing_limit_entry.insert(0, str(max(1, initial_browsing_limit)))
         self.browsing_limit_entry.pack(side="left")
 
         # By default, keep Unlimited Browsing checked whenever the app is opened
-        self.browsing_unlimited_cb = ctk.CTkCheckBox(
+        self.browsing_unlimited_cb = CheckBox(
             self.browsing_limit_frame,
             text="Unlimited browsing",
-            font=ctk.CTkFont(size=13),
             command=self._on_browsing_unlimited_toggle,
+            style="Card.TCheckbutton",
         )
         self.browsing_unlimited_cb.select()
         self.browsing_limit_entry.configure(state="disabled")
         self.browsing_unlimited_cb.pack(side="left", padx=(15, 10))
 
-        self.browsing_hint = ctk.CTkLabel(
+        self.browsing_hint = Label(
             self.browsing_limit_frame,
             text="(target video attempts; 1 = at most 1 target video attempt)",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray40", "gray60"),
+            font=Font(size=12),
+            style="CardMuted.TLabel",
         )
         self.browsing_hint.pack(side="left")
 
         # Action buttons in one line:
         # Col 0: Start Browsing | Col 1: Stop | Col 2: Pause
-        self.btn_grid = ctk.CTkFrame(self.action_frame, fg_color="transparent")
+        self.btn_grid = Frame(self.action_frame, style="CardInner.TFrame")
         self.btn_grid.pack(padx=30, pady=(10, 10), fill="x")
         self.btn_grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="btn_col")
 
         self.btn_row = self.btn_grid
         self.stop_row = self.btn_grid
 
-        self.start_watching_btn = ctk.CTkButton(
+        self.start_watching_btn = Button(
             self.btn_grid,
             text="▶ Start Browsing",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            fg_color="#1F6AA5",
-            hover_color="#144870",
-            height=45,
-            command=self.app_controller.start_watching,
+            font=Font(size=14, weight="bold"),
+            style="Primary.TButton",
+            command=getattr(self.app_controller, "start_watching", None),
         )
         self.start_watching_btn.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="ew")
 
-        self.stop_btn = ctk.CTkButton(
+        self.stop_btn = Button(
             self.btn_grid,
             text="⏹ Stop",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            fg_color="#D32F2F",
-            hover_color="#9A0007",
-            height=45,
+            font=Font(size=14, weight="bold"),
+            style="Danger.TButton",
             state="disabled",
-            command=self.app_controller.stop_automation,
+            command=getattr(self.app_controller, "stop_automation", None),
         )
         self.stop_btn.grid(row=0, column=1, padx=5, pady=0, sticky="ew")
 
-        self.pause_btn = ctk.CTkButton(
+        self.pause_btn = Button(
             self.btn_grid,
             text="⏸ Pause",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            fg_color="#D97706",
-            hover_color="#B45309",
-            height=45,
+            font=Font(size=14, weight="bold"),
+            style="Warning.TButton",
             state="disabled",
-            command=self.app_controller.toggle_pause_watching,
+            command=getattr(self.app_controller, "toggle_pause_watching", None),
         )
         self.pause_btn.grid(row=0, column=2, padx=(5, 0), pady=0, sticky="ew")
 
         # Progress Bar
-        self.progress_label = ctk.CTkLabel(self.action_frame, text="Ready to launch tasks.", font=ctk.CTkFont(size=13))
+        self.progress_label = Label(self.action_frame, text="Ready to launch tasks.", font=Font(size=13), style="Card.TLabel")
         self.progress_label.pack(padx=30, pady=(20, 5), anchor="w")
 
-        self.progress_bar = ctk.CTkProgressBar(self.action_frame)
+        self.progress_bar = ProgressBar(self.action_frame)
         self.progress_bar.pack(padx=30, pady=(0, 30), fill="x")
         self.progress_bar.set(0)
 
     def _create_card(self, title: str, initial_value: str, row: int, col: int):
-        card = ctk.CTkFrame(self, corner_radius=8)
+        card = Frame(self, style="Card.TFrame")
         card.grid(row=row, column=col, padx=15, pady=10, sticky="nsew")
 
-        t_lbl = ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=12, weight="normal"))
+        t_lbl = Label(card, text=title, font=Font(size=11, weight="normal"), style="CardTitle.TLabel")
         t_lbl.pack(padx=15, pady=(15, 2))
 
-        v_lbl = ctk.CTkLabel(card, text=initial_value, font=ctk.CTkFont(size=20, weight="bold"))
+        v_lbl = Label(card, text=initial_value, font=Font(size=18, weight="bold"), style="CardValue.TLabel")
         v_lbl.pack(padx=15, pady=(0, 15))
         return v_lbl
 
@@ -159,7 +161,7 @@ class DashboardView(ctk.CTkFrame):
     def reset_progress(self):
         """Clear the progress bar and status line before a run starts."""
         self.progress_bar.set(0)
-        self.progress_label.configure(text="Starting...", text_color=STATUS_INFO_COLOR)
+        self.progress_label.configure(text="Starting...")
 
     def _on_browsing_unlimited_toggle(self):
         if hasattr(self, "browsing_unlimited_cb") and hasattr(self, "browsing_limit_entry"):
@@ -259,6 +261,18 @@ class DashboardView(ctk.CTkFrame):
             elif hasattr(self, "browsing_limit_entry"):
                 self.browsing_limit_entry.configure(state="normal")
             self.card_status.configure(text="Idle", text_color="white")
+            if hasattr(self, "loop_entry"):
+                try:
+                    self.loop_entry.configure(state="normal")
+                except Exception:
+                    pass
+            if hasattr(self, "browsing_unlimited_cb"):
+                self.browsing_unlimited_cb.configure(state="normal")
+                if not self.browsing_unlimited_cb.get() and hasattr(self, "browsing_limit_entry"):
+                    self.browsing_limit_entry.configure(state="normal")
+            elif hasattr(self, "browsing_limit_entry"):
+                self.browsing_limit_entry.configure(state="normal")
+            self.card_status.configure(text="Idle")
 
     def set_paused_state(self, is_paused: bool):
         """Update pause button text/color and status indicator."""

@@ -2,7 +2,8 @@ import webbrowser
 from tkinter import TclError, messagebox
 from typing import Any, Callable, List, Optional
 
-import customtkinter as ctk
+from .. import ttk_adapter as ctk
+from ..components import Frame
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import (
@@ -24,7 +25,7 @@ from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
 
 
-class QueueView(ctk.CTkFrame):
+class QueueView(Frame):
     shorts_only: bool = False
 
     def __init__(self, parent, app_controller, shorts_only: bool = False):

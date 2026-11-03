@@ -1,13 +1,14 @@
 """Pop-up modal shown when session is stopped or finished to indicate report generation."""
+from __future__ import annotations
 
 import logging
 from tkinter import messagebox
 from typing import Callable, Optional
 
-import customtkinter as ctk
+from ..components import Button, Font, Frame, Label, ProgressBar, Toplevel
 
 
-class ReportProgressModal(ctk.CTkToplevel):
+class ReportProgressModal(Toplevel):
     """Modal dialog displaying report generation progress and disallowing exit until delivered."""
 
     def __init__(
@@ -62,40 +63,40 @@ class ReportProgressModal(ctk.CTkToplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.card = ctk.CTkFrame(self, corner_radius=12)
+        self.card = Frame(self, style="Card.TFrame")
         self.card.pack(fill="both", expand=True, padx=16, pady=16)
 
-        self.title_label = ctk.CTkLabel(
+        self.title_label = Label(
             self.card,
             text=f"⏳ {title}",
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=Font(size=18, weight="bold"),
+            style="Card.TLabel",
         )
         self.title_label.pack(pady=(20, 8), padx=20)
 
-        self.msg_label = ctk.CTkLabel(
+        self.msg_label = Label(
             self.card,
             text=message,
-            font=ctk.CTkFont(size=13),
+            font=Font(size=13),
             wraplength=380,
             justify="center",
+            style="Card.TLabel",
         )
         self.msg_label.pack(pady=(0, 15), padx=20)
 
-        self.progress_bar = ctk.CTkProgressBar(self.card, mode="indeterminate", width=360, height=10)
+        self.progress_bar = ProgressBar(self.card, mode="indeterminate", width=360)
         self.progress_bar.pack(pady=(0, 10), padx=20)
         try:
             self.progress_bar.start()
         except Exception:
             pass
 
-        self.action_btn = ctk.CTkButton(
+        self.action_btn = Button(
             self.card,
             text="OK",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#2FA572",
-            hover_color="#1E7B52",
+            font=Font(size=14, weight="bold"),
+            style="Success.TButton",
             width=120,
-            height=36,
             command=self.close_modal,
         )
 
@@ -117,15 +118,11 @@ class ReportProgressModal(ctk.CTkToplevel):
 
         if success:
             t = title or "Report Sent Successfully!"
-            self.title_label.configure(text=f"✅ {t}", text_color="#2FA572")
-            try:
-                self.progress_bar.configure(progress_color="#2FA572")
-            except Exception:
-                pass
+            self.title_label.configure(text=f"✅ {t}")
             m = message or "The session report has been sent to your email.\nYou may now safely close the app."
         else:
             t = title or "Session Completed"
-            self.title_label.configure(text=f"ℹ️ {t}", text_color=("#1F6AA5", "#3B82F6"))
+            self.title_label.configure(text=f"ℹ️ {t}")
             m = message or "Session wrap-up finished.\nYou may now close the app."
 
         self.msg_label.configure(text=m)

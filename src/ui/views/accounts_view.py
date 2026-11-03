@@ -1,15 +1,17 @@
+from __future__ import annotations
+
+import logging
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from typing import List
 
-import customtkinter as ctk
-
 from ...models.account import Account
+from ..components import Button, Font, Frame, InputDialog, Label, ScrollableFrame
 
 
-class AccountsView(ctk.CTkFrame):
+class AccountsView(Frame):
     def __init__(self, parent, app_controller):
-        super().__init__(parent, corner_radius=10)
+        super().__init__(parent, style="TFrame")
         self.app_controller = app_controller
         self.accounts: List[Account] = []
 
@@ -17,42 +19,43 @@ class AccountsView(ctk.CTkFrame):
         self.grid_rowconfigure(2, weight=1)
 
         # Header
-        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame = Frame(self, style="Transparent.TFrame")
         header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
-        ctk.CTkLabel(
+        Label(
             header_frame,
             text="Google Accounts Manager",
-            font=ctk.CTkFont(size=22, weight="bold"),
+            font=Font(size=22, weight="bold"),
+            style="Header.TLabel",
         ).pack(side="left")
 
         # Action Buttons
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame = Frame(self, style="Transparent.TFrame")
         btn_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
 
-        ctk.CTkButton(
+        Button(
             btn_frame,
             text="+ Add Single Account",
             command=self.add_account_dialog,
+            style="Primary.TButton",
         ).pack(side="left", padx=(0, 10))
 
-        ctk.CTkButton(
+        Button(
             btn_frame,
             text="📂 Load Accounts File (accounts.txt)",
-            fg_color="#1F6AA5",
             command=self.import_accounts_file,
+            style="TButton",
         ).pack(side="left", padx=10)
 
-        ctk.CTkButton(
+        Button(
             btn_frame,
             text="🗑 Clear All",
-            fg_color="#D32F2F",
-            hover_color="#9A0007",
             command=self.clear_accounts,
+            style="Danger.TButton",
         ).pack(side="right")
 
         # Accounts List Scrollable Frame
-        self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="Loaded Accounts")
+        self.scroll_frame = ScrollableFrame(self, label_text="Loaded Accounts")
         self.scroll_frame.grid(row=2, column=0, padx=20, pady=(10, 20), sticky="nsew")
         self.scroll_frame.grid_columnconfigure(0, weight=1)
 
@@ -60,7 +63,7 @@ class AccountsView(ctk.CTkFrame):
 
     def load_saved_accounts(self):
         try:
-            raw_accounts = self.app_controller.config_mgr.get_accounts()
+            raw_accounts = self.app_controller.config_mgr.get_accounts() if hasattr(self.app_controller, "config_mgr") else []
         except Exception as exc:
             logging.error(f"Failed to load accounts: {exc}")
             raw_accounts = []
@@ -69,12 +72,15 @@ class AccountsView(ctk.CTkFrame):
             if isinstance(item, dict) and "email" in item and "password" in item:
                 self.accounts.append(Account(email=item["email"], password=item["password"]))
         self.refresh_list()
-        self.app_controller.on_accounts_changed(self.accounts)
+        if hasattr(self.app_controller, "on_accounts_changed"):
+            self.app_controller.on_accounts_changed(self.accounts)
 
     def save_accounts(self):
         acc_dicts = [{"email": a.email, "password": a.password} for a in self.accounts]
-        self.app_controller.config_mgr.set_accounts(acc_dicts)
-        self.app_controller.on_accounts_changed(self.accounts)
+        if hasattr(self.app_controller, "config_mgr"):
+            self.app_controller.config_mgr.set_accounts(acc_dicts)
+        if hasattr(self.app_controller, "on_accounts_changed"):
+            self.app_controller.on_accounts_changed(self.accounts)
 
     def import_accounts_file(self, file_path: str = ""):
         if not file_path:
@@ -89,17 +95,22 @@ class AccountsView(ctk.CTkFrame):
         if not path.exists():
             return
 
-        new_accounts = []
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        imported: List[Account] = []
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 acc = Account.parse_line(line)
                 if acc:
-                    new_accounts.append(acc)
+                    imported.append(acc)
 
-        seen: dict = {}
+        if not imported:
+            messagebox.showwarning("Warning", "No valid accounts found in the selected file.")
+            return
+
+        seen = {a.email: a for a in self.accounts}
         duplicates = []
         conflicts = []
-        for acc in new_accounts:
+
+        for acc in imported:
             if acc.email in seen:
                 if seen[acc.email].password != acc.password:
                     conflicts.append(acc.email)
@@ -125,7 +136,11 @@ class AccountsView(ctk.CTkFrame):
             self.refresh_list()
 
     def add_account_dialog(self):
-        dialog = ctk.CTkInputDialog(text="Enter account details as 'email:password':", title="Add Account")
+        try:
+            from .. import ttk_adapter as ctk
+            dialog = ctk.CTkInputDialog(text="Enter account details as 'email:password':", title="Add Account")
+        except Exception:
+            dialog = InputDialog(text="Enter account details as 'email:password':", title="Add Account", master=self)
         input_text = dialog.get_input()
         if input_text:
             acc = Account.parse_line(input_text)
@@ -159,28 +174,29 @@ class AccountsView(ctk.CTkFrame):
             child.destroy()
 
         if not self.accounts:
-            ctk.CTkLabel(
+            Label(
                 self.scroll_frame,
                 text="No accounts loaded. Click 'Load Accounts File' or 'Add Single Account'.",
-                font=ctk.CTkFont(size=14, slant="italic"),
+                font=Font(size=14, slant="italic"),
+                style="Muted.TLabel",
             ).pack(pady=30)
             return
 
         for idx, acc in enumerate(self.accounts):
-            row = ctk.CTkFrame(self.scroll_frame, corner_radius=6)
+            row = Frame(self.scroll_frame, style="Card.TFrame")
             row.pack(fill="x", padx=5, pady=4)
 
-            ctk.CTkLabel(
+            Label(
                 row,
                 text=f"{idx + 1}. {acc.email}",
-                font=ctk.CTkFont(weight="bold"),
+                font=Font(weight="bold"),
+                style="Card.TLabel",
             ).pack(side="left", padx=15, pady=10)
 
-            ctk.CTkButton(
+            Button(
                 row,
                 text="Remove",
                 width=70,
-                fg_color="#D32F2F",
-                hover_color="#9A0007",
+                style="Danger.TButton",
                 command=lambda i=idx: self.remove_account(i),
             ).pack(side="right", padx=10, pady=10)

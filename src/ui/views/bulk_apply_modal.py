@@ -6,12 +6,13 @@ for all channels and all videos in the queue simultaneously.
 
 from typing import Any, Callable, List, Optional
 
-import customtkinter as ctk
+from .. import ttk_adapter as ctk
+from ..components import Toplevel
 
 from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, VideoTask
 
 
-class BulkApplyModal(ctk.CTkToplevel):
+class BulkApplyModal(Toplevel):
     """Modal dialog for bulk configuring target multiplier and max views cap across all queued videos."""
 
     def __init__(

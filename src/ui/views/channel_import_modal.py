@@ -3,7 +3,8 @@
 from tkinter import messagebox
 from typing import Callable, Dict, List, Optional, Set
 
-import customtkinter as ctk
+from .. import ttk_adapter as ctk
+from ..components import Toplevel
 
 from ...models.video_task import (
     DEFAULT_MAX_RUNS,
@@ -18,7 +19,7 @@ from ...utils.helpers import clean_youtube_url
 from ..tooltip import add_tooltip
 
 
-class ChannelImportModal(ctk.CTkToplevel):
+class ChannelImportModal(Toplevel):
     """Modal dialog allowing users to review and selectively import fetched channel videos."""
 
     def __init__(
