@@ -882,10 +882,8 @@ def watch_short(
     views_counted = 0
     loops_credited: Set[int] = set()
 
-    try:
-        ensure_video_playing(driver, log_queue=log_queue)
-    except Exception:
-        pass
+    # Note: Shorts autoplay automatically on navigation and scroll. Do not send play click / 'k' key
+    # as pressing play toggles already playing Shorts into a paused state.
 
     def _result(completed: bool, reason: str, interrupted: bool = False, finished: bool = False) -> WatchResult:
         nonlocal like_attempted
@@ -989,10 +987,10 @@ def watch_short(
             except Exception as exc:
                 logging.debug(f"like_active_short error: {exc}")
 
-        # If paused unexpectedly, resume
+        # If paused unexpectedly, resume via HTML5 video.play() (do not click or press keys to avoid toggle)
         if paused and not ended and elapsed < max_duration_seconds:
             try:
-                ensure_video_playing(driver)
+                driver.execute_script("var v = document.querySelector('video'); if (v && v.paused) v.play();")
             except Exception:
                 pass
 

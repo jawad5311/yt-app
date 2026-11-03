@@ -3179,11 +3179,6 @@ class WatchingWorker:
                     f"Short from '{ch_label}' is not in targeted channels list. Watching for {non_target_watch_time:.1f}s randomly before skipping ({reel_non_target_count}/{cycle_reel_max_non_target})...",
                     logging.INFO,
                 )
-                try:
-                    ensure_video_playing(self.driver, log_queue=self.log_queue)
-                except Exception:
-                    pass
-
                 elapsed = 0.0
                 step = 0.2
                 while elapsed < non_target_watch_time and not self.stop_event.is_set():

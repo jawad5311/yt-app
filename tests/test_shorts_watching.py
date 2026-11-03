@@ -342,7 +342,7 @@ def test_non_target_short_watches_random_seconds_before_skipping():
         worker._run_shorts_reel_loop(session_watched_keys=set())
 
         mock_uniform.assert_called_with(2.0, 5.0)
-        mock_evp.assert_called_once()
+        mock_evp.assert_not_called()
         assert mock_sleep.call_count >= 1
 
 
