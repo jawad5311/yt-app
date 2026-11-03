@@ -35,9 +35,24 @@ def main():
         run_browser_diagnostics()
         sys.exit(0)
 
-    config_mgr = ConfigManager()
-    app = YTBotApp(config_mgr=config_mgr)
-    app.mainloop()
+    try:
+        config_mgr = ConfigManager()
+        app = YTBotApp(config_mgr=config_mgr)
+        app.mainloop()
+    except Exception as exc:
+        import traceback
+        err_msg = f"Application startup error: {exc}\n\n{traceback.format_exc()}"
+        try:
+            with open("error.log", "a", encoding="utf-8") as f:
+                f.write(err_msg + "\n" + "=" * 50 + "\n")
+        except Exception:
+            pass
+        try:
+            import tkinter.messagebox
+            tkinter.messagebox.showerror("YT Organic Bot Error", err_msg)
+        except Exception:
+            pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":

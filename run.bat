@@ -2,15 +2,34 @@
 setlocal
 cd /d "%~dp0"
 
-:: Check for virtual environment with windowless pythonw.exe
-if exist "%~dp0venv\Scripts\pythonw.exe" (
-    start "" "%~dp0venv\Scripts\pythonw.exe" "%~dp0main.py"
-    exit
+:: Check if debug / console mode requested
+set "PYTHON_EXE=pythonw.exe"
+if "%~1"=="--debug" set "PYTHON_EXE=python.exe"
+if "%~1"=="--console" set "PYTHON_EXE=python.exe"
+if "%~1"=="debug" set "PYTHON_EXE=python.exe"
+
+:: Check for virtual environment in .\venv
+if exist "%~dp0venv\Scripts\%PYTHON_EXE%" (
+    if "%PYTHON_EXE%"=="python.exe" (
+        "%~dp0venv\Scripts\python.exe" "%~dp0main.py" %*
+        pause
+        exit /b
+    ) else (
+        start "" "%~dp0venv\Scripts\pythonw.exe" "%~dp0main.py"
+        exit
+    )
 )
 
-if exist "%~dp0.venv\Scripts\pythonw.exe" (
-    start "" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0main.py"
-    exit
+:: Check for virtual environment in .\.venv
+if exist "%~dp0.venv\Scripts\%PYTHON_EXE%" (
+    if "%PYTHON_EXE%"=="python.exe" (
+        "%~dp0.venv\Scripts\python.exe" "%~dp0main.py" %*
+        pause
+        exit /b
+    ) else (
+        start "" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0main.py"
+        exit
+    )
 )
 
 :: Error display if venv does not exist

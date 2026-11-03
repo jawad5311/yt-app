@@ -291,7 +291,7 @@ class ConfigManager:
             val = self.data.get("settings", {}).get(key, default)
             res = safe_int(val, default=default)
             # Safety limits: parallel browsers, loops, and browsing limit must not be <= 0
-            if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit"):
+            if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0:
                     return default
             elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds"):
@@ -303,7 +303,7 @@ class ConfigManager:
         with self._lock:
             val = self.data.get("settings", {}).get(key, default)
             res = safe_float(val, default=default)
-            if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit"):
+            if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0.0:
                     return default
             elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds"):
