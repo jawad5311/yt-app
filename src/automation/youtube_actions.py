@@ -862,7 +862,7 @@ def watch_short(
     Continuously checks playback time every 5 seconds, and counts 1 view as soon as 80% duration is reached.
     """
     if target_loops is None or target_loops < 1:
-        target_loops = random.randint(1, 3)
+        target_loops = random.randint(1, 2)
 
     emit(log_queue, f"Starting Shorts playback: watching for {target_loops} loop(s) in a single go.")
 

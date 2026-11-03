@@ -289,8 +289,8 @@ def test_shorts_reel_loop_skips_non_target_until_limit():
 
     with patch("src.automation.watching_worker.watch_short") as mock_ws, \
          patch("src.automation.watching_worker.human_like_delay"), \
-         patch("src.automation.watching_worker.ensure_video_playing") as mock_evp, \
-         patch("src.automation.watching_worker.time.sleep") as mock_sleep:
+         patch("time.sleep", return_value=None), \
+         patch("random.randint", side_effect=[10, 3, 1]):
         from src.models.watch_stats import WatchResult
         mock_ws.return_value = WatchResult(
             completed=True,
@@ -306,12 +306,11 @@ def test_shorts_reel_loop_skips_non_target_until_limit():
         assert mock_ws.call_count == 1  # watch_short only called for target short
         assert worker.scroll_to_next_short.call_count == 4  # scrolled 4 times; breaks on 3rd non-target after reset (short #5)
         assert "t1" in watched_keys
-        # ensure_video_playing should have been called for non-target shorts
-        assert mock_evp.call_count >= 1
+        assert count == 1
 
 
-def test_non_target_short_watches_two_to_six_seconds_randomly():
-    """Verify non-target short is watched for 2 to 6 seconds randomly before skipping."""
+def test_non_target_short_watches_random_seconds_before_skipping():
+    """Verify non-target short is watched for a few seconds randomly before skipping."""
     worker = WatchingWorker.__new__(WatchingWorker)
     worker.driver = MagicMock()
     worker.log_queue = queue.Queue()
@@ -335,16 +334,54 @@ def test_non_target_short_watches_two_to_six_seconds_randomly():
     }
     worker.get_active_short_info = MagicMock(return_value=non_target_short)
 
-    with patch("src.automation.watching_worker.random.uniform", return_value=4.5) as mock_uniform, \
+    with patch("src.automation.watching_worker.random.uniform", return_value=3.5) as mock_uniform, \
          patch("src.automation.watching_worker.ensure_video_playing") as mock_evp, \
-         patch("src.automation.watching_worker.time.sleep") as mock_sleep:
+         patch("src.automation.watching_worker.time.sleep") as mock_sleep, \
+         patch("random.randint", return_value=1):
 
         worker._run_shorts_reel_loop(session_watched_keys=set())
 
-        mock_uniform.assert_called_with(2.0, 6.0)
+        mock_uniform.assert_called_with(2.0, 5.0)
         mock_evp.assert_called_once()
-        # Sleep called in increments adding up to 4.5s
         assert mock_sleep.call_count >= 1
+
+
+def test_non_target_short_never_added_to_target_channel_queue():
+    """Verify non-target short (e.g. Sami Yusuf) is not misattributed to target channel (e.g. Summia Jamshed) or queued."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.check_pause = MagicMock()
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+    worker.get_target_channels = MagicMock(return_value=[Channel(name="Summia Jamshed", enabled=True)])
+    worker.get_target_shorts = MagicMock(return_value=[])
+    worker._ensure_video_in_queue = MagicMock()
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 1
+    config_mgr.get_video_queue.return_value = []
+    worker.config_mgr = config_mgr
+
+    other_short = {
+        "found": True,
+        "channel_name": "Sami Yusuf",
+        "channel_url": "https://www.youtube.com/@samiyusuf",
+        "title": "Sami Yusuf - Lifting the Veil",
+        "video_id": "sKapAW2nM1o",
+        "url": "https://www.youtube.com/shorts/sKapAW2nM1o",
+    }
+    worker.get_active_short_info = MagicMock(return_value=other_short)
+
+    with patch("src.automation.watching_worker.ensure_video_playing"), \
+         patch("src.automation.watching_worker.time.sleep"), \
+         patch("random.randint", return_value=1):
+
+        worker._run_shorts_reel_loop(session_watched_keys=set())
+
+        # Crucial check: _ensure_video_in_queue must NEVER be called for other channel
+        worker._ensure_video_in_queue.assert_not_called()
 
 
 def test_like_active_short_when_unliked():
@@ -656,8 +693,8 @@ def test_target_short_resets_non_target_counter_example():
 
     with patch("src.automation.watching_worker.watch_short") as mock_ws, \
          patch("src.automation.watching_worker.human_like_delay"), \
-         patch("src.automation.watching_worker.ensure_video_playing"), \
-         patch("src.automation.watching_worker.time.sleep"):
+         patch("time.sleep", return_value=None), \
+         patch("random.randint", side_effect=[10, 10, 1]):
         from src.models.watch_stats import WatchResult
         mock_ws.return_value = WatchResult(completed=True, watched_seconds=15.0, video_duration=10.0, playback_finished=True)
         watched_keys = set()
@@ -668,3 +705,89 @@ def test_target_short_resets_non_target_counter_example():
         # 8 skips + 1 target watch + 10 skips = 19 shorts processed.
         # It scrolls 18 times and breaks on the 10th non-target after target short.
         assert worker.scroll_to_next_short.call_count == 18
+
+
+def test_home_shorts_matching_by_id_and_title_and_channel():
+    """Verify match_home_short matches tasks in Shorts Queue by ID, Title, and Channel."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.log_queue = queue.Queue()
+
+    task_by_id = VideoTask(url="https://www.youtube.com/shorts/vid12345678", title="Custom Title", enabled=True)
+    task_by_title = VideoTask(url="https://www.youtube.com/shorts/different11", title="Viral Cat Video", enabled=True)
+    task_by_channel = VideoTask(url="https://www.youtube.com/shorts/other123456", title="", channel="Target Creator", enabled=True)
+
+    # 1. Candidate matching by video ID
+    cand1 = [{"video_id": "vid12345678", "href": "/shorts/vid12345678", "title": "Random Title"}]
+    m1 = worker.match_home_short(cand1, [task_by_id])
+    assert m1 is not None
+    assert m1[1] == task_by_id
+
+    # 2. Candidate matching by Title
+    cand2 = [{"video_id": "random99999", "href": "/shorts/random99999", "title": "Viral Cat Video Highlights"}]
+    m2 = worker.match_home_short(cand2, [task_by_title])
+    assert m2 is not None
+    assert m2[1] == task_by_title
+
+    # 3. Candidate matching by Channel
+    cand3 = [{"video_id": "random88888", "href": "/shorts/random88888", "title": "Cool Video", "channel": "Target Creator"}]
+    m3 = worker.match_home_short(cand3, [task_by_channel])
+    assert m3 is not None
+    assert m3[1] == task_by_channel
+
+    # 4. Non-matching candidate returns None
+    cand4 = [{"video_id": "unmatched11", "href": "/shorts/unmatched11", "title": "Unrelated Cooking Video", "channel": "Chef Joe"}]
+    m4 = worker.match_home_short(cand4, [task_by_id, task_by_title, task_by_channel])
+    assert m4 is None
+
+
+def test_find_target_short_on_home_diagnostic_logging():
+    """Verify find_target_short_on_home logs candidate evaluation correctly and distinguishes missing shelf vs unmatched candidates."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+
+    task = VideoTask(url="https://www.youtube.com/shorts/targetVid11", title="Target Short", enabled=True)
+    worker.get_target_shorts = MagicMock(return_value=[task])
+
+    # Scenario A: Shelf is present with 3 shorts, but NONE match our queue
+    unmatched_candidates = [
+        {"video_id": "otherVid111", "href": "/shorts/otherVid111", "title": "Cooking 101"},
+        {"video_id": "otherVid222", "href": "/shorts/otherVid222", "title": "Gaming Clip"},
+        {"video_id": "otherVid333", "href": "/shorts/otherVid333", "title": "Funny Dog"},
+    ]
+    worker.fetch_home_shorts = MagicMock(return_value=unmatched_candidates)
+
+    with patch("src.automation.watching_worker.human_like_delay"):
+        result = worker.find_target_short_on_home(max_scrolls=1)
+
+    assert result is None
+    logs = []
+    while not worker.log_queue.empty():
+        logs.append(worker.log_queue.get())
+
+    # Ensure it logged that 3 Shorts were found on Home feed, but none matched
+    found_unmatched_msg = any("Found 3 Short(s) on Home feed, but none matched any enabled task in your Shorts Queue" in log for log in logs)
+    assert found_unmatched_msg is True
+    # Ensure it did NOT falsely claim the shelf was missing
+    falsely_missing = any("Shorts shelf/items not yet visible in Home feed" in log for log in logs)
+    assert falsely_missing is False
+
+    # Scenario B: Shelf is genuinely missing (0 items found)
+    worker.fetch_home_shorts = MagicMock(return_value=[])
+    while not worker.log_queue.empty():
+        worker.log_queue.get()
+
+    with patch("src.automation.watching_worker.human_like_delay"):
+        result_empty = worker.find_target_short_on_home(max_scrolls=1)
+
+    assert result_empty is None
+    empty_logs = []
+    while not worker.log_queue.empty():
+        empty_logs.append(worker.log_queue.get())
+
+    # When 0 candidates, it correctly reports shelf not yet visible
+    correctly_missing = any("Shorts shelf/items not yet visible in Home feed" in log for log in empty_logs)
+    assert correctly_missing is True
+

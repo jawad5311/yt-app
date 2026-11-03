@@ -419,14 +419,19 @@ return (function() {
     }
 
     var shelves = document.querySelectorAll(
-        'ytd-rich-shelf-renderer[is-shorts], ytd-rich-section-renderer ytd-rich-shelf-renderer, ytd-reel-shelf-renderer'
+        'ytd-rich-shelf-renderer[is-shorts], ytd-rich-shelf-renderer, ' +
+        'ytd-rich-section-renderer ytd-rich-shelf-renderer, ytd-reel-shelf-renderer, ' +
+        'grid-shelf-view-model, yt-shelf-view-model'
     );
 
     var cardElements = [];
     if (shelves.length > 0) {
         for (var s = 0; s < shelves.length; s++) {
             var items = shelves[s].querySelectorAll(
-                'ytd-rich-item-renderer, ytd-reel-item-renderer, ytm-shorts-lockup-view-model-v2, ytm-shorts-lockup-view-model'
+                'ytd-rich-item-renderer, ytd-reel-item-renderer, ' +
+                'ytm-shorts-lockup-view-model-v2, ytm-shorts-lockup-view-model, ' +
+                'shorts-lockup-view-model, yt-shorts-lockup-view-model, ' +
+                'yt-lockup-view-model'
             );
             for (var i = 0; i < items.length; i++) {
                 cardElements.push(items[i]);
@@ -435,7 +440,9 @@ return (function() {
     }
 
     var directLockups = document.querySelectorAll(
-        'ytm-shorts-lockup-view-model-v2, ytm-shorts-lockup-view-model, ytd-rich-item-renderer[is-slim-media]'
+        'ytm-shorts-lockup-view-model-v2, ytm-shorts-lockup-view-model, ' +
+        'shorts-lockup-view-model, yt-shorts-lockup-view-model, ' +
+        'ytd-rich-item-renderer[is-slim-media]'
     );
     for (var j = 0; j < directLockups.length; j++) {
         cardElements.push(directLockups[j]);
@@ -446,6 +453,7 @@ return (function() {
         if (!card) continue;
 
         if (card.closest && card.closest('ytd-ad-slot-renderer, [layout*="ad"]')) continue;
+        if (card.closest && card.closest('#guide, ytd-guide-renderer, ytd-mini-guide-renderer, #masthead')) continue;
 
         var linkEl = card.querySelector(
             'a.shortsLockupViewModelHostEndpoint, a.reel-item-endpoint, a[href*="/shorts/"]'
@@ -461,7 +469,7 @@ return (function() {
         seenIds[vidId] = true;
 
         var titleEl = card.querySelector(
-            'h3.shortsLockupViewModelHostMetadataTitle a, h3 a, a.shortsLockupViewModelHostOutsideMetadataEndpoint, h3, #video-title'
+            'h3.shortsLockupViewModelHostMetadataTitle a, h3 a, a.shortsLockupViewModelHostOutsideMetadataEndpoint, h3, #video-title, [class*="title"], [class*="Title"]'
         );
         var title = '';
         if (titleEl) {
@@ -470,19 +478,77 @@ return (function() {
         if (!title && linkEl) {
             title = (linkEl.getAttribute('title') || linkEl.getAttribute('aria-label') || '').trim();
         }
+        if (title && title.indexOf(' - play Short') !== -1) {
+            title = title.replace(' - play Short', '').trim();
+        }
 
         var viewsEl = card.querySelector(
-            '.shortsLockupViewModelHostOutsideMetadataSubhead, #metadata-line, .ytContentMetadataViewModelMetadataRow'
+            '.shortsLockupViewModelHostOutsideMetadataSubhead, #metadata-line, .ytContentMetadataViewModelMetadataRow, [class*="subhead"]'
         );
         var viewsText = viewsEl ? (viewsEl.textContent || '').trim() : '';
 
+        var channelText = '';
+        var channelEl = card.querySelector(
+            'a[href*="/@"], a[href*="/channel/"], [class*="channel"], [class*="Channel"], #channel-name, .yt-core-attributed-string'
+        );
+        if (channelEl) {
+            channelText = (channelEl.textContent || channelEl.getAttribute('title') || '').trim();
+        }
+        if (!channelText) {
+            var aria = (linkEl.getAttribute('aria-label') || '');
+            var byMatch = aria.match(/\sby\s([^0-9]+?)(?:\s[0-9]|\sago|\s-\splay|\.|$)/i);
+            if (byMatch && byMatch[1]) {
+                channelText = byMatch[1].trim();
+            }
+        }
+
         results.push({
-            index: idx,
+            index: results.length,
             href: href,
             video_id: vidId,
             url: href.startsWith('http') ? href : ('https://www.youtube.com' + href),
             title: title || ('Short ' + vidId),
+            channel: channelText,
             views: viewsText
+        });
+    }
+
+    // Fallback: direct scan for any visible a[href*="/shorts/"] across feed
+    var allShortLinks = document.querySelectorAll('a[href*="/shorts/"]');
+    for (var k = 0; k < allShortLinks.length; k++) {
+        var a = allShortLinks[k];
+        if (!a) continue;
+        if (a.closest && a.closest('ytd-ad-slot-renderer, [layout*="ad"]')) continue;
+        if (a.closest && a.closest('#guide, ytd-guide-renderer, ytd-mini-guide-renderer, #masthead')) continue;
+
+        var aHref = a.getAttribute('href') || a.href || '';
+        var aVidId = extractVideoId(aHref);
+        if (!aVidId || seenIds[aVidId]) continue;
+        seenIds[aVidId] = true;
+
+        var aTitle = (a.getAttribute('title') || a.getAttribute('aria-label') || a.textContent || '').trim();
+        if (aTitle && aTitle.indexOf(' - play Short') !== -1) {
+            aTitle = aTitle.replace(' - play Short', '').trim();
+        }
+
+        var aCard = a.closest ? a.closest(
+            'ytm-shorts-lockup-view-model-v2, ytm-shorts-lockup-view-model, shorts-lockup-view-model, yt-shorts-lockup-view-model, ytd-rich-item-renderer, ytd-reel-item-renderer, grid-shelf-view-model'
+        ) : null;
+
+        var aChannel = '';
+        if (aCard) {
+            var chEl = aCard.querySelector('a[href*="/@"], a[href*="/channel/"], [class*="channel"], [class*="Channel"], #channel-name');
+            if (chEl) aChannel = (chEl.textContent || chEl.getAttribute('title') || '').trim();
+        }
+
+        results.push({
+            index: results.length,
+            href: aHref,
+            video_id: aVidId,
+            url: aHref.startsWith('http') ? aHref : ('https://www.youtube.com' + aHref),
+            title: aTitle || ('Short ' + aVidId),
+            channel: aChannel,
+            views: ''
         });
     }
 
@@ -493,24 +559,85 @@ return (function() {
 
 GET_ACTIVE_SHORT_INFO_JS = r"""
 return (function() {
-    var activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
-    var scope = activeReel || document;
+    var renderers = document.querySelectorAll('ytd-reel-video-renderer');
+    var activeReel = null;
+
+    // 1. Identify active renderer by URL video ID
+    var currentUrl = window.location.href || '';
+    var m = currentUrl.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+    var activeVidId = m ? m[1] : '';
+
+    if (activeVidId && renderers.length > 0) {
+        for (var i = 0; i < renderers.length; i++) {
+            var r = renderers[i];
+            if (r.querySelector('a[href*="' + activeVidId + '"]') ||
+                (r.getAttribute('id') && r.getAttribute('id').indexOf(activeVidId) !== -1)) {
+                activeReel = r;
+                break;
+            }
+        }
+    }
+
+    // 2. Identify active renderer by viewport center (currently displayed on screen)
+    if (!activeReel && renderers.length > 0) {
+        var vCenter = window.innerHeight / 2;
+        for (var i = 0; i < renderers.length; i++) {
+            var rect = renderers[i].getBoundingClientRect();
+            if (rect.top <= vCenter && rect.bottom >= vCenter) {
+                activeReel = renderers[i];
+                break;
+            }
+        }
+    }
+
+    // 3. Fallback: is-active attribute
+    if (!activeReel) {
+        activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
+    }
+
+    // 4. Fallback: renderer containing the playing video element
+    if (!activeReel) {
+        var videos = document.querySelectorAll('video');
+        for (var i = 0; i < videos.length; i++) {
+            var v = videos[i];
+            if (!v.paused || v.currentTime > 0) {
+                var pr = v.closest('ytd-reel-video-renderer');
+                if (pr) {
+                    activeReel = pr;
+                    break;
+                }
+            }
+        }
+    }
+
+    // CRITICAL: If no active reel is found, return found: false and empty metadata.
+    // NEVER fall back to searching the entire document as that grabs the previous short's channel!
+    if (!activeReel) {
+        return {
+            found: false,
+            channel_name: '',
+            channel_url: '',
+            title: '',
+            url: window.location.href
+        };
+    }
 
     var channelName = '';
     var channelUrl = '';
 
-    // 1. Channel link in modern reel channel bar or header
-    var chLink = scope.querySelector(
+    // Query channel link strictly within activeReel
+    var chLink = activeReel.querySelector(
         'yt-reel-channel-bar-view-model .ytReelChannelBarViewModelChannelName a, ' +
         'yt-reel-channel-bar-view-model a[href*="/@"], ' +
         'yt-reel-channel-bar-view-model a[href*="/channel/"], ' +
+        'ytd-channel-name a, #channel-name a, ' +
         '.ytReelMetapanelViewModelMetapanelItem a[href*="/@"], ' +
         '.ytReelMetapanelViewModelMetapanelItem a[href*="/channel/"], ' +
-        'a.ytAttributedStringLink[href*="/@"], ' +
         'ytd-reel-player-header-renderer ytd-channel-name a, ' +
         'ytd-reel-player-header-renderer a[href*="/@"], ' +
         'ytd-reel-player-header-renderer a[href*="/channel/"], ' +
-        'ytd-channel-name a, #channel-name a, a[href*="/@"], a[href*="/channel/"]'
+        'a.ytAttributedStringLink[href*="/@"], ' +
+        'a[href*="/@"], a[href*="/channel/"]'
     );
 
     if (chLink) {
@@ -518,9 +645,9 @@ return (function() {
         channelUrl = chLink.getAttribute('href') || '';
     }
 
-    // 2. Avatar or button with "Go to channel @handle" aria-label
+    // Check avatar or button with aria-label strictly within activeReel
     if (!channelName) {
-        var avatarEl = scope.querySelector('.ytSpecAvatarShapeHost[aria-label*="Go to channel" i], [aria-label*="Go to channel" i]');
+        var avatarEl = activeReel.querySelector('.ytSpecAvatarShapeHost[aria-label*="Go to channel" i], [aria-label*="Go to channel" i]');
         if (avatarEl) {
             var aLabel = avatarEl.getAttribute('aria-label') || '';
             var match = aLabel.match(/Go to channel\s+(@?[^\s]+)/i);
@@ -533,9 +660,9 @@ return (function() {
         }
     }
 
-    // 3. Fallback text element
+    // Fallback channel text container strictly within activeReel
     if (!channelName) {
-        var chEl = scope.querySelector(
+        var chEl = activeReel.querySelector(
             'yt-reel-channel-bar-view-model .ytReelChannelBarViewModelChannelName, ' +
             'ytd-channel-name #text, ytd-channel-name, #channel-name'
         );
@@ -548,8 +675,9 @@ return (function() {
         channelUrl = channelName.startsWith('/') ? channelName : ('/' + channelName);
     }
 
-    var titleEl = scope.querySelector(
-        'ytd-reel-player-header-renderer h2, h2.title, #video-title, .title.ytd-reel-player-header-renderer, .ytReelMetapanelViewModelMetapanelItem h2'
+    // Title strictly within activeReel
+    var titleEl = activeReel.querySelector(
+        'ytd-reel-player-header-renderer h2, h2.title, #video-title, .title.ytd-reel-player-header-renderer, .ytReelMetapanelViewModelMetapanelItem h2, yt-reel-metapanel-view-model h2, h2'
     );
     var title = titleEl ? (titleEl.textContent || '').trim() : '';
 
@@ -683,6 +811,35 @@ def match_channel(
         return name_matches[0]
 
     return None
+
+
+class ReelLoopResult(tuple):
+    """Result returned by _run_shorts_reel_loop.
+    Unpacks as (target_shorts_watched, non_targets_in_this_reel, exit_reason),
+    while also comparing equal to target_shorts_watched when compared with int.
+    """
+    def __new__(cls, target_shorts_watched: int, non_targets_in_this_reel: int, exit_reason: str):
+        return super().__new__(cls, (target_shorts_watched, non_targets_in_this_reel, exit_reason))
+
+    @property
+    def target_shorts_watched(self) -> int:
+        return self[0]
+
+    @property
+    def non_targets(self) -> int:
+        return self[1]
+
+    @property
+    def exit_reason(self) -> str:
+        return self[2]
+
+    def __eq__(self, other):
+        if isinstance(other, int):
+            return self[0] == other
+        return super().__eq__(other)
+
+    def __int__(self):
+        return self[0]
 
 
 class WatchingWorker:
@@ -1337,6 +1494,18 @@ class WatchingWorker:
         except Exception:
             pass
 
+    def _get_cooldown_hours(self) -> float:
+        mgr = getattr(self, "config_mgr", None)
+        if mgr is None:
+            return 12.0
+        try:
+            val = mgr.get_float("VideoCooldownHours", 12.0)
+            if isinstance(val, (int, float)):
+                return float(val)
+            return 12.0
+        except Exception:
+            return 12.0
+
     def is_candidate_eligible(
         self,
         full_url: str,
@@ -1381,7 +1550,7 @@ class WatchingWorker:
                 except (ValueError, TypeError):
                     video_duration = 0.0
 
-        cooldown_hours = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+        cooldown_hours = self._get_cooldown_hours()
 
         if existing_task is not None:
             # If manually disabled in queue
@@ -1769,7 +1938,7 @@ class WatchingWorker:
         if not valid_candidates:
             return None
 
-        cooldown_hours = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+        cooldown_hours = self._get_cooldown_hours()
         fresh = []
         for c in valid_candidates:
             v_id = extract_video_id(c.get("href", "")) or ""
@@ -1912,6 +2081,17 @@ class WatchingWorker:
 
         if target_rec_id:
             session_watched_keys.add(target_rec_id)
+            if self.stats_store:
+                self._record_watch(
+                    title=title,
+                    channel_name="",
+                    watch_seconds=watch_res.watched_seconds,
+                    ad_seconds=watch_res.ad_seconds,
+                    duration=watch_res.video_duration,
+                    completed=watch_res.completed,
+                    playback_finished=watch_res.playback_finished,
+                    interrupted=watch_res.interrupted,
+                )
 
         if hasattr(self, "channel_tracker") and self.channel_tracker and (watch_res.watched_seconds > 0 or watch_res.completed):
             self.channel_tracker.record_video_watched(is_short=False, channel_name=None, source="suggested", is_random=True)
@@ -2156,17 +2336,29 @@ class WatchingWorker:
             emit(self.log_queue, f"Error fetching home shorts: {exc}", logging.DEBUG)
             return []
 
-    def get_target_shorts(self) -> List[VideoTask]:
+    def get_target_shorts(self, filter_cooldown: bool = False) -> List[VideoTask]:
         """Retrieve all enabled target shorts configured in the app."""
         target_shorts: List[VideoTask] = []
-        if self.config_mgr:
+        cooldown_hours = self._get_cooldown_hours()
+        cfg = getattr(self, "config_mgr", None)
+        if cfg:
             try:
-                raw_queue = self.config_mgr.get_video_queue()
+                raw_queue = cfg.get_video_queue()
                 for item in raw_queue:
                     if not isinstance(item, dict):
                         continue
                     task = VideoTask.from_dict(item)
-                    if task.enabled and (task.is_short or "/shorts/" in (task.url or "")):
+                    if task.enabled and (task.is_short or "/shorts/" in (task.url or "") or bool(item.get("is_short", False))):
+                        if filter_cooldown and cooldown_hours > 0 and getattr(self, "stats_store", None):
+                            rec = self.stats_store.find_for_task(task)
+                            if rec and hasattr(rec, "is_on_cooldown"):
+                                try:
+                                    res = rec.is_on_cooldown(cooldown_hours)
+                                    is_cool = res[0] if (isinstance(res, tuple) and len(res) == 2) else False
+                                except Exception:
+                                    is_cool = False
+                                if is_cool:
+                                    continue
                         target_shorts.append(task)
             except Exception as exc:
                 emit(self.log_queue, f"Error loading target shorts from queue: {exc}", logging.DEBUG)
@@ -2180,7 +2372,7 @@ class WatchingWorker:
     ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
         """
         Match only one Short at a time by inspecting the first Short in the list of candidate shorts
-        and matching its URL / video ID against the Shorts in our Shorts queue.
+        and matching its URL / video ID / title against the Shorts in our Shorts queue.
         Returns (first_short, matched_task) if there is a match, otherwise None.
         """
         if not candidate_shorts or not target_shorts:
@@ -2189,16 +2381,44 @@ class WatchingWorker:
         first_short = candidate_shorts[0]
         cand_id = first_short.get("video_id") or extract_video_id(first_short.get("href", ""))
         cand_url = first_short.get("url") or first_short.get("href", "")
+        cand_title = (first_short.get("title") or "").strip().lower()
+        cand_channel = (first_short.get("channel") or "").strip().lower()
 
-        if not cand_id and not cand_url:
+        if not cand_id and not cand_url and not cand_title:
             return None
 
         for t in target_shorts:
+            if not getattr(t, "enabled", True):
+                continue
+
+            # 1. Match by Video ID (e.g. /shorts/<id> or /watch?v=<id>)
             task_id = extract_video_id(t.url)
-            if task_id and cand_id and task_id == cand_id:
+            if task_id and cand_id and task_id.lower() == cand_id.lower():
                 return (first_short, t)
-            if cand_url and t.url and cand_url.split("?")[0] == t.url.split("?")[0]:
+
+            # 2. Match by Clean URL
+            clean_cand_url = cand_url.split("?")[0].rstrip("/") if cand_url else ""
+            clean_task_url = t.url.split("?")[0].rstrip("/") if t.url else ""
+            if clean_cand_url and clean_task_url and clean_cand_url == clean_task_url:
                 return (first_short, t)
+
+            # 3. Match by Title / Search Queries
+            queries = t.get_title_queries() if hasattr(t, "get_title_queries") else [t.title]
+            if cand_title and queries:
+                for q in queries:
+                    q_clean = q.strip().lower()
+                    if not q_clean:
+                        continue
+                    if q_clean == cand_title:
+                        return (first_short, t)
+                    if len(q_clean) >= 4 and (q_clean in cand_title or cand_title in q_clean):
+                        return (first_short, t)
+
+            # 4. Match by Channel if task specifies a channel and candidate has detected channel
+            if cand_channel and getattr(t, "channel", ""):
+                task_ch = t.channel.strip().lower()
+                if task_ch and (task_ch == cand_channel or task_ch in cand_channel or cand_channel in task_ch):
+                    return (first_short, t)
 
         return None
 
@@ -2208,18 +2428,89 @@ class WatchingWorker:
         max_scrolls: int = 3,
     ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
         """Scan YouTube Home page shelves for targeted shorts, scrolling down up to max_scrolls times if needed."""
-        target_shorts = self.get_target_shorts()
+        cooldown_hours = self._get_cooldown_hours()
+        target_shorts = self.get_target_shorts(filter_cooldown=True)
         if not target_shorts:
+            emit(self.log_queue, "Shorts Queue has no enabled tasks available outside cooldown. Skipping Home Shorts search.", logging.INFO)
             return None
 
+        total_candidates_seen = 0
+        seen_cand_ids: Set[str] = set()
+
         for scroll_idx in range(max_scrolls + 1):
+            if self.stop_event.is_set():
+                return None
+            self.check_pause()
+            if self.stop_event.is_set():
+                return None
+
             candidate_shorts = self.fetch_home_shorts()
             for cand in candidate_shorts:
+                cid = cand.get("video_id") or extract_video_id(cand.get("href", ""))
+                if cid and cid not in seen_cand_ids:
+                    seen_cand_ids.add(cid)
+                    total_candidates_seen += 1
+
+            for cand in candidate_shorts:
+                cid = cand.get("video_id") or extract_video_id(cand.get("href", ""))
+                curl = cand.get("url") or cand.get("href", "")
+                if session_watched_keys and (cid in session_watched_keys or curl in session_watched_keys):
+                    continue
+
+                if cid and getattr(self, "stats_store", None) and cooldown_hours > 0:
+                    rec_stat = self.stats_store.get(cid)
+                    if rec_stat and hasattr(rec_stat, "is_on_cooldown"):
+                        try:
+                            res = rec_stat.is_on_cooldown(cooldown_hours)
+                            is_cool = res[0] if (isinstance(res, tuple) and len(res) == 2) else False
+                        except Exception:
+                            is_cool = False
+                        if is_cool:
+                            continue
+
                 m = self.match_home_short([cand], target_shorts, session_watched_keys)
                 if m:
+                    cand_item, task_item = m
+                    if getattr(self, "stats_store", None) and cooldown_hours > 0:
+                        task_rec = self.stats_store.find_for_task(task_item)
+                        if task_rec and hasattr(task_rec, "is_on_cooldown"):
+                            try:
+                                res = task_rec.is_on_cooldown(cooldown_hours)
+                                if isinstance(res, tuple) and len(res) == 2:
+                                    is_cool, rem_hours = res
+                                else:
+                                    is_cool, rem_hours = False, 0.0
+                            except Exception:
+                                is_cool, rem_hours = False, 0.0
+                            if is_cool:
+                                rem_str = f"{rem_hours:.1f}h" if rem_hours >= 1.0 else f"{int(rem_hours * 60)}m"
+                                emit(
+                                    self.log_queue,
+                                    f"Skipping matched Short '{cand_item.get('title')}' for task '{task_item.title}': within {cooldown_hours:g}h cooldown period ({rem_str} remaining).",
+                                    logging.INFO,
+                                )
+                                continue
+
+                    emit(
+                        self.log_queue,
+                        f"Found matching Short on Home feed: '{cand_item.get('title')}' matching Shorts Queue task '{task_item.title or task_item.url}'.",
+                        logging.INFO,
+                    )
                     return m
+
             if scroll_idx < max_scrolls and not self.stop_event.is_set():
-                emit(self.log_queue, f"Shorts shelf not yet visible in Home feed (attempt {scroll_idx + 1}/{max_scrolls + 1}). Scrolling feed down...")
+                if len(candidate_shorts) > 0:
+                    emit(
+                        self.log_queue,
+                        f"Found {len(candidate_shorts)} Short(s) on Home feed, but none matched any enabled task in your Shorts Queue (attempt {scroll_idx + 1}/{max_scrolls + 1}). Scrolling feed down...",
+                        logging.INFO,
+                    )
+                else:
+                    emit(
+                        self.log_queue,
+                        f"Shorts shelf/items not yet visible in Home feed (attempt {scroll_idx + 1}/{max_scrolls + 1}). Scrolling feed down...",
+                        logging.INFO,
+                    )
                 try:
                     self.driver.execute_script("window.scrollBy({top: 800, behavior: 'smooth'});")
                 except Exception:
@@ -2229,6 +2520,18 @@ class WatchingWorker:
                         pass
                 human_like_delay(1.5, 2.5)
 
+        if total_candidates_seen > 0:
+            emit(
+                self.log_queue,
+                f"No Short on Home feed matched your Shorts Queue ({total_candidates_seen} candidate(s) checked across {max_scrolls + 1} attempts). Moving back to watching long-form videos.",
+                logging.INFO,
+            )
+        else:
+            emit(
+                self.log_queue,
+                f"No Shorts shelf or items were detected on the Home feed after {max_scrolls + 1} scroll attempts. Moving back to watching long-form videos.",
+                logging.INFO,
+            )
         return None
 
     def click_home_short(self, short_info: Dict[str, Any]) -> bool:
@@ -2240,15 +2543,18 @@ class WatchingWorker:
                 matched_el = self.driver.execute_script(r"""
                     var vidId = arguments[0];
                     var links = document.querySelectorAll(
-                        'ytd-rich-shelf-renderer[is-shorts] a[href*="' + vidId + '"], ' +
+                        'ytd-rich-shelf-renderer a[href*="' + vidId + '"], ' +
+                        'grid-shelf-view-model a[href*="' + vidId + '"], ' +
                         'ytd-rich-section-renderer a[href*="' + vidId + '"], ' +
                         'ytm-shorts-lockup-view-model-v2 a[href*="' + vidId + '"], ' +
                         'ytm-shorts-lockup-view-model a[href*="' + vidId + '"], ' +
+                        'shorts-lockup-view-model a[href*="' + vidId + '"], ' +
                         'a[href*="/shorts/' + vidId + '"]'
                     );
                     for (var i = 0; i < links.length; i++) {
                         var l = links[i];
                         if (l.closest && l.closest('ytd-ad-slot-renderer, [layout*="ad"]')) continue;
+                        if (l.closest && l.closest('#guide, ytd-guide-renderer, ytd-mini-guide-renderer, #masthead')) continue;
                         return l;
                     }
                     return null;
@@ -2293,6 +2599,7 @@ class WatchingWorker:
         short_info: Dict[str, Any],
         task: VideoTask,
         session_watched_keys: Set[str],
+        enter_reel: bool = True,
     ) -> bool:
         """Watch a matched short for 1-3 loops randomly in a single go and record stats."""
         title = short_info.get("title") or task.title or "Short"
@@ -2308,7 +2615,7 @@ class WatchingWorker:
         human_like_delay(1.5, 2.5)
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-        target_loops = random.randint(1, 3)
+        target_loops = random.randint(1, 2)
         ch_name = task.channel or "Shorts Channel"
         self.channel_tracker.set_active_channel(ch_name)
 
@@ -2379,14 +2686,32 @@ class WatchingWorker:
             self.log_queue,
             f"Logged Target Short view ({actual_watched:.0f}s watched, {target_loops} loop(s)).",
         )
-        # Continue into the Shorts reel loop:
-        self._run_shorts_reel_loop(session_watched_keys=session_watched_keys)
+        if enter_reel:
+            prev_url = full_url or getattr(self.driver, "current_url", "")
+            self.scroll_to_next_short(prev_url=prev_url)
+            human_like_delay(1.0, 1.8)
+            # Continue into the Shorts reel loop:
+            self._run_shorts_reel_loop(session_watched_keys=session_watched_keys)
 
         return watch_res.completed or watch_res.playback_finished
 
 
     def get_active_short_info(self) -> Dict[str, Any]:
         """Extract metadata of the currently active Short in the reel."""
+        for attempt in range(4):
+            try:
+                info = self.driver.execute_script(GET_ACTIVE_SHORT_INFO_JS)
+                if isinstance(info, dict) and info.get("found") and info.get("channel_name"):
+                    curr_url = getattr(self.driver, "current_url", "") or info.get("url", "")
+                    info["url"] = curr_url
+                    info["video_id"] = extract_video_id(curr_url)
+                    return info
+            except Exception as exc:
+                emit(self.log_queue, f"Error getting active short info: {exc}", logging.DEBUG)
+            if attempt < 3:
+                time.sleep(0.3)
+
+        # Fallback if channel_name wasn't populated within retry attempts
         try:
             info = self.driver.execute_script(GET_ACTIVE_SHORT_INFO_JS)
             if isinstance(info, dict):
@@ -2394,8 +2719,9 @@ class WatchingWorker:
                 info["url"] = curr_url
                 info["video_id"] = extract_video_id(curr_url)
                 return info
-        except Exception as exc:
-            emit(self.log_queue, f"Error getting active short info: {exc}", logging.DEBUG)
+        except Exception:
+            pass
+
         curr_url = getattr(self.driver, "current_url", "")
         return {
             "found": False,
@@ -2462,23 +2788,200 @@ class WatchingWorker:
                 break
         return True
 
-    def _run_shorts_reel_loop(
+    def _run_shorts_cycle(
         self,
         session_watched_keys: Set[str],
     ) -> int:
         """
-        Continuously navigate and watch Shorts on the Shorts reel:
-        - If active Short is from a targeted channel: watch for 1-3 loops randomly, sync stats, scroll down.
-        - If active Short is NOT from a targeted channel: skip immediately and scroll down.
-        - Exits once non-target shorts limit (NonTargetShortsLimit) is reached or stopped.
-        Returns the number of target shorts watched.
+        Execute a full Shorts cycle:
+        1. Desired Target Shorts: TargetShortsPerCycle (±20%, e.g. 10 -> 8-12).
+        2. Max Total Non-Target Shorts Limit: TotalNonTargetShortsLimit (±20%, e.g. 20 -> 16-24).
+        3. Max Non-Target Reels on scrolling page: NonTargetReelsLimit (±20%, e.g. 10 -> 8-12).
+        Flow:
+        - Scans Home feed for a matching Short from targeted channels.
+        - If found: plays it (full short), enters the Shorts reel.
+        - In the reel: skips non-target reels immediately to the next one, incrementing the reel counter.
+          If a targeted short is found: watches full short, credits view, RESETS reel counter back to 0!
+        - If reel counter reaches limit: returns to Home feed to find next target short.
+        - If desired targeted shorts reached OR max total non-target shorts limit reached: moves to watching long videos.
+        - If no matching short found on Home: moves to watching long videos.
         """
-        max_non_target = self.config_mgr.get_int("NonTargetShortsLimit", 5) if self.config_mgr else 5
-        non_target_count = 0
-        target_shorts_watched = 0
+        base_target_shorts = self.config_mgr.get_int("TargetShortsPerCycle", 10) if self.config_mgr else 10
+        min_target_shorts = max(1, round(base_target_shorts * 0.8))
+        max_target_shorts = max(min_target_shorts, round(base_target_shorts * 1.2))
+        cycle_target_shorts = random.randint(min_target_shorts, max_target_shorts)
 
-        emit(self.log_queue, f"=== Entering YouTube Shorts Reel Loop (Max non-target skips: {max_non_target}) ===")
+        base_total_non_target = self.config_mgr.get_int("TotalNonTargetShortsLimit", 20) if self.config_mgr else 20
+        min_total_non_target = max(1, round(base_total_non_target * 0.8))
+        max_total_non_target = max(min_total_non_target, round(base_total_non_target * 1.2))
+        cycle_max_total_non_target = random.randint(min_total_non_target, max_total_non_target)
 
+        total_target_shorts_watched = 0
+        total_non_target_shorts_seen = 0
+
+        emit(
+            self.log_queue,
+            f"=== Starting Shorts Cycle ===\n"
+            f"Desired Target Shorts for this cycle: {cycle_target_shorts} (configured base {base_target_shorts} ±20% [range {min_target_shorts}-{max_target_shorts}]).\n"
+            f"Max Total Non-Target Shorts Limit: {cycle_max_total_non_target} (configured base {base_total_non_target} ±20% [range {min_total_non_target}-{max_total_non_target}]).",
+            logging.INFO,
+        )
+
+        while not self.stop_event.is_set():
+            self.check_pause()
+            if self.stop_event.is_set():
+                break
+
+            if total_target_shorts_watched >= cycle_target_shorts:
+                emit(
+                    self.log_queue,
+                    f"Achieved desired target of {total_target_shorts_watched}/{cycle_target_shorts} targeted Short(s)! Exiting Shorts cycle and moving to watching long-form videos.",
+                    logging.INFO,
+                )
+                break
+
+            if total_non_target_shorts_seen >= cycle_max_total_non_target:
+                emit(
+                    self.log_queue,
+                    f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Exiting Shorts cycle and moving to watching long-form videos.",
+                    logging.INFO,
+                )
+                break
+
+            # 1. Search YouTube Home feed for a matching Short from Shorts Queue
+            emit(
+                self.log_queue,
+                f"Searching YouTube Home feed for Shorts matching your Shorts Queue (progress: {total_target_shorts_watched}/{cycle_target_shorts} target Shorts, {total_non_target_shorts_seen}/{cycle_max_total_non_target} non-target Shorts)...",
+                logging.INFO,
+            )
+            matched_short = self.find_target_short_on_home(
+                session_watched_keys=session_watched_keys,
+                max_scrolls=3,
+            )
+
+            if not matched_short:
+                emit(
+                    self.log_queue,
+                    "No matching Short found on Home feed for tasks in Shorts Queue. Moving back to watching long-form videos.",
+                    logging.INFO,
+                )
+                break
+
+            short_item, short_task = matched_short
+            emit(
+                self.log_queue,
+                f"Selected matching Short from Home feed: '{short_task.title or short_item.get('title')}' ({short_item.get('url') or short_task.url}). Clicking to play full short...",
+                logging.INFO,
+            )
+            self.target_attempts += 1
+            self.watched_count = self.target_attempts
+            prog_total = self.target_limit if not self.is_unlimited else 0
+            self._emit_event(("progress", 0, self.target_attempts, prog_total))
+
+            played_ok = self._play_target_short(
+                short_info=short_item,
+                task=short_task,
+                session_watched_keys=session_watched_keys,
+                enter_reel=False,
+            )
+            total_target_shorts_watched += 1
+
+            if total_target_shorts_watched >= cycle_target_shorts:
+                emit(
+                    self.log_queue,
+                    f"Achieved desired target of {total_target_shorts_watched}/{cycle_target_shorts} targeted Short(s)! Exiting Shorts cycle and moving to watching long-form videos.",
+                    logging.INFO,
+                )
+                break
+
+            # 2. Advance to next short before continuing the reel loop so the bot
+            # does not re-watch the short that was just opened from Home
+            prev_url = short_item.get("url") or short_task.url or getattr(self.driver, "current_url", "")
+            self.scroll_to_next_short(prev_url=prev_url)
+            human_like_delay(1.0, 1.8)
+
+            watched_in_reel, non_targets_in_reel, exit_reason = self._run_shorts_reel_loop(
+                session_watched_keys=session_watched_keys,
+                current_target_watched=total_target_shorts_watched,
+                cycle_target_shorts=cycle_target_shorts,
+                current_total_non_target=total_non_target_shorts_seen,
+                cycle_max_total_non_target=cycle_max_total_non_target,
+            )
+            total_target_shorts_watched = watched_in_reel
+            total_non_target_shorts_seen += non_targets_in_reel
+
+            if exit_reason == "target_achieved" or total_target_shorts_watched >= cycle_target_shorts:
+                emit(
+                    self.log_queue,
+                    f"Achieved desired target of {total_target_shorts_watched}/{cycle_target_shorts} targeted Short(s)! Moving to watching long-form videos.",
+                    logging.INFO,
+                )
+                break
+
+            if exit_reason == "total_non_target_limit" or total_non_target_shorts_seen >= cycle_max_total_non_target:
+                emit(
+                    self.log_queue,
+                    f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Moving to watching long-form videos.",
+                    logging.INFO,
+                )
+                break
+
+            # If exit_reason == "reel_limit_reached", it returns to Home page to find the next short
+            emit(
+                self.log_queue,
+                "Navigating back to YouTube Home page to find the next target Short...",
+                logging.INFO,
+            )
+            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+            human_like_delay(2.0, 3.5)
+            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
+        return total_target_shorts_watched
+
+    def _run_shorts_reel_loop(
+        self,
+        session_watched_keys: Set[str],
+        current_target_watched: int = 0,
+        cycle_target_shorts: Optional[int] = None,
+        current_total_non_target: int = 0,
+        cycle_max_total_non_target: Optional[int] = None,
+    ) -> Tuple[int, int, str]:
+        """
+        Continuously navigate and watch Shorts on the Shorts reel:
+        - If active Short is from a targeted channel: watch full short (1-3 loops), sync stats, reset reel non-target counter.
+        - If active Short is NOT from a targeted channel: skip that short and move to next reel.
+        - Exits with 'target_achieved' once cycle_target_shorts is reached.
+        - Exits with 'reel_limit_reached' once NonTargetReelsLimit (±20% randomized) is reached on this scrolling page.
+        - Exits with 'total_non_target_limit' if total non-target shorts reaches cycle_max_total_non_target.
+        Returns (target_shorts_watched, non_targets_in_this_reel, exit_reason).
+        """
+        if cycle_target_shorts is None:
+            base_target_shorts = self.config_mgr.get_int("TargetShortsPerCycle", 10) if self.config_mgr else 10
+            min_target_shorts = max(1, round(base_target_shorts * 0.8))
+            max_target_shorts = max(min_target_shorts, round(base_target_shorts * 1.2))
+            cycle_target_shorts = random.randint(min_target_shorts, max_target_shorts)
+
+        base_reel_non_target = self.config_mgr.get_int("NonTargetReelsLimit", self.config_mgr.get_int("NonTargetShortsLimit", 10)) if self.config_mgr else 10
+        min_reel_non_target = max(1, round(base_reel_non_target * 0.8))
+        max_reel_non_target = max(min_reel_non_target, round(base_reel_non_target * 1.2))
+        cycle_reel_max_non_target = random.randint(min_reel_non_target, max_reel_non_target)
+
+        reel_non_target_count = 0
+        non_targets_in_this_reel = 0
+        target_shorts_watched = current_target_watched
+
+        emit(
+            self.log_queue,
+            f"=== Entering YouTube Shorts Reel Loop ===\n"
+            f"Target Shorts for cycle: {cycle_target_shorts}. Current progress: {target_shorts_watched}/{cycle_target_shorts}.\n"
+            f"Max Non-Target Reels on scrolling page: {cycle_reel_max_non_target} (configured base {base_reel_non_target} ±20% [range {min_reel_non_target}-{max_reel_non_target}]).",
+            logging.INFO,
+        )
+
+        if target_shorts_watched >= cycle_target_shorts:
+            return ReelLoopResult(target_shorts_watched, 0, "target_achieved")
+
+        exit_reason = "stopped"
         while not self.stop_event.is_set():
             self.check_pause()
             if self.stop_event.is_set():
@@ -2519,13 +3022,43 @@ class WatchingWorker:
             is_target = bool(matched_channel or matched_task)
 
             if is_target:
-                non_target_count = 0
+                ch_display = (matched_channel.name if matched_channel else (matched_task.channel if matched_task else ch_name)) or "Target Channel"
+                # Check cooldown before accepting as a target watch
+                cooldown_hours = self._get_cooldown_hours()
+                rec = None
+                store = getattr(self, "stats_store", None)
+                if store:
+                    if vid_id:
+                        rec = store.get(vid_id)
+                    if not rec and matched_task:
+                        rec = store.find_for_task(matched_task)
+
+                if rec and cooldown_hours > 0 and hasattr(rec, "is_on_cooldown"):
+                    try:
+                        res = rec.is_on_cooldown(cooldown_hours)
+                        if isinstance(res, tuple) and len(res) == 2:
+                            is_cool, remaining_hours = res
+                        else:
+                            is_cool, remaining_hours = False, 0.0
+                    except Exception:
+                        is_cool, remaining_hours = False, 0.0
+                    if is_cool:
+                        rem_str = f"{remaining_hours:.1f}h" if remaining_hours >= 1.0 else f"{int(remaining_hours * 60)}m"
+                        emit(
+                            self.log_queue,
+                            f"Skipping Target Short '{title}' from channel '{ch_display}': within {cooldown_hours:g}h cooldown period ({rem_str} remaining).",
+                            logging.INFO,
+                        )
+                        self._skip_non_target_reel()
+                        continue
+
+                # Reset scrolling page non-target counter back to 0!
+                reel_non_target_count = 0
                 emit(
                     self.log_queue,
-                    f"Target Short found! Reset non-target skips counter back to 0/{max_non_target}.",
+                    f"Target Short found! Reset non-target reels counter back to 0/{cycle_reel_max_non_target}.",
                     logging.INFO,
                 )
-                ch_display = (matched_channel.name if matched_channel else (matched_task.channel if matched_task else ch_name)) or "Target Channel"
 
                 if matched_task is not None:
                     registered_task = matched_task
@@ -2550,7 +3083,7 @@ class WatchingWorker:
                     )
                     registered_task = self._ensure_video_in_queue(new_task)
 
-                target_loops = random.randint(1, 3)
+                target_loops = random.randint(1, 2)
                 self.channel_tracker.set_active_channel(ch_display)
 
                 def _is_short_channel_disabled() -> Optional[str]:
@@ -2620,14 +3153,29 @@ class WatchingWorker:
                 prog_total = self.target_limit if not self.is_unlimited else 0
                 self._emit_event(("progress", 0, self.target_attempts, prog_total))
 
-                emit(self.log_queue, f"Updated stats for Short '{title}' ({full_url}): {actual_watched:.0f}s watched ({target_loops} loop(s)). Moving to next Short...")
-            else:
-                non_target_count += 1
-                ch_label = ch_name or "Unknown Channel"
-                non_target_watch_time = random.uniform(2.0, 6.0)
                 emit(
                     self.log_queue,
-                    f"Short from '{ch_label}' is not in targeted channels list. Watching for {non_target_watch_time:.1f}s randomly before skipping ({non_target_count}/{max_non_target})...",
+                    f"Updated stats for Short '{title}' ({full_url}): {actual_watched:.0f}s watched ({target_loops} loop(s)). "
+                    f"Targeted Shorts progress: {target_shorts_watched}/{cycle_target_shorts} in this cycle.",
+                    logging.INFO,
+                )
+
+                if target_shorts_watched >= cycle_target_shorts:
+                    emit(
+                        self.log_queue,
+                        f"Achieved desired target of {target_shorts_watched}/{cycle_target_shorts} targeted Short(s)! Exiting Shorts reel.",
+                        logging.INFO,
+                    )
+                    exit_reason = "target_achieved"
+                    break
+            else:
+                reel_non_target_count += 1
+                non_targets_in_this_reel += 1
+                ch_label = ch_name or "Unknown Channel"
+                non_target_watch_time = random.uniform(2.0, 5.0)
+                emit(
+                    self.log_queue,
+                    f"Short from '{ch_label}' is not in targeted channels list. Watching for {non_target_watch_time:.1f}s randomly before skipping ({reel_non_target_count}/{cycle_reel_max_non_target})...",
                     logging.INFO,
                 )
                 try:
@@ -2647,19 +3195,29 @@ class WatchingWorker:
                 if self.stop_event.is_set():
                     break
 
-                if non_target_count >= max_non_target:
+                if cycle_max_total_non_target and (current_total_non_target + non_targets_in_this_reel) >= cycle_max_total_non_target:
                     emit(
                         self.log_queue,
-                        f"Reached limit of {max_non_target} non-target Short(s) from outside targeted list. Exiting Shorts reel and moving to watching long-form videos.",
+                        f"Reached cycle ceiling of {current_total_non_target + non_targets_in_this_reel}/{cycle_max_total_non_target} total non-targeted Short(s). Exiting Shorts reel...",
                         logging.INFO,
                     )
+                    exit_reason = "total_non_target_limit"
+                    break
+
+                if reel_non_target_count >= cycle_reel_max_non_target:
+                    emit(
+                        self.log_queue,
+                        f"Reached limit of {reel_non_target_count}/{cycle_reel_max_non_target} non-targeted reels on scrolling page (base {base_reel_non_target} ±20%). Exiting reel to find next Short on Home feed...",
+                        logging.INFO,
+                    )
+                    exit_reason = "reel_limit_reached"
                     break
 
             prev_url = full_url or getattr(self.driver, "current_url", "")
             self.scroll_to_next_short(prev_url=prev_url)
-            human_like_delay(1.2, 2.0)
+            human_like_delay(1.0, 1.8)
 
-        return target_shorts_watched
+        return ReelLoopResult(target_shorts_watched, non_targets_in_this_reel, exit_reason)
 
     def search_youtube_query(self, query: str) -> bool:
         """Type and execute a YouTube search for the given query."""
@@ -3183,61 +3741,25 @@ class WatchingWorker:
                 if cycle_long_vids_watched >= target_long_vids_cycle:
                     emit(
                         self.log_queue,
-                        f"Searching YouTube Home feed for Shorts section ({cycle_long_vids_watched}/{target_long_vids_cycle} long-form videos watched)...",
+                        f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts...",
                         logging.INFO,
                     )
-                    matched_short = self.find_target_short_on_home(
-                        session_watched_keys=session_watched_keys,
-                        max_scrolls=3,
+                    self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+
+                    # Cycle completed! Reset counter and pick new random target of 3 to 5 long videos
+                    cycle_long_vids_watched = 0
+                    target_long_vids_cycle = random.randint(3, 5)
+                    suggested_miss_count = 0
+                    emit(
+                        self.log_queue,
+                        f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
+                        logging.INFO,
                     )
 
-                    if matched_short:
-                        short_item, short_task = matched_short
-                        emit(
-                            self.log_queue,
-                            f"Selected matching Short from Home feed: '{short_task.title or short_item.get('title')}' ({short_item.get('url') or short_task.url}). Clicking to play...",
-                            logging.INFO,
-                        )
-                        target_attempts += 1
-                        self.target_attempts = target_attempts
-                        self.watched_count = target_attempts
-                        prog_total = self.target_limit if not self.is_unlimited else 0
-                        self._emit_event(("progress", 0, target_attempts, prog_total))
-
-                        played_ok = self._play_target_short(
-                            short_info=short_item,
-                            task=short_task,
-                            session_watched_keys=session_watched_keys,
-                        )
-
-                        ch_display = short_task.channel or short_item.get("channel") or "Shorts Channel"
-                        ch_canon = SessionChannelTracker._canon_name(ch_display)
-                        channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
-                        last_watched_channel = ch_display
-                        consecutive_target_watched += 1
-                        suggested_miss_count = 0
-
-                        # Cycle completed! Reset counter and pick new random target of 3 to 5 long videos
-                        cycle_long_vids_watched = 0
-                        target_long_vids_cycle = random.randint(3, 5)
-                        emit(
-                            self.log_queue,
-                            f"Exited Shorts reel. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
-                            logging.INFO,
-                        )
-
-                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                        human_like_delay(2.0, 3.5)
-                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                        continue
-                    else:
-                        emit(
-                            self.log_queue,
-                            "No targeted Short found in Home feed Shorts shelves. Moving to long-form video watching...",
-                            logging.INFO,
-                        )
-                        cycle_long_vids_watched = 0
-                        target_long_vids_cycle = random.randint(3, 5)
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(2.0, 3.5)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                    continue
 
                 # Otherwise (or if no Short found on Home), look for long-form video on Home feed
                 matched_home = self._scan_home_feed_for_target(
@@ -3402,7 +3924,7 @@ class WatchingWorker:
 
             EmailReporter.send_start_notification(
                 account=self.account,
-                session_mode="Continuous Watching / Browsing",
+                session_mode="Continuous Browsing",
                 config_mgr=self.config_mgr,
                 start_time=getattr(self, "session_start_time", datetime.now()),
                 custom_subject=getattr(self, "session_thread_subject", None),
@@ -3459,7 +3981,7 @@ class WatchingWorker:
             interruption = error or (status if status != "Completed" else "Completed normally")
             report = SessionReport(
                 account_email=getattr(self.account, "email", "") if self.account else "",
-                session_mode="Continuous Watching / Browsing",
+                session_mode="Continuous Browsing",
                 start_time=report_data["start_time"],
                 end_time=report_data["end_time"],
                 duration_seconds=report_data["duration_seconds"],

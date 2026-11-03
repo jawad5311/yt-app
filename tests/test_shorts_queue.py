@@ -167,3 +167,189 @@ def test_queue_views_preserve_tasks_on_startup_and_refresh():
     assert len(video_view.video_tasks) == 2
     shorts_view.refresh_list()
     assert len(shorts_view.video_tasks) == 2
+
+
+def test_batched_card_rendering_progresses_smoothly():
+    from src.ui.views.queue_view import QueueView
+    from src.models.video_task import VideoTask
+    from src.models.channel import Channel, VideoGroup
+
+    view = QueueView.__new__(QueueView)
+    view._pending_card_queue = []
+    view._render_job = None
+    view._build_task_card = MagicMock(return_value=MagicMock())
+    view.after = MagicMock(return_value="job_123")
+
+    mock_container = MagicMock()
+    mock_container.winfo_exists.return_value = True
+    mock_group = VideoGroup(channel=Channel(name="Chan1", enabled=True), videos=[])
+
+    # Enqueue 30 card items
+    for i in range(30):
+        task = VideoTask(url=f"https://www.youtube.com/shorts/s{i}", title=f"Short {i}")
+        view._pending_card_queue.append((
+            mock_container,
+            i,
+            task,
+            i,
+            mock_group,
+            i > 0,
+            i < 29,
+            MagicMock(),
+            MagicMock(),
+        ))
+
+    assert len(view._pending_card_queue) == 30
+
+    # Process first batch of 15
+    view._process_card_render_batch(batch_size=15)
+
+    assert view._build_task_card.call_count == 15
+    assert len(view._pending_card_queue) == 15
+    view.after.assert_called_once()
+    assert view._render_job == "job_123"
+
+
+def test_cancel_pending_render_cleans_up():
+    from src.ui.views.queue_view import QueueView
+
+    view = QueueView.__new__(QueueView)
+    view._pending_card_queue = ["item1", "item2"]
+    view._render_job = "job_456"
+    view.after_cancel = MagicMock()
+
+    view._cancel_pending_render()
+
+    view.after_cancel.assert_called_once_with("job_456")
+    assert view._render_job is None
+    assert len(view._pending_card_queue) == 0
+
+
+def test_show_view_avoids_redundant_refresh_when_unchanged():
+    from src.ui.app import YTBotApp
+    from src.models.video_task import VideoTask
+
+    app = YTBotApp.__new__(YTBotApp)
+    app.current_view_name = "dashboard"
+    app._shorts_queue_needs_refresh = False
+
+    shared_tasks = [
+        VideoTask(url="https://www.youtube.com/shorts/test1", title="Short 1"),
+    ]
+    app.queued_video_tasks = shared_tasks
+
+    mock_view = MagicMock()
+    mock_view.video_tasks = shared_tasks
+    mock_child = MagicMock()
+    mock_view.scroll_frame.winfo_children.return_value = [mock_child]
+
+    mock_btn = MagicMock()
+    app.views = {"shorts_queue": mock_view}
+    app.nav_buttons = {"shorts_queue": mock_btn}
+
+    app.show_view("shorts_queue")
+
+    # View was raised
+    mock_view.tkraise.assert_called_once()
+    # But refresh_list was NOT called because tasks are identical and children exist
+    mock_view.refresh_list.assert_not_called()
+
+
+def test_scroll_down_enabled_during_progressive_loading(ctk_app):
+    import customtkinter as ctk
+    from src.utils.scroll_helper import setup_smooth_scrolling
+
+    sf = ctk.CTkScrollableFrame(ctk_app)
+    sf.pack(fill="both", expand=True)
+    setup_smooth_scrolling(sf)
+
+    # Initial 15 items
+    for i in range(15):
+        ctk.CTkLabel(sf, text=f"Item {i}", height=40).pack()
+
+    sf.update_idletasks()
+    canvas = sf._parent_canvas
+    y0 = canvas.yview()
+
+    class FakeEvent:
+        def __init__(self, delta, widget):
+            self.delta = delta
+            self.widget = widget
+            self.x_root = 100
+            self.y_root = 100
+
+    # Fire downward mousewheel scroll
+    sf._smooth_mousewheel(FakeEvent(-120, canvas))
+    ctk_app.update()
+
+    y1 = canvas.yview()
+    assert y1[0] > y0[0]
+
+    # Add next batch and update idle tasks
+    for i in range(15, 30):
+        ctk.CTkLabel(sf, text=f"Item {i}", height=40).pack()
+    sf.update_idletasks()
+
+    # Continue downward mousewheel scroll
+    sf._smooth_mousewheel(FakeEvent(-120, canvas))
+    ctk_app.update()
+
+    y2 = canvas.yview()
+    assert y2[0] > y1[0]
+
+    sf.destroy()
+
+
+def test_video_queue_shares_progressive_batch_rendering_and_smooth_scrolling():
+    from src.ui.views.queue_view import QueueView
+    from src.models.video_task import VideoTask
+    from src.models.channel import Channel
+
+    mock_app = MagicMock()
+    mock_app.config_mgr = MagicMock()
+    # 20 long videos
+    long_tasks = [
+        VideoTask(url=f"https://www.youtube.com/watch?v=v{i}", title=f"Video {i}", channel="TestChan")
+        for i in range(20)
+    ]
+    mock_app.config_mgr.get_video_queue.return_value = [t.to_dict() for t in long_tasks]
+    mock_app.config_mgr.get_channels.return_value = [Channel(name="TestChan", enabled=True).to_dict()]
+    mock_app.queued_video_tasks = list(long_tasks)
+    mock_app.stats_store = MagicMock()
+    mock_app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+
+    # Video Queue View has shorts_only=False
+    video_view = QueueView.__new__(QueueView)
+    video_view.shorts_only = False
+    video_view.video_tasks = list(long_tasks)
+    video_view.collapsed_groups = set()
+    video_view._pending_card_queue = []
+    video_view._render_job = None
+    video_view._loading_indicator = None
+    video_view.app_controller = mock_app
+    video_view.scroll_frame = MagicMock()
+    video_view.scroll_frame.winfo_children.return_value = []
+    video_view._channels = MagicMock(return_value=[Channel(name="TestChan", enabled=True)])
+    video_view._render_group = MagicMock()
+    video_view._build_task_card = MagicMock(return_value=MagicMock())
+    video_view.after = MagicMock(return_value="job_long_1")
+
+    # Refreshing Video Queue triggers group rendering
+    video_view.refresh_list()
+    video_view._render_group.assert_called_once()
+    filtered = video_view._render_group.call_args[0][0]
+    assert len(filtered.videos) == 20
+
+    # Enqueue the 20 long videos into _pending_card_queue and verify batching
+    mock_container = MagicMock()
+    mock_container.winfo_exists.return_value = True
+    for i, t in enumerate(long_tasks):
+        video_view._pending_card_queue.append((
+            mock_container, i, t, i, filtered, i > 0, i < 19, MagicMock(), MagicMock()
+        ))
+    video_view._process_card_render_batch(batch_size=15)
+
+    # 15 rendered immediately, 5 queued for subsequent batch
+    assert video_view._build_task_card.call_count == 15
+    assert len(video_view._pending_card_queue) == 5
+    video_view.after.assert_called_once()
