@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from src.utils.channel_fetcher import (
     ChannelFetchResult,
+    FetchedVideo,
     extract_channel_title,
     extract_fallback_channel_name,
     extract_videos_from_data,
@@ -210,39 +211,26 @@ def test_fetch_channel_videos_empty_input():
     assert result.error == "Channel URL or handle is required."
 
 
-@patch("urllib.request.urlopen")
-def test_fetch_channel_videos_success(mock_urlopen):
-    payload = {
-        "metadata": {"channelMetadataRenderer": {"title": "Cool Channel"}},
-        "contents": {
-            "lockupViewModel": {
-                "contentId": "xyz987",
-                "metadata": {"lockupMetadataViewModel": {"title": {"content": "Test Video"}}},
-                "contentImage": {},
-            }
-        },
-    }
-    html = f"<script>var ytInitialData = {json.dumps(payload)};</script>"
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
-
+def test_fetch_channel_videos_requires_api_key():
     result = fetch_channel_videos("@coolchannel")
     assert isinstance(result, ChannelFetchResult)
+    assert result.error is not None
+    assert "YouTube Data API key is not configured" in result.error
+
+
+@patch("src.utils.channel_fetcher.fetch_channel_videos_api")
+def test_fetch_channel_videos_delegates_to_api(mock_api):
+    mock_api.return_value = ChannelFetchResult(
+        channel_title="Cool Channel",
+        channel_url="https://www.youtube.com/@coolchannel/videos",
+        videos=[FetchedVideo("xyz987", "https://youtube.com/watch?v=xyz987", "Test Video")],
+    )
+    with patch.dict("os.environ", {"YOUTUBE_API_KEY": "AIzaSyTEST_KEY"}):
+        result = fetch_channel_videos("@coolchannel")
     assert result.error is None
     assert result.channel_title == "Cool Channel"
     assert len(result.videos) == 1
     assert result.videos[0].video_id == "xyz987"
-
-
-@patch("urllib.request.urlopen")
-def test_fetch_channel_videos_http_error(mock_urlopen):
-    mock_urlopen.side_effect = urllib.error.HTTPError(
-        url="https://youtube.com", code=404, msg="Not Found", hdrs=MagicMock(), fp=None
-    )
-    result = fetch_channel_videos("@nonexistent")
-    assert result.error is not None
-    assert "HTTP Error 404" in result.error
 
 
 def test_extract_channel_title_from_html():
@@ -261,25 +249,79 @@ def test_extract_channel_title_from_html():
     assert extract_channel_title_from_html(html_meta) == "Tech Insider"
 
 
-@patch("urllib.request.urlopen")
-def test_fetch_channel_title_online(mock_urlopen):
+def test_fetch_channel_title_online_without_api_key():
     from src.utils.channel_fetcher import fetch_channel_title_online
+    with patch.dict("os.environ", {}, clear=True):
+        name = fetch_channel_title_online("@iamcarhacker")
+    assert name is None
 
-    html = '<html><head><meta property="og:title" content="Official Car Hacker Channel"></head></html>'
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
 
-    name = fetch_channel_title_online("@iamcarhacker")
+@patch("src.utils.channel_fetcher.fetch_channel_data_api")
+def test_fetch_channel_title_online_with_api_key(mock_api):
+    from src.utils.channel_fetcher import fetch_channel_title_online
+    mock_api.return_value = ChannelFetchResult(channel_title="Official Car Hacker Channel")
+    with patch.dict("os.environ", {"YOUTUBE_API_KEY": "AIzaSyTEST_KEY"}):
+        name = fetch_channel_title_online("@iamcarhacker")
     assert name == "Official Car Hacker Channel"
 
 
-@patch("urllib.request.urlopen")
-def test_fetch_channel_videos_fallback_to_html_title(mock_urlopen):
-    html = '<html><head><meta property="og:title" content="Fallback Car Hacker"></head><body><script>var ytInitialData = {"contents": {}};</script></body></html>'
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
+def test_extract_videos_from_data_with_none_max_results():
+    """Verify extract_videos_from_data does not raise TypeError when max_results is None."""
+    data = {
+        "lockupViewModel": {
+            "contentId": "dQw4w9WgXcQ",
+            "metadata": {
+                "lockupMetadataViewModel": {
+                    "title": {"content": "Never Gonna Give You Up"}
+                }
+            },
+        }
+    }
+    # Should not raise TypeError: '>' not supported between instances of 'NoneType' and 'int'
+    videos = extract_videos_from_data(data, max_results=None)
+    assert len(videos) == 1
+    assert videos[0].video_id == "dQw4w9WgXcQ"
 
-    result = fetch_channel_videos("@iamcarhacker")
-    assert result.channel_title == "Fallback Car Hacker"
+
+@patch("src.utils.channel_fetcher.fetch_channel_videos_api")
+def test_fetch_channel_videos_with_none_max_results(mock_api):
+    """Verify fetch_channel_videos passes max_results=50 when max_results is None."""
+    mock_api.return_value = ChannelFetchResult(
+        channel_title="Test Channel",
+        videos=[FetchedVideo("dQw4w9WgXcQ", "https://youtube.com/watch?v=dQw4w9WgXcQ", "Test")],
+    )
+    with patch.dict("os.environ", {"YOUTUBE_API_KEY": "AIzaSyTEST_KEY"}):
+        result = fetch_channel_videos("@testchannel", max_results=None)
+    assert result.error is None
+    assert len(result.videos) == 1
+    assert result.videos[0].video_id == "dQw4w9WgXcQ"
+    mock_api.assert_called_once()
+
+
+@patch("urllib.request.urlopen")
+def test_extract_shorts_from_reel_item_and_shorts_lockup(mock_urlopen):
+    """Verify Shorts format items (reelItemRenderer & shortsLockupViewModel) are parsed with is_short=True."""
+    data = {
+        "reelItemRenderer": {
+            "videoId": "short_vid_1",
+            "headline": {"simpleText": "Short Reel Video"},
+        },
+        "shortsLockupViewModel": {
+            "entityId": "shorts-shelf-item-short_vid_2",
+            "overlayMetadata": {
+                "primaryText": {"content": "Short Lockup Video"}
+            },
+        },
+    }
+    videos = extract_videos_from_data(data, max_results=10)
+    assert len(videos) == 2
+    s1 = next(v for v in videos if v.video_id == "short_vid_1")
+    assert s1.is_short is True
+    assert "shorts/short_vid_1" in s1.url
+    assert s1.title == "Short Reel Video"
+
+    s2 = next(v for v in videos if v.video_id == "short_vid_2")
+    assert s2.is_short is True
+    assert "shorts/short_vid_2" in s2.url
+    assert s2.title == "Short Lockup Video"
+

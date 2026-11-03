@@ -57,8 +57,8 @@ def setup_smooth_scrolling(
 
         try:
             y_view = canvas.yview()
-            # If at top and trying to scroll up, or at bottom and scrolling down, halt immediately
-            if (target_accum < 0 and y_view[0] <= 0.0) or (target_accum > 0 and y_view[1] >= 1.0):
+            # If at top and trying to scroll up, halt immediately
+            if target_accum < 0 and y_view[0] <= 0.0:
                 target_accum = 0.0
                 return
 
@@ -75,8 +75,16 @@ def setup_smooth_scrolling(
             if abs(step) > abs(target_accum):
                 step = target_accum
 
-            target_accum -= step
+            old_top = y_view[0]
             canvas.yview("scroll", int(round(step)), "units")
+            new_top = canvas.yview()[0]
+
+            # If attempting to scroll down but position didn't move at all and we are at the bottom, halt
+            if target_accum > 0 and new_top == old_top and canvas.yview()[1] >= 1.0:
+                target_accum = 0.0
+                return
+
+            target_accum -= step
             anim_job = canvas.after(16, _step_anim)
         except Exception:
             target_accum = 0.0

@@ -233,81 +233,101 @@ def extract_channel_title_from_html(html: str) -> str:
     return ""
 
 
+def extract_continuation_token(data: Any) -> Optional[str]:
+    """Find the grid/list continuation token in ytInitialData or Innertube browse response."""
+    if not data:
+        return None
+
+    if isinstance(data, dict):
+        # 1. Direct continuationItemRenderer
+        if "continuationItemRenderer" in data:
+            cir = data["continuationItemRenderer"]
+            if isinstance(cir, dict):
+                cmd = cir.get("continuationEndpoint", {}).get("continuationCommand", {})
+                if isinstance(cmd, dict) and cmd.get("token"):
+                    return str(cmd["token"])
+
+        # 2. Directly under continuationEndpoint or continuationCommand
+        if "continuationCommand" in data and isinstance(data["continuationCommand"], dict):
+            tok = data["continuationCommand"].get("token")
+            if tok and isinstance(tok, str):
+                return tok
+
+        # Prioritize key structural containers
+        preferred_keys = (
+            "appendContinuationItemsAction",
+            "richGridRenderer",
+            "sectionListRenderer",
+            "onResponseReceivedActions",
+            "contents",
+            "tabRenderer",
+            "twoColumnBrowseResultsRenderer",
+        )
+        for k in preferred_keys:
+            if k in data:
+                res = extract_continuation_token(data[k])
+                if res:
+                    return res
+
+        for k, v in data.items():
+            # Skip chip filters and header panels
+            if k in preferred_keys or "chip" in k.lower() or "filter" in k.lower() or "header" in k.lower():
+                continue
+            res = extract_continuation_token(v)
+            if res:
+                return res
+
+    elif isinstance(data, list):
+        # Scan from end of list because continuation is usually the last item in a grid/list
+        for item in reversed(data):
+            res = extract_continuation_token(item)
+            if res:
+                return res
+
+    return None
+
+
 def fetch_channel_title_online(
     channel_input: str, timeout: int = 10, config_mgr: Optional[Any] = None
 ) -> Optional[str]:
-    """Contact YouTube and fetch the official human-readable channel name.
+    """Contact YouTube and fetch the official human-readable channel name via YouTube Data API v3 only.
 
     Returns the resolved name (e.g. 'Iamcarhacker' instead of '@iamcarhacker'),
-    or None if the network request fails or the page cannot be reached.
+    or None if the network request fails, API key is missing, or channel is not found.
     """
     clean_input = (channel_input or "").strip()
     if not clean_input:
         return None
 
     api_key = get_configured_youtube_api_key(config_mgr)
-    if api_key:
-        try:
-            res = fetch_channel_data_api(
-                clean_input,
-                api_key=api_key,
-                video_limit=None,
-                shorts_limit=None,
-                timeout=timeout,
-            )
-            if res.channel_title:
-                return res.channel_title
-        except Exception:
-            pass
-
-    # Build canonical / base channel URL
-    if not clean_input.startswith("http://") and not clean_input.startswith("https://"):
-        if clean_input.startswith("@"):
-            url = f"https://www.youtube.com/{clean_input}"
-        elif clean_input.startswith("youtube.com") or clean_input.startswith("www.youtube.com"):
-            url = f"https://{clean_input}"
-        else:
-            url = f"https://www.youtube.com/@{clean_input}"
-    else:
-        url = clean_input
-
-    # Strip subpaths like /videos or /shorts to fetch the main channel page
-    clean_base = url.split("?")[0].split("#")[0].rstrip("/")
-    for sub in ("/videos", "/shorts", "/streams", "/featured", "/community"):
-        if clean_base.endswith(sub):
-            clean_base = clean_base[: -len(sub)]
-
-    req = urllib.request.Request(
-        clean_base,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            html = response.read().decode("utf-8", errors="ignore")
-    except Exception:
+    if not api_key:
         return None
 
-    title = extract_channel_title_from_html(html)
-    return title if title else None
+    try:
+        res = fetch_channel_data_api(
+            clean_input,
+            api_key=api_key,
+            video_limit=None,
+            shorts_limit=None,
+            timeout=timeout,
+        )
+        if res.channel_title:
+            return res.channel_title
+    except Exception:
+        pass
+    return None
 
 
 def extract_videos_from_data(
-    data: Dict[str, Any], max_results: int = 50
+    data: Dict[str, Any], max_results: Optional[int] = 50
 ) -> List[FetchedVideo]:
-    """Traverse ytInitialData and extract video items."""
+    """Traverse ytInitialData and extract video and shorts items."""
     results: List[FetchedVideo] = []
     seen_ids: set = set()
+    limit_val = 0 if max_results == 0 else (max_results if (max_results is not None and max_results > 0) else 50)
 
     def _walk(obj: Any) -> None:
-        if max_results > 0 and len(results) >= max_results:
+        if limit_val > 0 and len(results) >= limit_val:
             return
 
         if isinstance(obj, dict):
@@ -318,7 +338,13 @@ def extract_videos_from_data(
                 title_obj = lum.get("metadata", {}).get("lockupMetadataViewModel", {}).get("title", {})
                 title = title_obj.get("content") if isinstance(title_obj, dict) else None
 
-                dur_str = ""
+                is_short_item = False
+                if lum.get("contentType") in ("LOCKUP_CONTENT_TYPE_SHORT", "SHORT"):
+                    is_short_item = True
+                if "reelWatchEndpoint" in str(lum) or "/shorts/" in str(lum):
+                    is_short_item = True
+
+                dur_str = "Short" if is_short_item else ""
                 thumb_vm = lum.get("contentImage", {}).get("thumbnailViewModel", {})
                 if isinstance(thumb_vm, dict):
                     for overlay in thumb_vm.get("overlays", []):
@@ -336,19 +362,72 @@ def extract_videos_from_data(
 
                 if vid and title and vid not in seen_ids:
                     seen_ids.add(vid)
+                    target_url = f"https://www.youtube.com/shorts/{vid}" if is_short_item else f"https://www.youtube.com/watch?v={vid}"
                     results.append(
                         FetchedVideo(
                             video_id=str(vid),
-                            url=f"https://www.youtube.com/watch?v={vid}",
+                            url=target_url,
                             title=str(title).strip(),
-                            duration_text=dur_str,
-                            duration_seconds=parse_duration_str(dur_str),
+                            duration_text=dur_str or ("Short" if is_short_item else ""),
+                            duration_seconds=parse_duration_str(dur_str) if dur_str != "Short" else 30,
+                            is_short=is_short_item,
                         )
                     )
-                    if max_results > 0 and len(results) >= max_results:
+                    if limit_val > 0 and len(results) >= limit_val:
                         return
 
-            # Format 2: videoRenderer & gridVideoRenderer
+            # Format 2: reelItemRenderer & shortsLockupViewModel (dedicated Shorts shelf/tab)
+            if "reelItemRenderer" in obj and isinstance(obj["reelItemRenderer"], dict):
+                r_item = obj["reelItemRenderer"]
+                vid = r_item.get("videoId")
+                title = ""
+                hl = r_item.get("headline", {})
+                if isinstance(hl, dict):
+                    title = hl.get("simpleText") or ""
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
+                    results.append(
+                        FetchedVideo(
+                            video_id=str(vid),
+                            url=f"https://www.youtube.com/shorts/{vid}",
+                            title=str(title).strip() or "Short",
+                            duration_text="Short",
+                            duration_seconds=30,
+                            is_short=True,
+                        )
+                    )
+                    if limit_val > 0 and len(results) >= limit_val:
+                        return
+
+            if "shortsLockupViewModel" in obj and isinstance(obj["shortsLockupViewModel"], dict):
+                slm = obj["shortsLockupViewModel"]
+                vid = slm.get("entityId", "")
+                if vid.startswith("shorts-shelf-item-"):
+                    vid = vid.replace("shorts-shelf-item-", "")
+                if not vid or len(vid) != 11:
+                    ep = slm.get("onTap", {}).get("innertubeCommand", {}).get("reelWatchEndpoint", {})
+                    if isinstance(ep, dict) and ep.get("videoId"):
+                        vid = ep["videoId"]
+                title = ""
+                pm = slm.get("overlayMetadata", {}).get("primaryText", {})
+                if isinstance(pm, dict):
+                    title = pm.get("content") or ""
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
+                    results.append(
+                        FetchedVideo(
+                            video_id=str(vid),
+                            url=f"https://www.youtube.com/shorts/{vid}",
+                            title=str(title).strip() or "Short",
+                            duration_text="Short",
+                            duration_seconds=30,
+                            is_short=True,
+                        )
+                    )
+                    if limit_val > 0 and len(results) >= limit_val:
+                        return
+
+            # Format 3: videoRenderer & gridVideoRenderer
             for renderer_key in ("videoRenderer", "gridVideoRenderer", "compactVideoRenderer"):
                 if renderer_key in obj and isinstance(obj[renderer_key], dict):
                     vr = obj[renderer_key]
@@ -391,7 +470,7 @@ def extract_videos_from_data(
                                 duration_seconds=parse_duration_str(dur_str),
                             )
                         )
-                        if max_results > 0 and len(results) >= max_results:
+                        if limit_val > 0 and len(results) >= limit_val:
                             return
 
             for value in obj.values():
@@ -500,38 +579,85 @@ def enrich_video_durations(
     videos: List[FetchedVideo],
     api_key: str,
     timeout: int = 15,
+    cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> None:
-    """Batch-query YouTube Data API v3 videos endpoint to populate duration fields."""
+    """Batch-query YouTube Data API v3 videos endpoint to populate duration fields concurrently."""
     if not videos or not api_key:
         return
 
-    for i in range(0, len(videos), 50):
-        chunk = videos[i : i + 50]
+    if cancel_event is not None and cancel_event.is_set():
+        return
+
+    chunks = [videos[i : i + 50] for i in range(0, len(videos), 50)]
+    if not chunks:
+        return
+
+    def _fetch_chunk_durations(chunk: List[FetchedVideo]) -> Dict[str, Tuple[int, str]]:
+        if cancel_event is not None and cancel_event.is_set():
+            return {}
         ids = [v.video_id for v in chunk if v.video_id]
         if not ids:
-            continue
+            return {}
         ids_param = ",".join(ids)
         url = f"https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id={ids_param}&key={api_key}"
         req = urllib.request.Request(url, headers={"User-Agent": "yt-tool/2.1"})
+        dur_map: Dict[str, Tuple[int, str]] = {}
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
             items = data.get("items", [])
-            dur_map = {}
             for item in items:
                 vid = item.get("id")
                 iso_dur = item.get("contentDetails", {}).get("duration", "")
                 if vid and iso_dur:
                     sec = parse_iso8601_duration(iso_dur)
                     dur_map[vid] = (sec, format_seconds_to_duration(sec))
-
-            for v in chunk:
-                if v.video_id in dur_map:
-                    sec, text_d = dur_map[v.video_id]
-                    v.duration_seconds = sec
-                    v.duration_text = text_d
         except Exception:
             pass
+        return dur_map
+
+    all_dur_maps: Dict[str, Tuple[int, str]] = {}
+    processed_count = 0
+    max_workers = min(5, len(chunks))
+
+    if max_workers <= 1:
+        for chunk in chunks:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            dmap = _fetch_chunk_durations(chunk)
+            all_dur_maps.update(dmap)
+            processed_count += len(chunk)
+            if progress_callback:
+                try:
+                    progress_callback(processed_count, "durations")
+                except Exception:
+                    pass
+    else:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_chunk = {executor.submit(_fetch_chunk_durations, c): c for c in chunks}
+            for future in concurrent.futures.as_completed(future_to_chunk):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                chunk = future_to_chunk[future]
+                try:
+                    dmap = future.result()
+                    all_dur_maps.update(dmap)
+                except Exception:
+                    pass
+                processed_count += len(chunk)
+                if progress_callback:
+                    try:
+                        progress_callback(processed_count, "durations")
+                    except Exception:
+                        pass
+
+    for v in videos:
+        if v.video_id in all_dur_maps:
+            sec, text_d = all_dur_maps[v.video_id]
+            v.duration_seconds = sec
+            v.duration_text = text_d
 
 
 def get_playlist_total_results(
@@ -614,6 +740,22 @@ def fetch_playlist_items_api(
                             total_count = int(p_info["totalResults"])
                         except (ValueError, TypeError):
                             pass
+        except urllib.error.HTTPError as exc:
+            err_msg = f"HTTP {exc.code}: {exc.reason}"
+            try:
+                raw_err = exc.read().decode("utf-8", errors="ignore")
+                parsed_err = json.loads(raw_err)
+                api_msg = parsed_err.get("error", {}).get("message", "")
+                if api_msg:
+                    err_msg = f"HTTP {exc.code} ({api_msg})"
+            except Exception:
+                pass
+            if videos:
+                warning = f"Pagination interrupted by network error on later page: {sanitize_api_url(err_msg)}"
+                is_truncated = True
+                break
+            else:
+                return [], None, f"YouTube API error: {sanitize_api_url(err_msg)}", False, False, None
         except Exception as exc:
             if videos:
                 warning = f"Pagination interrupted by network error on later page: {sanitize_api_url(str(exc))}"
@@ -721,6 +863,36 @@ def fetch_channel_data_api(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             meta_json = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        err_msg = f"HTTP {exc.code}: {exc.reason}"
+        try:
+            raw_err = exc.read().decode("utf-8", errors="ignore")
+            parsed_err = json.loads(raw_err)
+            api_msg = parsed_err.get("error", {}).get("message", "")
+            if api_msg:
+                err_msg = f"HTTP {exc.code} ({api_msg})"
+        except Exception:
+            pass
+        return ChannelFetchResult(
+            channel_url=norm_url,
+            error=f"YouTube API lookup failed: {sanitize_api_url(err_msg)}",
+            status="error",
+            provider="youtube_api_v3",
+        )
+    except urllib.error.URLError as exc:
+        return ChannelFetchResult(
+            channel_url=norm_url,
+            error=f"YouTube API network error: {sanitize_api_url(str(exc.reason))}",
+            status="error",
+            provider="youtube_api_v3",
+        )
+    except TimeoutError:
+        return ChannelFetchResult(
+            channel_url=norm_url,
+            error="YouTube API request timed out. Please check your internet connection.",
+            status="error",
+            provider="youtube_api_v3",
+        )
     except Exception as exc:
         return ChannelFetchResult(
             channel_url=norm_url,
@@ -777,7 +949,7 @@ def fetch_channel_data_api(
             cancel_event=cancel_event,
             progress_callback=progress_callback,
         )
-        if v_err and "404" in v_err and uploads_playlist_id and target_pid != uploads_playlist_id:
+        if (not v_items or (v_err and "404" in v_err)) and uploads_playlist_id and target_pid != uploads_playlist_id:
             # Fallback to standard uploads playlist
             v_items, v_warn, v_err, v_trunc, v_intr, v_total = fetch_playlist_items_api(
                 playlist_id=uploads_playlist_id,
@@ -798,7 +970,7 @@ def fetch_channel_data_api(
             )
         if v_warn:
             warnings.append(v_warn)
-            if "network error" in v_warn:
+            if "error" in v_warn.lower() or "network" in v_warn.lower():
                 is_partial = True
         if v_trunc:
             is_truncated = True
@@ -817,20 +989,21 @@ def fetch_channel_data_api(
             cancel_event=cancel_event,
             progress_callback=progress_callback,
         )
-        if s_err and "404" in s_err and uploads_playlist_id and shorts_playlist_id != uploads_playlist_id:
-            # Fallback to standard uploads playlist
-            s_items, s_warn, s_err, s_trunc, s_intr, s_total = fetch_playlist_items_api(
-                playlist_id=uploads_playlist_id,
-                api_key=api_key,
-                limit=shorts_limit,
-                is_short=True,
-                timeout=timeout,
-                cancel_event=cancel_event,
-                progress_callback=progress_callback,
-            )
+        if s_err:
+            if "404" in s_err:
+                s_items = []
+                s_warn = None
+            else:
+                return ChannelFetchResult(
+                    channel_title=channel_title,
+                    channel_url=norm_url,
+                    error=s_err,
+                    status="error",
+                    provider="youtube_api_v3",
+                )
         if s_warn:
             warnings.append(s_warn)
-            if "network error" in s_warn:
+            if "error" in s_warn.lower() or "network" in s_warn.lower():
                 is_partial = True
         if s_trunc:
             is_truncated = True
@@ -853,8 +1026,14 @@ def fetch_channel_data_api(
             seen_all_ids.add(item.video_id)
             combined.append(item)
 
-    # Enrich durations via videos.list endpoint
-    enrich_video_durations(combined, api_key=api_key, timeout=timeout)
+    # Enrich durations via videos.list endpoint concurrently
+    enrich_video_durations(
+        combined,
+        api_key=api_key,
+        timeout=timeout,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+    )
 
     total_requested = (video_limit or 0) + (shorts_limit or 0)
     total_fetched = len(combined)
@@ -912,16 +1091,31 @@ def fetch_channel_data(
     cancel_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> ChannelFetchResult:
-    """Fetch recent videos and shorts using YouTube Data API v3."""
+    """Fetch recent videos and shorts using YouTube Data API v3 only.
+
+    If the API key is not configured or if any API issue occurs,
+    returns an error result to notify the user.
+    """
+    clean_input = (channel_input or "").strip()
+    norm_url = normalize_channel_url(clean_input)
+    if not clean_input:
+        return ChannelFetchResult(error="Channel URL or handle is required.", status="error")
+
     api_key = get_configured_youtube_api_key(config_mgr)
     if not api_key:
         return ChannelFetchResult(
-            channel_url=normalize_channel_url(channel_input),
-            error="YouTube Data API key is not configured. Please set YOUTUBE_API_KEY in your .env file or environment variables.",
+            channel_url=norm_url,
+            error=(
+                "YouTube Data API key is not configured. "
+                "Please configure your API key in Settings (under General -> YouTube Data API Key) "
+                "or set the YOUTUBE_API_KEY environment variable."
+            ),
             status="error",
+            provider="youtube_api_v3",
         )
+
     return fetch_channel_data_api(
-        channel_input=channel_input,
+        channel_input=clean_input,
         api_key=api_key,
         video_limit=video_limit,
         shorts_limit=shorts_limit,
@@ -934,114 +1128,61 @@ def fetch_channel_data(
 def fetch_channel_videos_api(
     channel_input: str,
     api_key: str,
-    max_results: int = 50,
+    max_results: Optional[int] = 50,
     timeout: int = 15,
     cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> ChannelFetchResult:
     """Fetch videos via YouTube Data API v3 (delegates to fetch_channel_data_api)."""
+    eff_max = 50 if max_results is None else max_results
     return fetch_channel_data_api(
         channel_input=channel_input,
         api_key=api_key,
-        video_limit=max_results,
+        video_limit=eff_max,
         shorts_limit=None,
         timeout=timeout,
         cancel_event=cancel_event,
+        progress_callback=progress_callback,
     )
 
 
 def fetch_channel_videos(
     channel_input: str,
-    max_results: int = 50,
+    max_results: Optional[int] = 50,
     timeout: int = 15,
     config_mgr: Optional[Any] = None,
     cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> ChannelFetchResult:
-    """Fetch video metadata from a channel URL or handle with supported pagination."""
-    api_key = get_configured_youtube_api_key(config_mgr)
-    if api_key:
-        return fetch_channel_videos_api(
-            channel_input=channel_input,
-            api_key=api_key,
-            max_results=max_results,
-            timeout=timeout,
-            cancel_event=cancel_event,
-        )
+    """Fetch video metadata from a channel URL or handle using YouTube Data API v3 only.
 
-    url = normalize_channel_url(channel_input)
-    if not url:
+    If the API key is not configured or if any API issue occurs,
+    returns an error result to notify the user.
+    """
+    clean_input = (channel_input or "").strip()
+    norm_url = normalize_channel_url(clean_input)
+    if not clean_input:
         return ChannelFetchResult(error="Channel URL or handle is required.", status="error")
 
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+    api_key = get_configured_youtube_api_key(config_mgr)
+    if not api_key:
+        return ChannelFetchResult(
+            channel_url=norm_url,
+            error=(
+                "YouTube Data API key is not configured. "
+                "Please configure your API key in Settings (under General -> YouTube Data API Key) "
+                "or set the YOUTUBE_API_KEY environment variable."
             ),
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            html = response.read().decode("utf-8", errors="ignore")
-    except urllib.error.HTTPError as exc:
-        return ChannelFetchResult(
-            channel_url=url,
-            error=f"HTTP Error {exc.code}: {exc.reason}",
-        )
-    except urllib.error.URLError as exc:
-        return ChannelFetchResult(
-            channel_url=url,
-            error=f"Network Error: {exc.reason}",
-        )
-    except TimeoutError:
-        return ChannelFetchResult(
-            channel_url=url,
-            error="Connection timed out while reaching YouTube.",
-        )
-    except Exception as exc:
-        return ChannelFetchResult(
-            channel_url=url,
-            error=f"Failed to fetch channel: {exc}",
+            status="error",
+            provider="youtube_api_v3",
         )
 
-    data = extract_yt_initial_data(html)
-    channel_title = extract_channel_title(data) if data else ""
-    if not channel_title:
-        channel_title = extract_channel_title_from_html(html)
-
-    if not data and not channel_title:
-        return ChannelFetchResult(
-            channel_url=url,
-            error="Could not parse YouTube page response (bot verification or changed page structure).",
-        )
-
-    videos = extract_videos_from_data(data, max_results=max_results if max_results > 0 else 50) if data else []
-
-    status = "complete"
-    warning = None
-    is_truncated = False
-    if max_results == 0 or max_results > len(videos):
-        status = "initial_page_only"
-        is_truncated = True
-        warning = (
-            "Fetched initial page only (no YouTube Data API key configured). "
-            "Configure a YouTube API key in settings or YOUTUBE_API_KEY environment variable for full pagination."
-        )
-    elif max_results > 0 and len(videos) >= max_results:
-        status = "limited"
-        is_truncated = False
-
-    return ChannelFetchResult(
-        channel_title=channel_title,
-        channel_url=url,
-        videos=videos,
-        requested_count=max_results,
-        fetched_count=len(videos),
-        status=status,
-        provider="initial_page_scraper",
-        warning=warning,
-        is_truncated=is_truncated,
+    eff_max = 50 if max_results is None else max_results
+    return fetch_channel_videos_api(
+        channel_input=clean_input,
+        api_key=api_key,
+        max_results=eff_max,
+        timeout=timeout,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
     )

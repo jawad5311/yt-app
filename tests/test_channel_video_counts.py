@@ -19,6 +19,8 @@ def test_channel_model_stores_and_serializes_video_totals():
     reloaded = Channel.from_dict(d)
     assert reloaded.total_videos == 142
     assert reloaded.total_shorts == 58
+    assert ch.total_combined_videos == 200
+    assert reloaded.total_combined_videos == 200
 
 
 def test_fetch_channel_data_api_calculates_totals():
@@ -109,9 +111,7 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
         _collect_labels(card)
 
     card_text = "\n".join(labels)
-    assert "Channel Total:" in card_text
-    assert "1,420 Videos" in card_text
-    assert "580 Shorts" in card_text
+    assert "all videos: 2,000 | shorts: 580 | videos: 1,420" in card_text
 
     # Verify modal header also displays totals
     view.open_channel_videos_modal(channel)
@@ -131,9 +131,24 @@ def test_channels_view_displays_totals_in_card_and_modal(ctk_app):
     _scan(modal)
 
     modal_text = "\n".join(modal_labels)
-    assert "Channel Total:" in modal_text
-    assert "1,420 Videos" in modal_text
-    assert "580 Shorts" in modal_text
+    assert "all videos: 2,000 | shorts: 580 | videos: 1,420" in modal_text
 
     modal.destroy()
+
+    # Verify Edit Channel modal also displays totals under URL
+    view.open_channel_modal(edit_index=0)
+    edit_modal = None
+    for child in view.winfo_children():
+        if isinstance(child, ctk.CTkToplevel):
+            edit_modal = child
+            break
+    assert edit_modal is not None
+
+    edit_labels = []
+    _scan_edit = lambda w: [edit_labels.append(c.cget("text")) for c in w.winfo_children() if isinstance(c, ctk.CTkLabel)] and [_scan_edit(c) for c in w.winfo_children()]
+    _scan_edit(edit_modal)
+    edit_text = "\n".join(edit_labels)
+    assert "all videos: 2,000 | shorts: 580 | videos: 1,420" in edit_text
+
+    edit_modal.destroy()
     view.destroy()

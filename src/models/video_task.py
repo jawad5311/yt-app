@@ -57,6 +57,7 @@ WATCHTIME_OPTIONS: List[str] = [
 
 DEFAULT_WATCHTIME_DURATION = "Full Video"
 DEFAULT_MAX_RUNS: int = 5
+DEFAULT_SHORTS_MAX_RUNS: int = 10
 DEFAULT_TARGET_MULTIPLIER: float = 3.0
 
 
@@ -84,6 +85,8 @@ class VideoTask:
     duration_seconds: int = 0
     # Formatted length string (e.g., "14:25").
     duration_text: str = ""
+    # Explicit short flag override (if URL is omitted or watch?v= format)
+    is_short_override: Optional[bool] = None
 
     def __post_init__(self):
         # Synchronize titles and keywords so both properties remain interchangeable
@@ -103,7 +106,7 @@ class VideoTask:
             self.keywords_3 = self.title_3
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data = {
             "url": self.url,
             "title": self.title,
             "title_2": self.title_2,
@@ -119,6 +122,9 @@ class VideoTask:
             "duration_seconds": self.duration_seconds,
             "duration_text": self.duration_text,
         }
+        if self.is_short_override is not None:
+            data["is_short"] = self.is_short_override
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VideoTask":
@@ -169,6 +175,9 @@ class VideoTask:
         raw_mult = data.get("target_multiplier", 0.0)
         target_multiplier_val = safe_float(raw_mult, default=0.0, min_val=0.0)
 
+        raw_is_short = data.get("is_short")
+        is_short_val = bool(raw_is_short) if raw_is_short is not None else None
+
         return cls(
             url=data.get("url", ""),
             title=raw_t1,
@@ -184,12 +193,19 @@ class VideoTask:
             target_multiplier=target_multiplier_val,
             duration_seconds=duration_seconds_val,
             duration_text=duration_text_val,
+            is_short_override=is_short_val,
         )
 
     @property
     def is_short(self) -> bool:
         """Return True if this task represents a YouTube Short."""
+        if self.is_short_override is not None:
+            return bool(self.is_short_override)
         return "/shorts/" in (self.url or "")
+
+    @is_short.setter
+    def is_short(self, value: Optional[bool]) -> None:
+        self.is_short_override = bool(value) if value is not None else None
 
     def is_run_limit_reached(self, current_runs: int) -> bool:
         """Return True if positive max_runs limit is reached or exceeded."""

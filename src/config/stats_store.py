@@ -3,7 +3,7 @@ import logging
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..models.video_task import VideoTask
 from ..models.watch_stats import (
@@ -106,6 +106,36 @@ class StatsStore:
                 record = StatRecord()
             record.merge(outcome, datetime.now().isoformat(timespec="seconds"))
             self.records[key] = record
+            self._save_unlocked()
+            return record
+
+    def record_view(self, task: Any, views: int = 1, timestamp: Optional[str] = None) -> Optional[StatRecord]:
+        """Directly credit one or more completed views (runs) to a task in real time."""
+        if task is None:
+            return None
+        url = getattr(task, "url", "") or ""
+        key = resolve_video_key(task, url)
+        if not key:
+            return None
+        if timestamp is None:
+            timestamp = datetime.now().isoformat(timespec="seconds")
+        with self._lock:
+            record = self.records.get(key)
+            if record is None:
+                record = StatRecord()
+                self.records[key] = record
+            record.runs += max(1, views)
+            record.successes += max(1, views)
+            record.last_run = timestamp
+            record.last_completed = timestamp
+            title = getattr(task, "title", "") or ""
+            if title and not record.label:
+                record.label = title
+            channel = getattr(task, "channel", "") or ""
+            if channel:
+                record.channel = channel
+            if key not in record.task_keys:
+                record.task_keys.append(key)
             self._save_unlocked()
             return record
 

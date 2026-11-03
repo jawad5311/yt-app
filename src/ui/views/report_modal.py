@@ -104,6 +104,7 @@ class ReportProgressModal(ctk.CTkToplevel):
         success: bool = True,
         title: Optional[str] = None,
         message: Optional[str] = None,
+        auto_close: bool = False,
     ) -> None:
         """Update modal state once report generation and email dispatch finishes."""
         self.is_generating = False
@@ -128,11 +129,15 @@ class ReportProgressModal(ctk.CTkToplevel):
             m = message or "Session wrap-up finished.\nYou may now close the app."
 
         self.msg_label.configure(text=m)
-        self.action_btn.pack(pady=(12, 10))
+        if not auto_close:
+            self.action_btn.pack(pady=(12, 10))
 
     def _on_window_delete(self) -> None:
+        if getattr(self.parent_window, "is_closing", False) is True:
+            return
         if self.is_generating:
             try:
+                from tkinter import messagebox
                 messagebox.showwarning(
                     "Please Wait",
                     "Session report is currently generating.\nPlease do not close the app until the email has been sent.",

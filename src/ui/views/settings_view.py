@@ -212,6 +212,21 @@ class SettingsView(ctk.CTkFrame):
             text_color=("gray40", "gray60"),
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
+        # YouTube Data API Key
+        ctk.CTkLabel(scroll_general, text="YouTube Data API Key (Required for Channel Sync):", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        ctk.CTkLabel(
+            scroll_general,
+            text="Google YouTube Data API v3 key used to discover and sync videos and shorts from channels.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.youtube_api_key_entry = ctk.CTkEntry(scroll_general, width=400)
+        curr_api_key = self.config_mgr.get_setting("YouTubeApiKey", "") or ""
+        self.youtube_api_key_entry.insert(0, str(curr_api_key))
+        self.youtube_api_key_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
         # ---------------------------------------------------------
         # Tab 2: Playback & Queue
         # ---------------------------------------------------------
@@ -285,6 +300,22 @@ class SettingsView(ctk.CTkFrame):
         cooldown_str = f"{cooldown_val:g}" if isinstance(cooldown_val, (int, float)) else str(cooldown_val)
         self.cooldown_entry.insert(0, cooldown_str)
         self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        # Max Non-Target Shorts Limit (Shorts Reel)
+        ctk.CTkLabel(
+            scroll_playback,
+            text="Max Non-Target Shorts Limit (exit reel after N non-target shorts):",
+            font=ctk.CTkFont(weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(5, 2))
+        ctk.CTkLabel(
+            scroll_playback,
+            text="When navigating YouTube Shorts, stops the reel loop after encountering this many non-target shorts.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.non_target_shorts_limit_entry = ctk.CTkEntry(scroll_playback, width=100)
+        self.non_target_shorts_limit_entry.insert(0, str(self.config_mgr.get_int("NonTargetShortsLimit", 5)))
+        self.non_target_shorts_limit_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
         # Tab 3: Ads
@@ -515,6 +546,10 @@ class SettingsView(ctk.CTkFrame):
         # 1. Fallback switch
         validated["DirectLinkFallback"] = bool(self.fallback_switch.get())
 
+        # 1b. YouTube Data API Key
+        if hasattr(self, "youtube_api_key_entry"):
+            validated["YouTubeApiKey"] = self.youtube_api_key_entry.get().strip()
+
         # 2. Skip ads / Block ads (compatibility aliases kept consistent)
         skip_ads = bool(self.skip_ads_switch.get())
         validated["BlockAds"] = skip_ads
@@ -591,6 +626,20 @@ class SettingsView(ctk.CTkFrame):
         except (ValueError, TypeError):
             messagebox.showerror("Error", "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
             return
+
+        # 8b. Non-Target Shorts Limit (1 - 500)
+        if hasattr(self, "non_target_shorts_limit_entry"):
+            raw_non_target = self.non_target_shorts_limit_entry.get().strip()
+            try:
+                if not raw_non_target or "." in raw_non_target:
+                    raise ValueError
+                non_target_val = int(raw_non_target)
+                if non_target_val < 1 or non_target_val > 500:
+                    raise ValueError
+                validated["NonTargetShortsLimit"] = non_target_val
+            except (ValueError, TypeError):
+                messagebox.showerror("Error", "Max Non-Target Shorts Limit must be a valid integer between 1 and 500.")
+                return
 
         # 9. Automation loops (if present)
         if hasattr(self, "loop_entry"):

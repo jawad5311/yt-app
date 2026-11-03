@@ -121,3 +121,29 @@ class TestLogsView:
         view.scroll_to_bottom()
         mock_textbox.see.assert_called_with("end")
         assert view.is_scroll_btn_visible is False
+
+    def test_logs_view_fallback_and_warning_tags(self):
+        """Verify direct navigation fallback messages receive 'fallback_direct' tag and warnings receive 'warning_orange' tag."""
+        controller = MagicMock()
+        view = LogsView.__new__(LogsView)
+        view.app_controller = controller
+
+        mock_textbox = MagicMock()
+        view.log_textbox = mock_textbox
+
+        # 1. Direct navigation fallback (RED)
+        view.append_log("⚠️ [Direct Navigation Fallback Triggered] In-page click failed to navigate. Navigating directly to: https://youtube.com/watch?v=123")
+        inserted = [call[0] for call in mock_textbox.insert.call_args_list]
+        assert any("fallback_direct" in arg for arg in inserted)
+
+        # 2. Warning / Search fallback (ORANGE)
+        mock_textbox.insert.reset_mock()
+        view.append_log("No target channel video found in suggested section. Falling back to YouTube search...")
+        inserted = [call[0] for call in mock_textbox.insert.call_args_list]
+        assert any("warning_orange" in arg for arg in inserted)
+
+        # 3. Critical Error (RED)
+        mock_textbox.insert.reset_mock()
+        view.append_log("Playback identity verification failed: expected 'abc', observed 'xyz'. Aborting playback.")
+        inserted = [call[0] for call in mock_textbox.insert.call_args_list]
+        assert any("error" in arg for arg in inserted)

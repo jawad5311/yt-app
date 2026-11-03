@@ -268,6 +268,7 @@ class SessionChannelTracker:
                     "total_videos_count": reg_count + short_count,
                 })
 
+            channel_items.sort(key=lambda x: x.get("session_watch_seconds", 0.0), reverse=True)
             total_session_sec = float(sum(self.session_watch_seconds.values()))
             total_vids = self.total_regular_videos + self.total_shorts
 

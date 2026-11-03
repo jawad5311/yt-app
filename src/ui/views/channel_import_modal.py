@@ -7,6 +7,7 @@ import customtkinter as ctk
 
 from ...models.video_task import (
     DEFAULT_MAX_RUNS,
+    DEFAULT_SHORTS_MAX_RUNS,
     DEFAULT_TARGET_MULTIPLIER,
     DEFAULT_WATCHTIME_DURATION,
     WATCHTIME_OPTIONS,
@@ -14,6 +15,7 @@ from ...models.video_task import (
 )
 from ...utils.channel_fetcher import ChannelFetchResult, FetchedVideo
 from ...utils.helpers import clean_youtube_url
+from ..tooltip import add_tooltip
 
 
 class ChannelImportModal(ctk.CTkToplevel):
@@ -96,7 +98,7 @@ class ChannelImportModal(ctk.CTkToplevel):
         toolbar = ctk.CTkFrame(self, fg_color="transparent")
         toolbar.grid(row=1, column=0, padx=20, pady=(4, 8), sticky="ew")
 
-        ctk.CTkButton(
+        btn_select_all = ctk.CTkButton(
             toolbar,
             text="Select All",
             width=90,
@@ -104,9 +106,14 @@ class ChannelImportModal(ctk.CTkToplevel):
             fg_color="#1F6AA5",
             hover_color="#144870",
             command=self._select_all,
-        ).pack(side="left", padx=(0, 6))
+        )
+        btn_select_all.pack(side="left", padx=(0, 6))
+        add_tooltip(
+            btn_select_all,
+            "Select all discovered videos and shorts in the list.",
+        )
 
-        ctk.CTkButton(
+        btn_deselect_all = ctk.CTkButton(
             toolbar,
             text="Deselect All",
             width=90,
@@ -114,9 +121,14 @@ class ChannelImportModal(ctk.CTkToplevel):
             fg_color="#555555",
             hover_color="#333333",
             command=self._deselect_all,
-        ).pack(side="left", padx=(0, 6))
+        )
+        btn_deselect_all.pack(side="left", padx=(0, 6))
+        add_tooltip(
+            btn_deselect_all,
+            "Deselect all items currently checked in the list.",
+        )
 
-        ctk.CTkButton(
+        btn_select_new = ctk.CTkButton(
             toolbar,
             text="Select New Only",
             width=110,
@@ -124,9 +136,14 @@ class ChannelImportModal(ctk.CTkToplevel):
             fg_color="#2FA572",
             hover_color="#1E7B52",
             command=self._select_new_only,
-        ).pack(side="left", padx=(0, 6))
+        )
+        btn_select_new.pack(side="left", padx=(0, 6))
+        add_tooltip(
+            btn_select_new,
+            "Select only items that are not already present in your queue.",
+        )
 
-        ctk.CTkButton(
+        btn_videos_only = ctk.CTkButton(
             toolbar,
             text="Videos Only",
             width=90,
@@ -134,9 +151,14 @@ class ChannelImportModal(ctk.CTkToplevel):
             fg_color="#3B82F6",
             hover_color="#2563EB",
             command=self._select_videos_only,
-        ).pack(side="left", padx=(0, 6))
+        )
+        btn_videos_only.pack(side="left", padx=(0, 6))
+        add_tooltip(
+            btn_videos_only,
+            "Select all regular long-form videos and deselect shorts.",
+        )
 
-        ctk.CTkButton(
+        btn_shorts_only = ctk.CTkButton(
             toolbar,
             text="Shorts Only",
             width=90,
@@ -144,7 +166,12 @@ class ChannelImportModal(ctk.CTkToplevel):
             fg_color="#EC4899",
             hover_color="#DB2777",
             command=self._select_shorts_only,
-        ).pack(side="left")
+        )
+        btn_shorts_only.pack(side="left")
+        add_tooltip(
+            btn_shorts_only,
+            "Select all YouTube Shorts and deselect long-form videos.",
+        )
 
         # 3. Scrollable List of Videos
         self.scroll_frame = ctk.CTkScrollableFrame(self, label_text="Discovered Videos")
@@ -185,14 +212,19 @@ class ChannelImportModal(ctk.CTkToplevel):
         right_footer = ctk.CTkFrame(footer, fg_color="transparent")
         right_footer.pack(side="right")
 
-        ctk.CTkButton(
+        cancel_btn = ctk.CTkButton(
             right_footer,
             text="Cancel",
             width=90,
             fg_color="#555555",
             hover_color="#333333",
             command=self.destroy,
-        ).pack(side="left", padx=(0, 10))
+        )
+        cancel_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            cancel_btn,
+            "Close this modal without importing any items.",
+        )
 
         self.import_button = ctk.CTkButton(
             right_footer,
@@ -202,6 +234,10 @@ class ChannelImportModal(ctk.CTkToplevel):
             command=self._submit_import,
         )
         self.import_button.pack(side="left")
+        add_tooltip(
+            self.import_button,
+            "Import the selected videos and shorts into your playback queue.",
+        )
 
         # Initial selection count update
         self._update_selection_counter()
@@ -354,8 +390,8 @@ class ChannelImportModal(ctk.CTkToplevel):
                     duration_seconds=video.duration_seconds,
                     duration_text=video.duration_text,
                     enabled=True,
-                    target_multiplier=DEFAULT_TARGET_MULTIPLIER,
-                    max_runs=DEFAULT_MAX_RUNS,
+                    target_multiplier=0.0 if is_s else DEFAULT_TARGET_MULTIPLIER,
+                    max_runs=DEFAULT_SHORTS_MAX_RUNS if is_s else DEFAULT_MAX_RUNS,
                 )
                 tasks_to_add.append(task)
 

@@ -62,7 +62,9 @@ class LogsView(ctk.CTkFrame):
         self.log_textbox.tag_config("val_title", foreground="#4ADE80")        # Mint / Spring Green
         self.log_textbox.tag_config("action_success", foreground="#34D399")   # Emerald Green
         self.log_textbox.tag_config("skip", foreground="#FB923C")             # Orange / Coral
-        self.log_textbox.tag_config("error", foreground="#F87171")            # Coral Red
+        self.log_textbox.tag_config("error", foreground="#EF4444")            # Vivid Red (Errors / Failures)
+        self.log_textbox.tag_config("fallback_direct", foreground="#DC2626")  # Alert Red (Direct Navigation Fallback)
+        self.log_textbox.tag_config("warning_orange", foreground="#F97316")   # Vibrant Orange (Warnings, Misses, Troubled flows)
         self.log_textbox.tag_config("ad", foreground="#FB923C")               # Orange
         self.log_textbox.tag_config("pause", foreground="#F59E0B")            # Amber
         self.log_textbox.tag_config("resume", foreground="#22C55E")           # Bright Green
@@ -220,8 +222,54 @@ class LogsView(ctk.CTkFrame):
                 self.log_textbox.insert("end", "\n")
                 continue
 
-            # Check specific prefixes and categories
-            if stripped.startswith("=== ") or stripped.endswith(" ==="):
+            lower = stripped.lower()
+
+            # 1. Direct navigation fallback (Traffic source risk - RED)
+            if (
+                "direct navigation fallback" in lower
+                or "navigating directly" in lower
+                or "direct fallback" in lower
+                or "traffic source may register as direct" in lower
+                or "navigation not detected after click" in lower
+            ):
+                self.log_textbox.insert("end", line + "\n", "fallback_direct")
+            # 2. Critical Errors, Failures, Playback Mismatch, Sign-in errors (RED)
+            elif (
+                stripped.startswith("Error")
+                or stripped.startswith("Critical error")
+                or stripped.startswith("Failed")
+                or "error:" in lower
+                or "failed:" in lower
+                or "identity verification failed" in lower
+                or "playback identity verification failed" in lower
+                or "aborting playback" in lower
+                or "sign-in failed" in lower
+                or "critical alert" in lower
+                or "account suspended" in lower
+                or "bot verification" in lower
+            ):
+                self.log_textbox.insert("end", line + "\n", "error")
+            # 3. Warnings, Troubles, Search Fallbacks, Misses, Incomplete elements (ORANGE)
+            elif (
+                stripped.startswith("WARNING")
+                or "[warning]" in lower
+                or "warning:" in lower
+                or "falling back to youtube search" in lower
+                or "no target channel video found" in lower
+                or "no video matching target" in lower
+                or "unable to find candidate video" in lower
+                or "not found in suggested section" in lower
+                or "is an ad element; skipping" in lower
+                or "miss attempt" in lower
+                or "target channel videos not found" in lower
+                or "not yet visible in home feed" in lower
+                or "not in current view" in lower
+                or "could not auto-detect" in lower
+                or "network error" in lower
+            ):
+                self.log_textbox.insert("end", line + "\n", "warning_orange")
+            # 4. Standard structural tags and labels
+            elif stripped.startswith("=== ") or stripped.endswith(" ==="):
                 self.log_textbox.insert("end", line + "\n", "session_header")
             elif stripped.startswith("--- Watching ") or (stripped.startswith("--- ") and stripped.endswith(" ---")):
                 self.log_textbox.insert("end", line + "\n", "watching_banner")
@@ -234,7 +282,7 @@ class LogsView(ctk.CTkFrame):
             elif stripped.startswith("Title: "):
                 self.log_textbox.insert("end", "Title: ", "label_title")
                 self.log_textbox.insert("end", line[len("Title: "):] + "\n", "val_title")
-            elif stripped.startswith("Skipping ") or "skipping" in stripped.lower():
+            elif stripped.startswith("Skipping ") or "skipping" in lower:
                 self.log_textbox.insert("end", line + "\n", "skip")
             elif (
                 stripped.startswith("Opening ")
@@ -242,9 +290,9 @@ class LogsView(ctk.CTkFrame):
                 or stripped.startswith("Added video to queue")
                 or stripped.startswith("Found eligible")
                 or stripped.startswith("Found video")
-                or "liked comment" in stripped.lower()
-                or "liked the video" in stripped.lower()
-                or "liked a comment" in stripped.lower()
+                or "liked comment" in lower
+                or "liked the video" in lower
+                or "liked a comment" in lower
             ):
                 self.log_textbox.insert("end", line + "\n", "action_success")
             elif (
@@ -254,18 +302,10 @@ class LogsView(ctk.CTkFrame):
                 or stripped.startswith("Ad cap")
             ):
                 self.log_textbox.insert("end", line + "\n", "ad")
-            elif "paused" in stripped.lower():
+            elif "paused" in lower:
                 self.log_textbox.insert("end", line + "\n", "pause")
-            elif "resumed" in stripped.lower():
+            elif "resumed" in lower:
                 self.log_textbox.insert("end", line + "\n", "resume")
-            elif (
-                stripped.startswith("Error")
-                or stripped.startswith("Critical error")
-                or stripped.startswith("Failed")
-                or "error:" in stripped.lower()
-                or "failed:" in stripped.lower()
-            ):
-                self.log_textbox.insert("end", line + "\n", "error")
             elif (
                 stripped.startswith("Scanning ")
                 or stripped.startswith("Waiting ")

@@ -152,7 +152,7 @@ def test_fractional_cooldown_survives_reopening_and_saving_unchanged(tmp_path):
         assert hasattr(view, "tabview")
         assert view.tabview._anchor == "w"
         assert view.tabview._segmented_button.cget("height") == 36
-        for tab_name in ["General", "Playback & Queue", "Ads", "Interactivity", "Email & Reports"]:
+        for tab_name in ["General", "Playback & Video", "Shorts", "Ads", "Interactivity", "Email & Reports"]:
             assert tab_name in view.tabview._tab_dict
 
         # Verify displayed text is preserved as fractional

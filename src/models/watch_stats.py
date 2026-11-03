@@ -41,6 +41,7 @@ class WatchResult:
     video_duration: float = 0.0
     final_current_time: float = 0.0
     playback_finished: bool = False
+    views_counted: int = 0
 
     def __post_init__(self) -> None:
         if self.reason == "ended":
@@ -72,6 +73,7 @@ class TaskOutcome:
     channel: str = ""
     video_duration: float = 0.0
     playback_finished: bool = False
+    runs: Optional[int] = None
 
     @property
     def result(self) -> str:
@@ -119,11 +121,17 @@ def is_within_cooldown(
     try:
         last_dt = datetime.fromisoformat(last_timestamp)
         now_dt = current_time or datetime.now()
+        if last_dt.tzinfo is not None and now_dt.tzinfo is None:
+            last_dt = last_dt.astimezone().replace(tzinfo=None)
+        elif last_dt.tzinfo is None and now_dt.tzinfo is not None:
+            now_dt = now_dt.astimezone().replace(tzinfo=None)
+
         elapsed_seconds = (now_dt - last_dt).total_seconds()
         cooldown_seconds = cooldown_hours * 3600.0
 
-        if 0 <= elapsed_seconds < cooldown_seconds:
-            remaining_hours = (cooldown_seconds - elapsed_seconds) / 3600.0
+        if -300.0 <= elapsed_seconds < cooldown_seconds:
+            remaining_seconds = max(0.0, cooldown_seconds - max(0.0, elapsed_seconds))
+            remaining_hours = remaining_seconds / 3600.0
             return True, remaining_hours
     except Exception:
         pass
@@ -229,7 +237,9 @@ class StatRecord:
         if outcome.video_duration > 0:
             self.video_duration = outcome.video_duration
 
-        if outcome.playback_finished and outcome.success and not outcome.interrupted:
+        if outcome.runs is not None:
+            self.runs += max(0, outcome.runs)
+        elif outcome.playback_finished and outcome.success and not outcome.interrupted:
             self.runs += 1
 
         if outcome.success:
@@ -244,7 +254,7 @@ class StatRecord:
         # video is later reassigned or deleted from the queue.
         self.channel = outcome.channel
         self.last_run = timestamp
-        if outcome.playback_finished or outcome.success:
+        if outcome.playback_finished or outcome.success or outcome.watched_seconds > 0:
             self.last_completed = timestamp
         self.last_result = outcome.result
 
@@ -405,19 +415,22 @@ def format_watch_line(
     max_runs: int = 0,
     use_hours: bool = False,
     task_duration: float = 0.0,
+    show_multiplier: bool = True,
+    unit: str = "runs",
 ) -> str:
     """Queue-card line: ``x/x runs -- xx watched (multiplier)``."""
     current_runs = record.runs if record is not None else 0
+    unit_singular = unit.rstrip("s") if unit.endswith("s") else unit
     if max_runs > 0:
-        runs_str = f"{current_runs}/{max_runs} runs"
+        runs_str = f"{current_runs}/{max_runs} {unit}"
     else:
-        runs_str = "1 run" if current_runs == 1 else f"{current_runs} runs"
+        runs_str = f"1 {unit_singular}" if current_runs == 1 else f"{current_runs} {unit}"
 
     eff_duration = task_duration
     if eff_duration <= 0 and record is not None and record.video_duration > 0:
         eff_duration = record.video_duration
 
-    mult = format_watch_multiplier(record.watch_seconds if record else 0.0, eff_duration) if eff_duration > 0 else ""
+    mult = format_watch_multiplier(record.watch_seconds if record else 0.0, eff_duration) if (show_multiplier and eff_duration > 0) else ""
 
     watch_sec = record.watch_seconds if record else 0.0
     if use_hours:

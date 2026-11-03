@@ -255,10 +255,8 @@ def test_missing_pagination_config_cannot_produce_false_all_fetched():
          patch.dict("os.environ", {}, clear=True):
         res = fetch_channel_videos("@test", max_results=0, config_mgr=None)
 
-    assert res.status == "initial_page_only"
-    assert res.is_truncated is True
-    assert len(res.videos) == 1
-    assert "Fetched initial page only" in (res.warning or "")
+    assert res.status == "error"
+    assert "YouTube Data API key is not configured" in (res.error or "")
 
 
 def test_api_keys_are_absent_from_logs_and_errors():

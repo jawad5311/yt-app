@@ -19,7 +19,7 @@ from .email_reporter import EmailReporter, SessionReport
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
 from .session_tracker import SessionChannelTracker
-from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_video
+from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_short, watch_video
 
 # Retry a failed task across up to 3 titles, with 3 attempts per title (up to 9 attempts total).
 ATTEMPTS_PER_TITLE = 3
@@ -66,7 +66,7 @@ class AutomationWorker:
         )
         self.session_start_time = datetime.now()
         stamp = self.session_start_time.strftime("%d %b %Y - %I:%M %p")
-        self.session_thread_subject = f"Views App Session [{stamp}] - {getattr(self.account, 'email', '')}"
+        self.session_thread_subject = f"Entertainment Hub Session [{stamp}] - {getattr(self.account, 'email', '')}"
         self.session_thread_url: Optional[str] = None
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
@@ -346,21 +346,42 @@ class AutomationWorker:
                     enable_interactivity, interactivity_cfg = self._interactivity_settings()
                     ch_name = task.channel or "Uncategorized"
                     self.channel_tracker.set_active_channel(ch_name)
-                    result = watch_video(
-                        self.driver,
-                        task.parse_duration_seconds(),
-                        log_queue=self.log_queue,
-                        stop_event=self.stop_event,
-                        full_timeout_seconds=self._full_video_timeout_seconds(),
-                        skip_ads=self.skip_ads,
-                        max_ad_seconds=self.max_ad_seconds,
-                        end_buffer_seconds=self._end_buffer_seconds(),
-                        enable_interactivity=enable_interactivity,
-                        interactivity_config=interactivity_cfg,
-                        pause_event=self.pause_event,
-                        should_stop_callback=_is_task_channel_disabled,
-                        on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
-                    )
+                    if getattr(task, 'is_short', False) or ('/shorts/' in (getattr(task, 'url', '') or '')):
+                        def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
+                            if task and hasattr(self, 'stats_store') and self.stats_store:
+                                self.stats_store.record_view(task, views=1)
+                                emit(
+                                    self.log_queue,
+                                    f"Credited 1 view to Short '{task.title}' (Loop {loop_num}, reached {cur_t:.1f}s / {dur:.1f}s).",
+                                    logging.INFO,
+                                )
+
+                        result = watch_short(
+                            self.driver,
+                            stop_event=self.stop_event,
+                            log_queue=self.log_queue,
+                            pause_event=self.pause_event,
+                            should_stop_callback=_is_task_channel_disabled,
+                            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                            on_view_counted=_on_short_view_counted,
+                        )
+                        outcome.runs = 0
+                    else:
+                        result = watch_video(
+                            self.driver,
+                            task.parse_duration_seconds(),
+                            log_queue=self.log_queue,
+                            stop_event=self.stop_event,
+                            full_timeout_seconds=self._full_video_timeout_seconds(),
+                            skip_ads=self.skip_ads,
+                            max_ad_seconds=self.max_ad_seconds,
+                            end_buffer_seconds=self._end_buffer_seconds(),
+                            enable_interactivity=enable_interactivity,
+                            interactivity_config=interactivity_cfg,
+                            pause_event=self.pause_event,
+                            should_stop_callback=_is_task_channel_disabled,
+                            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                        )
                     self.channel_tracker.set_active_channel(None)
                     outcome.watched_seconds += max(0.0, result.watched_seconds)
                     outcome.ad_seconds += max(0.0, result.ad_seconds)

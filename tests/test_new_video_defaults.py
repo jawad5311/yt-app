@@ -30,9 +30,16 @@ def test_channel_import_modal_defaults_to_3x_mult_and_5_views(ctk_app):
     modal._submit_import()
 
     assert len(imported_tasks) == 2
-    for t in imported_tasks:
-        assert t.target_multiplier == DEFAULT_TARGET_MULTIPLIER == 3.0
-        assert t.max_runs == DEFAULT_MAX_RUNS == 5
+    v_task = next(t for t in imported_tasks if not t.is_short)
+    s_task = next(t for t in imported_tasks if t.is_short)
+
+    # Regular videos default to 3.0x multiplier and 5 max runs
+    assert v_task.target_multiplier == DEFAULT_TARGET_MULTIPLIER == 3.0
+    assert v_task.max_runs == DEFAULT_MAX_RUNS == 5
+
+    # Shorts default to 0.0 multiplier (no multiplier) and 10 max views
+    assert s_task.target_multiplier == 0.0
+    assert s_task.max_runs == 10
 
     modal.destroy()
 
