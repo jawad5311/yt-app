@@ -33,6 +33,9 @@ class QueueView(ctk.CTkFrame):
         self.shorts_only = shorts_only
         self.video_tasks: List[VideoTask] = []
         self.collapsed_groups: set = set()
+        self._pending_card_queue: List[Any] = []
+        self._render_job: Optional[str] = None
+        self._loading_indicator: Optional[Any] = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -127,13 +130,18 @@ class QueueView(ctk.CTkFrame):
         return restore
 
     def load_initial_queue(self):
+        cur_view = getattr(self.app_controller, "current_view_name", "")
+        should_render = (cur_view == "shorts_queue" if getattr(self, "shorts_only", False) else cur_view == "queue")
+
         if hasattr(self, "app_controller") and getattr(self.app_controller, "queued_video_tasks", None):
-            self.video_tasks = list(self.app_controller.queued_video_tasks)
-            self.refresh_list()
+            self.video_tasks = self.app_controller.queued_video_tasks
+            if should_render:
+                self.refresh_list()
             return
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
-        self.refresh_list()
+        if should_render:
+            self.refresh_list()
         self.app_controller.on_queue_changed(self.video_tasks)
 
     def save_queue(self):
@@ -419,6 +427,7 @@ class QueueView(ctk.CTkFrame):
                 target_multiplier=target_mult_val,
                 duration_seconds=target_task.duration_seconds,
                 duration_text=target_task.duration_text,
+                is_short_override=True if is_shorts_view else (getattr(target_task, "is_short_override", None) if is_editing else None),
             )
 
             if is_editing:
@@ -484,7 +493,139 @@ class QueueView(ctk.CTkFrame):
             else:
                 self.refresh_list()
 
+    def _cancel_pending_render(self):
+        """Cancel any queued progressive card rendering jobs."""
+        if getattr(self, "_render_job", None) is not None:
+            try:
+                self.after_cancel(self._render_job)
+            except Exception:
+                pass
+            self._render_job = None
+        if hasattr(self, "_pending_card_queue"):
+            self._pending_card_queue.clear()
+        if getattr(self, "_loading_indicator", None) is not None:
+            try:
+                self._loading_indicator.destroy()
+            except Exception:
+                pass
+            self._loading_indicator = None
+
+    def _process_card_render_batch(self, batch_size: int = 15):
+        """Render a progressive chunk of cards and yield to the Tkinter event loop between batches."""
+        self._render_job = None
+        try:
+            if hasattr(self, "winfo_exists") and not self.winfo_exists():
+                if hasattr(self, "_pending_card_queue"):
+                    self._pending_card_queue.clear()
+                return
+        except Exception:
+            pass
+
+        count = 0
+        while getattr(self, "_pending_card_queue", None) and count < batch_size:
+            (
+                container,
+                g_idx,
+                task,
+                real_index,
+                group,
+                can_move_up,
+                can_move_down,
+                on_move_up,
+                on_move_down,
+            ) = self._pending_card_queue.pop(0)
+
+            try:
+                if hasattr(container, "winfo_exists") and not container.winfo_exists():
+                    continue
+                card = self._build_task_card(
+                    container,
+                    g_idx + 1,
+                    task,
+                    real_index,
+                    channel_enabled=group.channel.enabled if not group.is_uncategorized else True,
+                    can_move_up=can_move_up,
+                    can_move_down=can_move_down,
+                    on_move_up=on_move_up,
+                    on_move_down=on_move_down,
+                    group=group,
+                )
+                card.grid(row=g_idx + 1, column=0, sticky="ew", pady=(0, 5))
+            except Exception:
+                pass
+            count += 1
+
+        if getattr(self, "_pending_card_queue", None):
+            rem = len(self._pending_card_queue)
+            if isinstance(getattr(self, "scroll_frame", None), ctk.CTkBaseClass):
+                try:
+                    if getattr(self, "_loading_indicator", None) is None:
+                        self._loading_indicator = ctk.CTkLabel(
+                            self.scroll_frame,
+                            text=f"Loading items ({rem} remaining)...",
+                            font=ctk.CTkFont(size=12, slant="italic"),
+                            text_color=("gray50", "gray50"),
+                        )
+                        self._loading_indicator.pack(pady=10)
+                    else:
+                        self._loading_indicator.configure(text=f"Loading items ({rem} remaining)...")
+                        self._loading_indicator.pack_forget()
+                        self._loading_indicator.pack(pady=10)
+                except Exception:
+                    pass
+
+            try:
+                if hasattr(self, "after"):
+                    self._render_job = self.after(10, lambda: self._process_card_render_batch(batch_size=25))
+                else:
+                    self._process_card_render_batch(batch_size=len(self._pending_card_queue))
+            except Exception:
+                while self._pending_card_queue:
+                    (
+                        container,
+                        g_idx,
+                        task,
+                        real_index,
+                        group,
+                        can_move_up,
+                        can_move_down,
+                        on_move_up,
+                        on_move_down,
+                    ) = self._pending_card_queue.pop(0)
+                    try:
+                        if hasattr(container, "winfo_exists") and not container.winfo_exists():
+                            continue
+                        card = self._build_task_card(
+                            container,
+                            g_idx + 1,
+                            task,
+                            real_index,
+                            channel_enabled=group.channel.enabled if not group.is_uncategorized else True,
+                            can_move_up=can_move_up,
+                            can_move_down=can_move_down,
+                            on_move_up=on_move_up,
+                            on_move_down=on_move_down,
+                            group=group,
+                        )
+                        card.grid(row=g_idx + 1, column=0, sticky="ew", pady=(0, 5))
+                    except Exception:
+                        pass
+        else:
+            if getattr(self, "_loading_indicator", None) is not None:
+                try:
+                    self._loading_indicator.destroy()
+                except Exception:
+                    pass
+            # Update canvas geometry once when complete so scrolling bounds are exact
+            if hasattr(self, "scroll_frame") and hasattr(self.scroll_frame, "update_idletasks"):
+                try:
+                    self.scroll_frame.update_idletasks()
+                except Exception:
+                    pass
+                self._loading_indicator = None
+
     def refresh_list(self):
+        self._cancel_pending_render()
         for child in self.scroll_frame.winfo_children():
             child.destroy()
 
@@ -521,6 +662,9 @@ class QueueView(ctk.CTkFrame):
 
             filtered_group = VideoGroup(channel=group.channel, videos=filtered_videos)
             self._render_group(filtered_group)
+
+        if hasattr(self, "_pending_card_queue") and self._pending_card_queue:
+            self._process_card_render_batch(batch_size=15)
 
     def _render_group(self, group: VideoGroup):
         """Render one channel section (header + its video cards)."""
@@ -710,19 +854,32 @@ class QueueView(ctk.CTkFrame):
                     self.save_queue()
                     self.refresh_list()
 
-            card = self._build_task_card(
-                container,
-                g_idx + 1,
-                task,
-                real_index,
-                channel_enabled=group.channel.enabled if not group.is_uncategorized else True,
-                can_move_up=not is_first,
-                can_move_down=not is_last,
-                on_move_up=_move_up,
-                on_move_down=_move_down,
-                group=group,
-            )
-            card.grid(row=g_idx + 1, column=0, sticky="ew", pady=(0, 5))
+            if hasattr(self, "_pending_card_queue"):
+                self._pending_card_queue.append((
+                    container,
+                    g_idx,
+                    task,
+                    real_index,
+                    group,
+                    not is_first,
+                    not is_last,
+                    _move_up,
+                    _move_down,
+                ))
+            else:
+                card = self._build_task_card(
+                    container,
+                    g_idx + 1,
+                    task,
+                    real_index,
+                    channel_enabled=group.channel.enabled if not group.is_uncategorized else True,
+                    can_move_up=not is_first,
+                    can_move_down=not is_last,
+                    on_move_up=_move_up,
+                    on_move_down=_move_down,
+                    group=group,
+                )
+                card.grid(row=g_idx + 1, column=0, sticky="ew", pady=(0, 5))
 
     def _build_task_card(
         self,

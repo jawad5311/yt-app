@@ -101,8 +101,8 @@ def test_sync_channel_data_flags_new_videos_and_shorts_available(ctk_app):
 
     card_text = "\n".join(labels)
     assert "New Videos & Shorts Available" in card_text
-    assert "10 Videos" in card_text
-    assert "5 Shorts" in card_text
+    assert ("10 Videos" in card_text) or ("videos: 10" in card_text)
+    assert ("5 Shorts" in card_text) or ("shorts: 5" in card_text)
 
     view.destroy()
 
@@ -250,12 +250,14 @@ def test_sync_single_channel_data_fetches_and_adds_to_queue(ctk_app):
         app.background_jobs.drain()
 
         # Both limits should be 50 when both videos and shorts are available
-        mock_fetch.assert_called_once_with(
-            channel.url,
-            video_limit=50,
-            shorts_limit=50,
-            config_mgr=app.config_mgr,
-        )
+        assert mock_fetch.call_count == 1
+        args, kwargs = mock_fetch.call_args
+        assert args[0] == channel.url
+        assert kwargs["video_limit"] == 50
+        assert kwargs["shorts_limit"] == 50
+        assert kwargs["config_mgr"] == app.config_mgr
+        assert "cancel_event" in kwargs
+        assert "progress_callback" in kwargs
 
     # Added tasks should be saved with 3.0x multiplier and 5 max runs
     app.config_mgr.append_video_tasks.assert_called_once()

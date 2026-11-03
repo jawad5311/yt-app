@@ -260,9 +260,19 @@ class ChannelsView(ctk.CTkFrame):
             if k in stored_counters:
                 ch.watch_seconds = stored_counters[k]
         self.refresh_list()
+        current_view = getattr(self.app_controller, "current_view_name", "")
         queue = self._queue_view()
         if queue is not None:
-            queue.refresh_list()
+            if current_view == "queue":
+                queue.refresh_list()
+            else:
+                self.app_controller._queue_needs_refresh = True
+        shorts_queue = self._shorts_queue_view()
+        if shorts_queue is not None:
+            if current_view == "shorts_queue":
+                shorts_queue.refresh_list()
+            else:
+                self.app_controller._shorts_queue_needs_refresh = True
         update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
         if callable(update_dash):
             update_dash()
@@ -1129,12 +1139,19 @@ class ChannelsView(ctk.CTkFrame):
             self.channels.append(channel)
             self.save_channels()
 
+            current_view = getattr(self.app_controller, "current_view_name", "")
             queue = self._queue_view()
             if queue is not None:
-                queue.refresh_list()
+                if current_view == "queue":
+                    queue.refresh_list()
+                else:
+                    self.app_controller._queue_needs_refresh = True
             shorts_queue = self._shorts_queue_view()
             if shorts_queue is not None:
-                shorts_queue.refresh_list()
+                if current_view == "shorts_queue":
+                    shorts_queue.refresh_list()
+                else:
+                    self.app_controller._shorts_queue_needs_refresh = True
 
             if on_saved:
                 on_saved(channel)
@@ -1244,9 +1261,34 @@ class ChannelsView(ctk.CTkFrame):
 
         tag = " [ARCHIVED]" if channel.archived else (" [DISABLED]" if not channel.enabled else "")
 
-        # 1. In-place editable Channel Name
+        # 1. In-place editable Channel Name and 'Open Channel' Action Button
         name_container = ctk.CTkFrame(header, fg_color="transparent")
         name_container.pack(fill="x", anchor="w")
+
+        def _open_channel():
+            raw_url = (channel.url or "").strip()
+            if not raw_url:
+                messagebox.showinfo(
+                    "Channel URL",
+                    "No URL configured for this channel yet. Click the URL line to set one.",
+                    parent=modal,
+                )
+                return
+            if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
+                raw_url = f"https://www.youtube.com/{raw_url}" if raw_url.startswith("@") else f"https://www.youtube.com/@{raw_url}"
+            webbrowser.open_new(raw_url)
+
+        open_channel_btn = ctk.CTkButton(
+            name_container,
+            text="Open Channel",
+            width=110,
+            height=30,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            command=_open_channel,
+        )
+        open_channel_btn.pack(side="right", anchor="e")
 
         name_lbl = ctk.CTkLabel(
             name_container,
@@ -1254,7 +1296,7 @@ class ChannelsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=18, weight="bold"),
             cursor="hand2",
         )
-        name_lbl.pack(side="left", anchor="w")
+        name_lbl.pack(side="left", anchor="w", before=open_channel_btn)
 
         name_entry = None
         name_saving = False
@@ -1291,7 +1333,7 @@ class ChannelsView(ctk.CTkFrame):
                 if name_entry is not None:
                     name_entry.destroy()
                     name_entry = None
-                name_lbl.pack(side="left", anchor="w")
+                name_lbl.pack(side="left", anchor="w", before=open_channel_btn)
                 name_saving = False
 
         def _cancel_name(event=None):
@@ -1303,7 +1345,7 @@ class ChannelsView(ctk.CTkFrame):
                 if name_entry is not None:
                     name_entry.destroy()
                     name_entry = None
-                name_lbl.pack(side="left", anchor="w")
+                name_lbl.pack(side="left", anchor="w", before=open_channel_btn)
             finally:
                 name_saving = False
 
@@ -1318,7 +1360,7 @@ class ChannelsView(ctk.CTkFrame):
                 height=30,
             )
             name_entry.insert(0, channel.name)
-            name_entry.pack(side="left", fill="x", expand=True)
+            name_entry.pack(side="left", fill="x", expand=True, padx=(0, 10), before=open_channel_btn)
             name_entry.focus_set()
             name_entry.select_range(0, "end")
             name_entry.bind("<Return>", _save_name)
@@ -1826,6 +1868,13 @@ class ChannelsView(ctk.CTkFrame):
 
         def _done(results):
             _close()
+            api_errors = [f"• {old_name or ch.name}: {res.error}" for (ch, old_name, old_url), res in zip(snapshots, results) if res.error]
+            if api_errors:
+                messagebox.showerror(
+                    "YouTube API Error",
+                    "The following issue(s) occurred while contacting YouTube API:\n\n" + "\n".join(api_errors),
+                    parent=self,
+                )
             new_vids_channels = 0
             updated_count = 0
             queue = self._queue_view()
@@ -2058,6 +2107,13 @@ class ChannelsView(ctk.CTkFrame):
 
         def _done(results):
             _close()
+            api_errors = [f"• {ch.name}: {res.error}" for ch, res in results if res.error]
+            if api_errors:
+                messagebox.showerror(
+                    "YouTube API Error",
+                    "The following issue(s) occurred while contacting YouTube API:\n\n" + "\n".join(api_errors),
+                    parent=self,
+                )
             current_tasks = getattr(self.app_controller, "queued_video_tasks", None)
             if current_tasks is None:
                 current_tasks = [VideoTask.from_dict(d) for d in self.app_controller.config_mgr.get_video_queue()]
@@ -2132,12 +2188,19 @@ class ChannelsView(ctk.CTkFrame):
             self.save_channels()
             self.refresh_list()
 
+            current_view = getattr(self.app_controller, "current_view_name", "")
             queue = self._queue_view()
             if queue is not None:
-                queue.refresh_list()
+                if current_view == "queue":
+                    queue.refresh_list()
+                else:
+                    self.app_controller._queue_needs_refresh = True
             shorts_queue = self._shorts_queue_view()
             if shorts_queue is not None:
-                shorts_queue.refresh_list()
+                if current_view == "shorts_queue":
+                    shorts_queue.refresh_list()
+                else:
+                    self.app_controller._shorts_queue_needs_refresh = True
             update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
             if callable(update_dash):
                 update_dash()
@@ -2196,7 +2259,7 @@ class ChannelsView(ctk.CTkFrame):
 
         batch_info_lbl = ctk.CTkLabel(
             loading,
-            text="Starting fetch in batches of 50...",
+            text="Fetching videos and shorts...",
             font=ctk.CTkFont(size=12),
             text_color=("gray40", "gray60"),
             justify="center",
@@ -2234,12 +2297,18 @@ class ChannelsView(ctk.CTkFrame):
             except Exception:
                 pass
 
-        def _progress_cb(count: int, kind: str):
+        def _on_progress(data):
             try:
-                if loading.winfo_exists():
-                    loading.after(0, lambda c=count, k=kind: batch_info_lbl.configure(
-                        text=f"Fetched {c} {k} so far in batches of 50..."
-                    ))
+                if not loading.winfo_exists():
+                    return
+                if isinstance(data, (tuple, list)) and len(data) >= 2:
+                    c, k = data[0], data[1]
+                    if k == "durations":
+                        batch_info_lbl.configure(text=f"Enriching video durations ({c} processed)...")
+                    else:
+                        batch_info_lbl.configure(text=f"Fetched {c} {k} so far...")
+                elif isinstance(data, str):
+                    batch_info_lbl.configure(text=data)
             except Exception:
                 pass
 
@@ -2330,16 +2399,26 @@ class ChannelsView(ctk.CTkFrame):
                 if hasattr(self.app_controller, "on_queue_changed"):
                     self.app_controller.on_queue_changed(new_tasks)
 
+            # Only refresh queue views if they are currently visible, else defer to tab switch
+            current_view = getattr(self.app_controller, "current_view_name", "")
             queue = self._queue_view()
             if queue is not None:
                 if added_tasks or updated_count > 0:
                     queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                queue.refresh_list()
+                if current_view == "queue":
+                    queue.refresh_list()
+                else:
+                    self.app_controller._queue_needs_refresh = True
+
             shorts_queue = self._shorts_queue_view()
             if shorts_queue is not None:
                 if added_tasks or updated_count > 0:
                     shorts_queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                shorts_queue.refresh_list()
+                if current_view == "shorts_queue":
+                    shorts_queue.refresh_list()
+                else:
+                    self.app_controller._shorts_queue_needs_refresh = True
+
             update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
             if callable(update_dash):
                 update_dash()
@@ -2380,7 +2459,7 @@ class ChannelsView(ctk.CTkFrame):
                 shorts_limit=0,
                 config_mgr=config_mgr,
                 cancel_event=cancel_ev,
-                progress_callback=_progress_cb,
+                progress_callback=report,
             )
 
         def _on_error(exc):
@@ -2391,6 +2470,7 @@ class ChannelsView(ctk.CTkFrame):
             _bg_fetch,
             done=_on_sync_done,
             error=_on_error,
+            progress=_on_progress,
             current=lambda: self._widget_exists(self) and self._widget_exists(loading),
             discard=_close_loading,
         )
@@ -2421,9 +2501,11 @@ class ChannelsView(ctk.CTkFrame):
             s_limit = 50
             fetch_desc = "up to 50 recent videos and 50 shorts"
 
+        cancel_ev = threading.Event()
+
         loading = ctk.CTkToplevel(self)
         loading.title("Syncing Channel...")
-        loading.geometry("420x150")
+        loading.geometry("420x170")
         loading.grab_set()
 
         status_text = f"Syncing {fetch_desc} for\n'{channel.name}'..."
@@ -2433,7 +2515,16 @@ class ChannelsView(ctk.CTkFrame):
             font=ctk.CTkFont(size=13, weight="bold"),
             justify="center",
             wraplength=380,
-        ).pack(pady=(20, 10))
+        ).pack(pady=(16, 6))
+
+        batch_info_lbl = ctk.CTkLabel(
+            loading,
+            text="Fetching items...",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+            justify="center",
+        )
+        batch_info_lbl.pack(pady=(0, 8))
 
         prog = ctk.CTkProgressBar(loading, mode="indeterminate", width=300)
         prog.pack(pady=(0, 15))
@@ -2444,6 +2535,21 @@ class ChannelsView(ctk.CTkFrame):
                 if loading.winfo_exists():
                     prog.stop()
                     loading.destroy()
+            except Exception:
+                pass
+
+        def _on_progress(data):
+            try:
+                if not loading.winfo_exists():
+                    return
+                if isinstance(data, (tuple, list)) and len(data) >= 2:
+                    c, k = data[0], data[1]
+                    if k == "durations":
+                        batch_info_lbl.configure(text=f"Enriching video durations ({c} processed)...")
+                    else:
+                        batch_info_lbl.configure(text=f"Fetched {c} {k} so far...")
+                elif isinstance(data, str):
+                    batch_info_lbl.configure(text=data)
             except Exception:
                 pass
 
@@ -2535,16 +2641,26 @@ class ChannelsView(ctk.CTkFrame):
                 if hasattr(self.app_controller, "on_queue_changed"):
                     self.app_controller.on_queue_changed(new_tasks)
 
+            # Only refresh queue views if they are currently visible, else defer to tab switch
+            current_view = getattr(self.app_controller, "current_view_name", "")
             queue = self._queue_view()
             if queue is not None:
                 if added_tasks or updated_count > 0:
                     queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                queue.refresh_list()
+                if current_view == "queue":
+                    queue.refresh_list()
+                else:
+                    self.app_controller._queue_needs_refresh = True
+
             shorts_queue = self._shorts_queue_view()
             if shorts_queue is not None:
                 if added_tasks or updated_count > 0:
                     shorts_queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                shorts_queue.refresh_list()
+                if current_view == "shorts_queue":
+                    shorts_queue.refresh_list()
+                else:
+                    self.app_controller._shorts_queue_needs_refresh = True
+
             update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
             if callable(update_dash):
                 update_dash()
@@ -2581,6 +2697,8 @@ class ChannelsView(ctk.CTkFrame):
                 video_limit=v_limit,
                 shorts_limit=s_limit,
                 config_mgr=config_mgr,
+                cancel_event=cancel_ev,
+                progress_callback=report,
             )
 
         def _on_error(exc):
@@ -2591,6 +2709,7 @@ class ChannelsView(ctk.CTkFrame):
             _bg_fetch,
             done=_on_sync_done,
             error=_on_error,
+            progress=_on_progress,
             current=lambda: self._widget_exists(self) and self._widget_exists(loading),
             discard=_close_loading,
         )
@@ -2667,9 +2786,13 @@ class ChannelsView(ctk.CTkFrame):
                         self.app_controller.config_mgr.set_video_queue(non_ch + ch_vids)
                 self.save_channels()
                 self.refresh_list()
+                current_view = getattr(self.app_controller, "current_view_name", "")
                 queue = self._queue_view()
                 if queue is not None:
-                    queue.refresh_list()
+                    if current_view == "queue":
+                        queue.refresh_list()
+                    else:
+                        self.app_controller._queue_needs_refresh = True
                 update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
                 if callable(update_dash):
                     update_dash()

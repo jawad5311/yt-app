@@ -113,3 +113,41 @@ def test_channel_card_name_and_handle_format(ctk_app):
     assert "Watch Time: 1.0 / 2.5 hours (40%)" in display
 
     view.destroy()
+
+
+def test_open_channel_button_in_modal(ctk_app):
+    from unittest.mock import patch
+    import customtkinter as ctk
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+
+    view = ChannelsView(app, app)
+    channel = Channel(
+        name="Fabio Rodrigues",
+        url="https://www.youtube.com/@fabiorodrigues3083",
+    )
+
+    with patch("webbrowser.open_new") as mock_open:
+        view.open_channel_videos_modal(channel)
+        app.update()
+
+        def find_btn(w):
+            if isinstance(w, ctk.CTkButton) and w.cget("text") == "Open Channel":
+                return w
+            for c in w.winfo_children():
+                res = find_btn(c)
+                if res:
+                    return res
+            return None
+
+        btn = find_btn(view)
+        assert btn is not None, "Open Channel button should exist in channel videos modal"
+        btn._command()
+        mock_open.assert_called_once_with("https://www.youtube.com/@fabiorodrigues3083")
+
+    view.destroy()
