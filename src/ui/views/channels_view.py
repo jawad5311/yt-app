@@ -125,7 +125,7 @@ class ChannelsView(Frame):
         check_btn = ctk.CTkButton(
             btn_frame,
             text="🔍 Check New",
-            width=105,
+            width=115,
             fg_color="#0D9488",
             hover_color="#0F766E",
             font=ctk.CTkFont(weight="bold"),
@@ -140,7 +140,7 @@ class ChannelsView(Frame):
         sync_data_btn = ctk.CTkButton(
             btn_frame,
             text="⚡ Sync Data All",
-            width=120,
+            width=135,
             fg_color="#1F6AA5",
             hover_color="#144870",
             font=ctk.CTkFont(weight="bold"),
@@ -2834,7 +2834,7 @@ class ChannelsView(Frame):
             lbl = ctk.CTkLabel(
                 info_frame,
                 text=f"{line1}\n{line2}",
-                font=ctk.CTkFont(size=13),
+                font=ctk.CTkFont(size=11),
                 justify="left",
                 anchor="w",
                 cursor="hand2",
@@ -2853,7 +2853,7 @@ class ChannelsView(Frame):
                     tot_lbl = ctk.CTkLabel(
                         meta_frame,
                         text=totals_text,
-                        font=ctk.CTkFont(size=12),
+                        font=ctk.CTkFont(size=9),
                         justify="left",
                         anchor="w",
                         cursor="hand2",
@@ -2868,7 +2868,7 @@ class ChannelsView(Frame):
                     new_lbl = ctk.CTkLabel(
                         meta_frame,
                         text=f"{sep}{badge_text}",
-                        font=ctk.CTkFont(size=12, weight="bold"),
+                        font=ctk.CTkFont(size=9, weight="bold"),
                         justify="left",
                         anchor="w",
                         cursor="hand2",
@@ -2906,9 +2906,9 @@ class ChannelsView(Frame):
             btn_up = ctk.CTkButton(
                 action_frame,
                 text="▲",
-                width=30,
-                height=28,
-                font=ctk.CTkFont(size=12, weight="bold"),
+                width=24,
+                height=24,
+                font=ctk.CTkFont(size=9, weight="bold"),
                 fg_color="#374151" if can_up else "gray30",
                 hover_color="#4B5563" if can_up else "gray30",
                 state="normal" if can_up else "disabled",
@@ -2923,9 +2923,9 @@ class ChannelsView(Frame):
             btn_down = ctk.CTkButton(
                 action_frame,
                 text="▼",
-                width=30,
-                height=28,
-                font=ctk.CTkFont(size=12, weight="bold"),
+                width=24,
+                height=24,
+                font=ctk.CTkFont(size=9, weight="bold"),
                 fg_color="#374151" if can_down else "gray30",
                 hover_color="#4B5563" if can_down else "gray30",
                 state="normal" if can_down else "disabled",
@@ -2941,7 +2941,7 @@ class ChannelsView(Frame):
             sync_all_btn = ctk.CTkButton(
                 action_frame,
                 text="⚡ Sync All",
-                width=75,
+                width=80,
                 fg_color="#2563EB" if has_url else "gray30",
                 hover_color="#1D4ED8" if has_url else "gray30",
                 state="normal" if has_url else "disabled",
@@ -2957,7 +2957,7 @@ class ChannelsView(Frame):
             sync_btn = ctk.CTkButton(
                 action_frame,
                 text="⚡ Sync Recent",
-                width=85,
+                width=95,
                 fg_color="#0D9488" if has_new else "gray30",
                 hover_color="#0F766E" if has_new else "gray30",
                 state="normal" if has_new else "disabled",
@@ -2973,7 +2973,7 @@ class ChannelsView(Frame):
                 restore_btn = ctk.CTkButton(
                     action_frame,
                     text="📂 Restore",
-                    width=70,
+                    width=75,
                     fg_color="#059669",
                     hover_color="#047857",
                     command=lambda i=real_idx: self.unarchive_channel(i),
@@ -2987,7 +2987,7 @@ class ChannelsView(Frame):
                 archive_btn = ctk.CTkButton(
                     action_frame,
                     text="📁 Archive",
-                    width=68,
+                    width=75,
                     fg_color="#D97706",
                     hover_color="#B45309",
                     command=lambda i=real_idx: self.archive_channel(i),
@@ -3001,7 +3001,7 @@ class ChannelsView(Frame):
             del_btn = ctk.CTkButton(
                 action_frame,
                 text="🗑 Delete",
-                width=65,
+                width=70,
                 fg_color="#D32F2F",
                 hover_color="#9A0007",
                 command=lambda i=real_idx: self.remove_channel(i),

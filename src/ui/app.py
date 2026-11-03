@@ -126,7 +126,7 @@ class YTBotApp(tk.Tk):
             self.sidebar,
             text="YT Organic Bot",
             style="Sidebar.TLabel",
-            font=get_font(size=16, weight="bold"),
+            font=get_font(size=14, weight="bold"),
         ).grid(row=0, column=0, padx=20, pady=(20, 20))
 
         self.nav_buttons: Dict[str, Any] = {}

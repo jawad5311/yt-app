@@ -123,21 +123,33 @@ class Button(ttk.Button):
         if style is None:
             if fg_color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
                 style = "Primary.TButton"
-            elif fg_color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c"):
+            elif fg_color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
                 style = "Success.TButton"
             elif fg_color in ("#D32F2F", "#d32f2f", "#C62828", "#c62828"):
                 style = "Danger.TButton"
-            elif fg_color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706"):
+            elif fg_color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706", "#B45309"):
                 style = "Warning.TButton"
+            elif fg_color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
+                style = "Teal.TButton"
+            elif fg_color in ("#374151", "#4B5563", "#4b5563"):
+                style = "MutedAction.TButton"
             elif fg_color == "transparent":
                 style = "Nav.TButton"
+            elif fg_color is None:
+                style = "Primary.TButton"
             else:
                 style = "TButton"
 
         if width is not None:
-            # TTK button width is measured in characters, CTk width is in pixels
-            char_width = max(3, width // 10) if width > 20 else width
-            kwargs["width"] = char_width
+            raw_len = len(text) if text else 0
+            for ch in (text or ""):
+                if ord(ch) > 127:
+                    raw_len += 1
+            char_w = max(raw_len + 2, int(width / 7.0)) if width > 20 else max(raw_len + 2, width)
+            kwargs["width"] = -char_w
+            self._min_width = char_w
+        else:
+            self._min_width = 0
 
         self._command = command
         self._text = text
@@ -150,24 +162,41 @@ class Button(ttk.Button):
             self._command = kwargs["command"]
         if "text" in kwargs:
             self._text = kwargs["text"]
+            if getattr(self, "_min_width", 0) > 0:
+                raw_len = len(self._text)
+                for ch in self._text:
+                    if ord(ch) > 127:
+                        raw_len += 1
+                kwargs["width"] = -max(raw_len + 2, self._min_width)
         if "font" in kwargs:
             kwargs["font"] = _resolve_font(kwargs["font"])
         if "fg_color" in kwargs:
             color = kwargs.pop("fg_color")
             if color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
                 kwargs["style"] = "Primary.TButton"
-            elif color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c"):
+            elif color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
                 kwargs["style"] = "Success.TButton"
             elif color in ("#D32F2F", "#d32f2f", "#C62828", "#c62828"):
                 kwargs["style"] = "Danger.TButton"
-            elif color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706"):
+            elif color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706", "#B45309"):
                 kwargs["style"] = "Warning.TButton"
+            elif color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
+                kwargs["style"] = "Teal.TButton"
+            elif color in ("#374151", "#4B5563", "#4b5563"):
+                kwargs["style"] = "MutedAction.TButton"
             elif color == "transparent":
                 kwargs["style"] = "Nav.TButton"
         if "width" in kwargs:
-            w = kwargs["width"]
-            if w and w > 20:
-                kwargs["width"] = max(3, w // 10)
+            w = kwargs.pop("width")
+            if w is not None:
+                cur_text = getattr(self, "_text", "")
+                raw_len = len(cur_text)
+                for ch in cur_text:
+                    if ord(ch) > 127:
+                        raw_len += 1
+                char_w = max(raw_len + 2, int(w / 7.0)) if w > 20 else max(raw_len + 2, w)
+                self._min_width = char_w
+                kwargs["width"] = -char_w
         super().configure(**kwargs)
 
     def cget(self, prop: str) -> Any:
@@ -587,7 +616,7 @@ class SegmentedButton(ttk.Frame):
             btn = ttk.Button(
                 self,
                 text=val,
-                style="NavActive.TButton" if val == self._current_value else "Nav.TButton",
+                style="SegmentedActive.TButton" if val == self._current_value else "Segmented.TButton",
                 command=lambda v=val: self._on_btn_click(v),
             )
             btn.pack(side="left", padx=1, pady=1)
@@ -604,7 +633,7 @@ class SegmentedButton(ttk.Frame):
     def set(self, val: str):
         self._current_value = val
         for v, btn in self._buttons.items():
-            btn.configure(style="NavActive.TButton" if v == val else "Nav.TButton")
+            btn.configure(style="SegmentedActive.TButton" if v == val else "Segmented.TButton")
 
     def get(self) -> str:
         return self._current_value
@@ -619,7 +648,7 @@ class SegmentedButton(ttk.Frame):
                 btn = ttk.Button(
                     self,
                     text=val,
-                    style="NavActive.TButton" if val == self._current_value else "Nav.TButton",
+                    style="SegmentedActive.TButton" if val == self._current_value else "Segmented.TButton",
                     command=lambda v=val: self._on_btn_click(v),
                 )
                 btn.pack(side="left", padx=1, pady=1)

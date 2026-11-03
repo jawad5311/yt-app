@@ -12,33 +12,37 @@ from tkinter import ttk
 from typing import Any, Dict, Tuple
 
 DARK_THEME: Dict[str, str] = {
-    "bg": "#1e1e1e",
-    "sidebar_bg": "#252526",
-    "card_bg": "#2d2d30",
-    "card_border": "#3e3e42",
-    "fg": "#ffffff",
-    "fg_dim": "#cccccc",
-    "fg_muted": "#8c8c8c",
-    "accent": "#1f6aa5",
-    "accent_hover": "#144870",
-    "accent_active": "#0f3655",
-    "nav_hover": "#333333",
-    "nav_active": "#1f6aa5",
-    "success": "#2e7d32",
-    "success_hover": "#1b5e20",
-    "danger": "#d32f2f",
-    "danger_hover": "#9a0007",
-    "warning": "#f57c00",
-    "warning_hover": "#b26a00",
-    "input_bg": "#3c3c3c",
-    "input_fg": "#ffffff",
-    "select_bg": "#1f6aa5",
+    "bg": "#18181b",
+    "sidebar_bg": "#121214",
+    "card_bg": "#222226",
+    "card_border": "#2e2e34",
+    "fg": "#f4f4f5",
+    "fg_dim": "#d4d4d8",
+    "fg_muted": "#9ca3af",
+    "accent": "#2563eb",
+    "accent_hover": "#1d4ed8",
+    "accent_active": "#1e40af",
+    "nav_hover": "#222226",
+    "nav_active": "#2563eb",
+    "success": "#16a34a",
+    "success_hover": "#15803d",
+    "danger": "#dc2626",
+    "danger_hover": "#b91c1c",
+    "warning": "#d97706",
+    "warning_hover": "#b45309",
+    "teal": "#0d9488",
+    "teal_hover": "#0f766e",
+    "muted_action": "#374151",
+    "muted_action_hover": "#4b5563",
+    "input_bg": "#27272a",
+    "input_fg": "#f4f4f5",
+    "select_bg": "#2563eb",
     "select_fg": "#ffffff",
-    "trough": "#252526",
-    "scrollbar_thumb": "#4e4e52",
-    "scrollbar_hover": "#68686d",
-    "tab_bg": "#252526",
-    "tab_selected_bg": "#2d2d30",
+    "trough": "#18181b",
+    "scrollbar_thumb": "#3f3f46",
+    "scrollbar_hover": "#52525b",
+    "tab_bg": "#18181b",
+    "tab_selected_bg": "#222226",
 }
 
 LIGHT_THEME: Dict[str, str] = {
@@ -86,12 +90,16 @@ def get_default_font_family() -> str:
     return "Helvetica"
 
 
-def get_font(size: int = 11, weight: str = "normal", slant: str = "roman") -> Tuple[str, int, str]:
+def get_font(size: Any = 10, weight: str = "normal", slant: str = "roman") -> Tuple[str, int, str]:
     family = get_default_font_family()
     weight_str = "bold" if "bold" in str(weight).lower() else "normal"
+    try:
+        int_size = int(round(float(size)))
+    except (ValueError, TypeError):
+        int_size = 10
     if slant and "italic" in str(slant).lower():
-        return (family, size, f"{weight_str} italic")
-    return (family, size, weight_str)
+        return (family, int_size, f"{weight_str} italic")
+    return (family, int_size, weight_str)
 
 
 def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
@@ -127,29 +135,29 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     style.configure("Action.TFrame", background=colors["card_bg"])
 
     # Labels
-    style.configure("TLabel", background=colors["bg"], foreground=colors["fg"], font=(family, 10))
-    style.configure("Card.TLabel", background=colors["card_bg"], foreground=colors["fg"], font=(family, 10))
-    style.configure("Sidebar.TLabel", background=colors["sidebar_bg"], foreground=colors["fg"], font=(family, 10))
-    style.configure("Header.TLabel", background=colors["bg"], foreground=colors["fg"], font=(family, 16, "bold"))
-    style.configure("Subheader.TLabel", background=colors["bg"], foreground=colors["fg"], font=(family, 12, "bold"))
-    style.configure("CardTitle.TLabel", background=colors["card_bg"], foreground=colors["fg_muted"], font=(family, 10))
-    style.configure("CardValue.TLabel", background=colors["card_bg"], foreground=colors["fg"], font=(family, 16, "bold"))
-    style.configure("Muted.TLabel", background=colors["bg"], foreground=colors["fg_muted"], font=(family, 9))
-    style.configure("CardMuted.TLabel", background=colors["card_bg"], foreground=colors["fg_muted"], font=(family, 9))
-    style.configure("Error.TLabel", background=colors["bg"], foreground=colors["danger"], font=(family, 10))
-    style.configure("Success.TLabel", background=colors["bg"], foreground=colors["success"], font=(family, 10))
-    style.configure("Warning.TLabel", background=colors["bg"], foreground=colors["warning"], font=(family, 10))
+    style.configure("TLabel", background=colors["bg"], foreground=colors["fg"], font=(family, 9))
+    style.configure("Card.TLabel", background=colors["card_bg"], foreground=colors["fg"], font=(family, 9))
+    style.configure("Sidebar.TLabel", background=colors["sidebar_bg"], foreground=colors["fg"], font=(family, 9))
+    style.configure("Header.TLabel", background=colors["bg"], foreground=colors["fg"], font=(family, 15, "bold"))
+    style.configure("Subheader.TLabel", background=colors["bg"], foreground=colors["fg"], font=(family, 11, "bold"))
+    style.configure("CardTitle.TLabel", background=colors["card_bg"], foreground=colors["fg_muted"], font=(family, 9, "bold"))
+    style.configure("CardValue.TLabel", background=colors["card_bg"], foreground=colors["fg"], font=(family, 13, "bold"))
+    style.configure("Muted.TLabel", background=colors["bg"], foreground=colors["fg_muted"], font=(family, 8))
+    style.configure("CardMuted.TLabel", background=colors["card_bg"], foreground=colors["fg_muted"], font=(family, 8))
+    style.configure("Error.TLabel", background=colors["bg"], foreground=colors["danger"], font=(family, 9))
+    style.configure("Success.TLabel", background=colors["bg"], foreground=colors["success"], font=(family, 9))
+    style.configure("Warning.TLabel", background=colors["bg"], foreground=colors["warning"], font=(family, 9))
 
     # Base Buttons
     style.configure(
         "TButton",
-        background=colors["card_bg"],
+        background=colors["card_border"],
         foreground=colors["fg"],
-        font=(family, 10),
+        font=(family, 9),
         borderwidth=0,
         focuscolor="none",
         relief="flat",
-        padding=(10, 6),
+        padding=(8, 4),
     )
     style.map(
         "TButton",
@@ -162,11 +170,11 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "Primary.TButton",
         background=colors["accent"],
         foreground="#ffffff",
-        font=(family, 11, "bold"),
+        font=(family, 9, "bold"),
         borderwidth=0,
         focuscolor="none",
         relief="flat",
-        padding=(12, 7),
+        padding=(10, 4),
     )
     style.map(
         "Primary.TButton",
@@ -179,11 +187,11 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "Danger.TButton",
         background=colors["danger"],
         foreground="#ffffff",
-        font=(family, 10, "bold"),
+        font=(family, 9, "bold"),
         borderwidth=0,
         focuscolor="none",
         relief="flat",
-        padding=(10, 6),
+        padding=(8, 4),
     )
     style.map(
         "Danger.TButton",
@@ -196,11 +204,11 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "Success.TButton",
         background=colors["success"],
         foreground="#ffffff",
-        font=(family, 10, "bold"),
+        font=(family, 9, "bold"),
         borderwidth=0,
         focuscolor="none",
         relief="flat",
-        padding=(10, 6),
+        padding=(8, 4),
     )
     style.map(
         "Success.TButton",
@@ -213,15 +221,82 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "Warning.TButton",
         background=colors["warning"],
         foreground="#ffffff",
-        font=(family, 10, "bold"),
+        font=(family, 9, "bold"),
         borderwidth=0,
         focuscolor="none",
         relief="flat",
-        padding=(10, 6),
+        padding=(8, 4),
     )
     style.map(
         "Warning.TButton",
         background=[("active", colors["warning_hover"]), ("pressed", colors["warning_hover"])],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    # Teal Button (for Check New, Sync Recent)
+    style.configure(
+        "Teal.TButton",
+        background=colors.get("teal", "#0d9488"),
+        foreground="#ffffff",
+        font=(family, 9, "bold"),
+        borderwidth=0,
+        focuscolor="none",
+        relief="flat",
+        padding=(8, 4),
+    )
+    style.map(
+        "Teal.TButton",
+        background=[("active", colors.get("teal_hover", "#0f766e")), ("pressed", "#115e59")],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    # Muted Action Button (for Up/Down arrows and neutral secondary actions)
+    style.configure(
+        "MutedAction.TButton",
+        background=colors.get("muted_action", "#374151"),
+        foreground="#e5e7eb",
+        font=(family, 8, "bold"),
+        borderwidth=0,
+        focuscolor="none",
+        relief="flat",
+        padding=(4, 2),
+    )
+    style.map(
+        "MutedAction.TButton",
+        background=[("active", colors.get("muted_action_hover", "#4b5563")), ("pressed", "#1f2937")],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    # Segmented Tab Buttons (Pill styling)
+    style.configure(
+        "Segmented.TButton",
+        background="#27272a",
+        foreground=colors["fg_dim"],
+        font=(family, 9, "bold"),
+        borderwidth=0,
+        focuscolor="none",
+        relief="flat",
+        padding=(12, 4),
+    )
+    style.map(
+        "Segmented.TButton",
+        background=[("active", "#3f3f46"), ("pressed", "#27272a")],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    style.configure(
+        "SegmentedActive.TButton",
+        background=colors["accent"],
+        foreground="#ffffff",
+        font=(family, 9, "bold"),
+        borderwidth=0,
+        focuscolor="none",
+        relief="flat",
+        padding=(12, 4),
+    )
+    style.map(
+        "SegmentedActive.TButton",
+        background=[("active", colors["accent_hover"]), ("pressed", colors["accent_active"])],
         foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
@@ -230,12 +305,12 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "Nav.TButton",
         background=colors["sidebar_bg"],
         foreground=colors["fg_dim"],
-        font=(family, 11),
+        font=(family, 10),
         borderwidth=0,
         focuscolor="none",
         anchor="w",
         relief="flat",
-        padding=(14, 8),
+        padding=(12, 6),
     )
     style.map(
         "Nav.TButton",
@@ -247,12 +322,12 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "NavActive.TButton",
         background=colors["accent"],
         foreground="#ffffff",
-        font=(family, 11, "bold"),
+        font=(family, 10, "bold"),
         borderwidth=0,
         focuscolor="none",
         anchor="w",
         relief="flat",
-        padding=(14, 8),
+        padding=(12, 6),
     )
     style.map(
         "NavActive.TButton",
