@@ -346,10 +346,9 @@ def test_actual_player_end_is_a_full_run(monkeypatch):
     assert result.watched_seconds == 6
 
 
-@pytest.mark.parametrize("is_ad", [False, True])
-def test_timeout_is_failure_not_full_completion(monkeypatch, is_ad):
+def test_timeout_is_failure_not_full_completion(monkeypatch):
     result, _ = run_scripted_watch(monkeypatch, [
-        playback_state(0, duration=10, isAd=is_ad) for _ in range(46)
+        playback_state(0, duration=10, isAd=False) for _ in range(46)
     ], duration_seconds=None, full_timeout_seconds=1, skip_ads=False, max_ad_seconds=0)
     assert not result.completed
     assert not result.playback_finished
@@ -420,14 +419,70 @@ def test_ad_position_does_not_satisfy_full_video_cutoff(monkeypatch):
 
 
 @pytest.mark.parametrize("probe", [
-    playback_state(0), playback_state(0, isAd=True),
-    playback_state(0, readyState=1), {"found": False},
+    playback_state(0),
+    playback_state(0, readyState=1),
 ])
 def test_one_deadline_covers_every_player_state(monkeypatch, probe):
     result, _ = run_scripted_watch(monkeypatch, [probe] * 4,
         duration_seconds=None, full_timeout_seconds=6, skip_ads=False, max_ad_seconds=0)
     assert result.reason == "full_timeout"
     assert not result.completed and not result.playback_finished
+
+
+def test_video_timer_starts_after_ad_is_skipped_and_video_playing(monkeypatch):
+    """Verify video watch timer and safety timeout start only after ad completes and video plays."""
+    samples = [
+        # 5 ad samples (15s total of ad)
+        playback_state(0, isAd=True),
+        playback_state(0, isAd=True),
+        playback_state(0, isAd=True),
+        playback_state(0, isAd=True),
+        playback_state(0, isAd=True),
+        # Ad ends, video starts playing
+        playback_state(1, isAd=False),
+        playback_state(4, isAd=False),
+        playback_state(7, isAd=False),
+    ]
+    # full_timeout_seconds=6: should NOT fire during the 15s of ad.
+    # It should only fire after 6s of main video playback.
+    result, _ = run_scripted_watch(
+        monkeypatch,
+        samples,
+        duration_seconds=None,
+        full_timeout_seconds=6,
+        skip_ads=False,
+        max_ad_seconds=0,
+    )
+    assert result.reason == "full_timeout"
+    assert not result.completed
+    assert result.ad_seconds == 12  # ticks tracked during ad
+    assert result.watched_seconds == 6  # 6s watched after video started
+
+
+def test_midroll_ad_freezes_video_watch_timer(monkeypatch):
+    """Verify mid-roll ad freezes the video timer so ad time does not consume video timeout."""
+    samples = [
+        # 2 video samples (3s video playback)
+        playback_state(1, isAd=False),
+        playback_state(4, isAd=False),
+        # 3 mid-roll ad samples (9s ad playback)
+        playback_state(100, isAd=True),
+        playback_state(100, isAd=True),
+        playback_state(100, isAd=True),
+        # Video resumes (3s video playback -> reaches 6s total video time)
+        playback_state(7, isAd=False),
+        playback_state(10, isAd=False),
+    ]
+    result, _ = run_scripted_watch(
+        monkeypatch,
+        samples,
+        duration_seconds=None,
+        full_timeout_seconds=6,
+        skip_ads=False,
+        max_ad_seconds=0,
+    )
+    assert result.reason == "full_timeout"
+    assert result.watched_seconds == 6
 
 
 def test_timeout_preserves_final_measured_interval(monkeypatch):

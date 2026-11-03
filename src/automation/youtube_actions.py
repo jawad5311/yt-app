@@ -559,6 +559,8 @@ def watch_video(
         pass
     autoplay_disabled = False
 
+    video_started = False
+    was_ad = False
     started_at = time.monotonic()
     last_tick = started_at
     last_progress_log = 0.0
@@ -642,7 +644,7 @@ def watch_video(
         now = time.monotonic()
         delta = max(0.0, now - last_tick)
         last_tick = now
-        elapsed = now - started_at
+
 
         try:
             video_state = driver.execute_script(PLAYER_STATE_JS)
@@ -666,6 +668,8 @@ def watch_video(
         measured_seconds = playback_meter.sample(video_state, time.monotonic())
 
         is_ad = bool(video_state.get("isAd"))
+        paused = bool(video_state.get("paused", False))
+        curr_time = float(video_state.get("currentTime", 0.0))
         ended = bool(video_state.get("ended", False)) and not is_ad
         if video_state.get("found"):
             ad_state.tick(is_ad, delta)
@@ -678,11 +682,31 @@ def watch_video(
                     pass
         if video_state.get("found") and not is_ad:
             last_known_duration = float(video_state.get("duration", 0.0)) or last_known_duration
-            last_known_current_time = float(video_state.get("currentTime", 0.0))
+            last_known_current_time = curr_time
 
-        # One monotonic deadline covers all player states. A genuine player
-        # end observed on this probe takes precedence over timeout expiry.
-        if is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds and not ended:
+        # Video watch timer: start only after ads are skipped/completed and the main video is actually playing.
+        if not video_started:
+            if video_state.get("found") and not is_ad and (not paused or curr_time > 0.0 or measured_seconds > 0):
+                video_started = True
+                started_at = now
+                elapsed = 0.0
+                if ad_state.total_ad_seconds > 0:
+                    emit(log_queue, "Ad finished/skipped. Video is now playing — started watch timer.")
+            else:
+                started_at = now
+                elapsed = 0.0
+        else:
+            # Main video has started; if a mid-roll ad appears (or just finished), freeze/extend watch timer
+            if is_ad or was_ad:
+                started_at += delta
+                if was_ad and not is_ad:
+                    emit(log_queue, "Ad finished/skipped. Video resumed — watch timer resumed.")
+            elapsed = max(0.0, now - started_at)
+
+        was_ad = is_ad
+
+        # Full video safety timeout covers main video playback only (not ads or pre-start delay).
+        if not is_ad and video_started and is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds and not ended:
             emit(log_queue, f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.", logging.WARNING)
             return _result(False, "full_timeout")
 
@@ -835,6 +859,7 @@ def watch_video(
         )
         if interactive_event.get("micro_paused"):
             last_tick = time.monotonic()
+            started_at += float(interactive_event["micro_paused"])
 
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Watchtime interrupted by user.")
@@ -867,6 +892,7 @@ def watch_short(
     emit(log_queue, f"Starting Shorts playback: watching for {target_loops} loop(s) in a single go.")
 
     playback_meter = PlaybackMeter()
+    video_started = False
     started_at = time.monotonic()
     last_tick = started_at
     last_5s_check = started_at
