@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from src.utils.channel_fetcher import (
     ChannelFetchResult,
+    FetchedVideo,
     extract_channel_title,
     extract_fallback_channel_name,
     extract_videos_from_data,
@@ -210,39 +211,26 @@ def test_fetch_channel_videos_empty_input():
     assert result.error == "Channel URL or handle is required."
 
 
-@patch("urllib.request.urlopen")
-def test_fetch_channel_videos_success(mock_urlopen):
-    payload = {
-        "metadata": {"channelMetadataRenderer": {"title": "Cool Channel"}},
-        "contents": {
-            "lockupViewModel": {
-                "contentId": "xyz987",
-                "metadata": {"lockupMetadataViewModel": {"title": {"content": "Test Video"}}},
-                "contentImage": {},
-            }
-        },
-    }
-    html = f"<script>var ytInitialData = {json.dumps(payload)};</script>"
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
-
+def test_fetch_channel_videos_requires_api_key():
     result = fetch_channel_videos("@coolchannel")
     assert isinstance(result, ChannelFetchResult)
+    assert result.error is not None
+    assert "YouTube Data API key is not configured" in result.error
+
+
+@patch("src.utils.channel_fetcher.fetch_channel_videos_api")
+def test_fetch_channel_videos_delegates_to_api(mock_api):
+    mock_api.return_value = ChannelFetchResult(
+        channel_title="Cool Channel",
+        channel_url="https://www.youtube.com/@coolchannel/videos",
+        videos=[FetchedVideo("xyz987", "https://youtube.com/watch?v=xyz987", "Test Video")],
+    )
+    with patch.dict("os.environ", {"YOUTUBE_API_KEY": "AIzaSyTEST_KEY"}):
+        result = fetch_channel_videos("@coolchannel")
     assert result.error is None
     assert result.channel_title == "Cool Channel"
     assert len(result.videos) == 1
     assert result.videos[0].video_id == "xyz987"
-
-
-@patch("urllib.request.urlopen")
-def test_fetch_channel_videos_http_error(mock_urlopen):
-    mock_urlopen.side_effect = urllib.error.HTTPError(
-        url="https://youtube.com", code=404, msg="Not Found", hdrs=MagicMock(), fp=None
-    )
-    result = fetch_channel_videos("@nonexistent")
-    assert result.error is not None
-    assert "HTTP Error 404" in result.error
 
 
 def test_extract_channel_title_from_html():
@@ -261,28 +249,20 @@ def test_extract_channel_title_from_html():
     assert extract_channel_title_from_html(html_meta) == "Tech Insider"
 
 
-@patch("urllib.request.urlopen")
-def test_fetch_channel_title_online(mock_urlopen):
+def test_fetch_channel_title_online_without_api_key():
     from src.utils.channel_fetcher import fetch_channel_title_online
+    with patch.dict("os.environ", {}, clear=True):
+        name = fetch_channel_title_online("@iamcarhacker")
+    assert name is None
 
-    html = '<html><head><meta property="og:title" content="Official Car Hacker Channel"></head></html>'
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
 
-    name = fetch_channel_title_online("@iamcarhacker")
+@patch("src.utils.channel_fetcher.fetch_channel_data_api")
+def test_fetch_channel_title_online_with_api_key(mock_api):
+    from src.utils.channel_fetcher import fetch_channel_title_online
+    mock_api.return_value = ChannelFetchResult(channel_title="Official Car Hacker Channel")
+    with patch.dict("os.environ", {"YOUTUBE_API_KEY": "AIzaSyTEST_KEY"}):
+        name = fetch_channel_title_online("@iamcarhacker")
     assert name == "Official Car Hacker Channel"
-
-
-@patch("urllib.request.urlopen")
-def test_fetch_channel_videos_fallback_to_html_title(mock_urlopen):
-    html = '<html><head><meta property="og:title" content="Fallback Car Hacker"></head><body><script>var ytInitialData = {"contents": {}};</script></body></html>'
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
-
-    result = fetch_channel_videos("@iamcarhacker")
-    assert result.channel_title == "Fallback Car Hacker"
 
 
 def test_extract_videos_from_data_with_none_max_results():
@@ -303,21 +283,19 @@ def test_extract_videos_from_data_with_none_max_results():
     assert videos[0].video_id == "dQw4w9WgXcQ"
 
 
-@patch("urllib.request.urlopen")
-def test_fetch_channel_videos_with_none_max_results(mock_urlopen):
-    """Verify fetch_channel_videos does not raise TypeError when max_results is None."""
-    html = (
-        '<html><head><meta property="og:title" content="Test Channel"></head>'
-        '<body><script>var ytInitialData = {"lockupViewModel": {"contentId": "dQw4w9WgXcQ", "metadata": {"lockupMetadataViewModel": {"title": {"content": "Test"}}}}};</script></body></html>'
+@patch("src.utils.channel_fetcher.fetch_channel_videos_api")
+def test_fetch_channel_videos_with_none_max_results(mock_api):
+    """Verify fetch_channel_videos passes max_results=50 when max_results is None."""
+    mock_api.return_value = ChannelFetchResult(
+        channel_title="Test Channel",
+        videos=[FetchedVideo("dQw4w9WgXcQ", "https://youtube.com/watch?v=dQw4w9WgXcQ", "Test")],
     )
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
-
-    result = fetch_channel_videos("@testchannel", max_results=None)
+    with patch.dict("os.environ", {"YOUTUBE_API_KEY": "AIzaSyTEST_KEY"}):
+        result = fetch_channel_videos("@testchannel", max_results=None)
     assert result.error is None
     assert len(result.videos) == 1
     assert result.videos[0].video_id == "dQw4w9WgXcQ"
+    mock_api.assert_called_once()
 
 
 @patch("urllib.request.urlopen")

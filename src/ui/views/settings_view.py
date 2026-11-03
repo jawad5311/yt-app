@@ -212,6 +212,21 @@ class SettingsView(ctk.CTkFrame):
             text_color=("gray40", "gray60"),
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
+        # YouTube Data API Key
+        ctk.CTkLabel(scroll_general, text="YouTube Data API Key (Required for Channel Sync):", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        ctk.CTkLabel(
+            scroll_general,
+            text="Google YouTube Data API v3 key used to discover and sync videos and shorts from channels.",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray60"),
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.youtube_api_key_entry = ctk.CTkEntry(scroll_general, width=400)
+        curr_api_key = self.config_mgr.get_setting("YouTubeApiKey", "") or ""
+        self.youtube_api_key_entry.insert(0, str(curr_api_key))
+        self.youtube_api_key_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
         # ---------------------------------------------------------
         # Tab 2: Playback & Queue
         # ---------------------------------------------------------
@@ -530,6 +545,10 @@ class SettingsView(ctk.CTkFrame):
 
         # 1. Fallback switch
         validated["DirectLinkFallback"] = bool(self.fallback_switch.get())
+
+        # 1b. YouTube Data API Key
+        if hasattr(self, "youtube_api_key_entry"):
+            validated["YouTubeApiKey"] = self.youtube_api_key_entry.get().strip()
 
         # 2. Skip ads / Block ads (compatibility aliases kept consistent)
         skip_ads = bool(self.skip_ads_switch.get())

@@ -235,19 +235,9 @@ def test_fetch_channel_data_api_shorts_only_all():
 
 
 @patch("src.utils.channel_fetcher.get_configured_youtube_api_key", return_value=None)
-@patch("urllib.request.urlopen")
-def test_fetch_channel_data_scraper_fallback_shorts_only(mock_urlopen, mock_get_key):
-    """Verify that fetch_channel_data falls back to scraping /shorts when no API key is set."""
+def test_fetch_channel_data_missing_api_key_returns_error(mock_get_key):
+    """Verify that fetch_channel_data notifies with an error when no API key is configured."""
     from src.utils.channel_fetcher import fetch_channel_data
-
-    html = (
-        '<html><head><title>Love Guru - YouTube</title></head><body><script>var ytInitialData = {'
-        '"reelItemRenderer": {"videoId": "short_scrape_1", "headline": {"simpleText": "Scraped Short"}}'
-        '};</script></body></html>'
-    )
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = html.encode("utf-8")
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
 
     res = fetch_channel_data(
         channel_input="@love_guru_161",
@@ -255,9 +245,8 @@ def test_fetch_channel_data_scraper_fallback_shorts_only(mock_urlopen, mock_get_
         shorts_limit=50,
     )
 
-    assert res.error is None
-    assert len(res.videos) == 1
-    assert res.videos[0].is_short is True
-    assert res.videos[0].video_id == "short_scrape_1"
-    assert "/shorts/short_scrape_1" in res.videos[0].url
+    assert res.error is not None
+    assert "YouTube Data API key is not configured" in res.error
+    assert res.status == "error"
+    assert len(res.videos or []) == 0
 
