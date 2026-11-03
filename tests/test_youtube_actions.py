@@ -529,3 +529,63 @@ def test_real_end_observed_at_deadline_wins(monkeypatch):
     ], duration_seconds=None, full_timeout_seconds=6)
     assert result.reason == "ended"
     assert result.completed and result.playback_finished
+
+
+def test_watching_progress_stalled_triggers_play_button_when_video_paused(monkeypatch):
+    """Verify that if watching progress remains unchanged and video is paused, play button is pressed."""
+    import queue
+    from src.automation import youtube_actions as module
+
+    log_q = queue.Queue()
+
+    # 6 samples all at position 0 (stuck at 00:00, paused)
+    samples = [
+        playback_state(0, duration=100.0, paused=True, isAd=False)
+        for _ in range(6)
+    ]
+    result, _ = run_scripted_watch(
+        monkeypatch,
+        samples,
+        duration_seconds=None,
+        full_timeout_seconds=60,
+        log_queue=log_q,
+    )
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    # ensure_video_playing must have been called when progress was detected as stalled at 00:00
+    assert "Watching progress stalled at 00:00 (video is not playing or paused). Pressing play button." in log_text
+
+
+def test_watching_progress_stalled_triggers_skip_ad_when_ad_displaying(monkeypatch):
+    """Verify that if watching progress remains unchanged and an ad is displaying, Skip Ad is triggered."""
+    import queue
+    from src.automation import youtube_actions as module
+
+    log_q = queue.Queue()
+
+    # 6 samples all at position 0 with isAd=True
+    samples = [
+        playback_state(0, duration=100.0, isAd=True)
+        for _ in range(6)
+    ]
+    result, _ = run_scripted_watch(
+        monkeypatch,
+        samples,
+        duration_seconds=None,
+        full_timeout_seconds=60,
+        skip_ads=False,
+        max_ad_seconds=0,
+        log_queue=log_q,
+    )
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    # trigger_skip_ad must have been called when progress was detected as stalled during ad display
+    assert "ad detected. Attempting to skip ad..." in log_text
