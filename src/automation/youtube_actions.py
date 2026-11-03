@@ -139,13 +139,15 @@ def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -
                     time.sleep(0.4)
                     return True
 
-        # 3. Universal keyboard 'k' / Space key shortcut to start playback
+        # 3. Universal keyboard 'k' / Space key shortcut to start playback (only if paused)
         try:
-            body = driver.find_element(By.TAG_NAME, "body")
-            body.send_keys("k")
-            emit(log_queue, "Sent play key shortcut to start video.")
-            time.sleep(0.4)
-            return True
+            is_paused = driver.execute_script("var v = document.querySelector('video'); return !v || v.paused;")
+            if is_paused:
+                body = driver.find_element(By.TAG_NAME, "body")
+                body.send_keys("k")
+                emit(log_queue, "Sent play key shortcut to start video.")
+                time.sleep(0.4)
+                return True
         except Exception:
             pass
 
@@ -561,6 +563,7 @@ def watch_video(
 
     video_started = False
     was_ad = False
+    previous_progress_time: Optional[float] = None
     started_at = time.monotonic()
     last_tick = started_at
     last_progress_log = 0.0
@@ -732,6 +735,56 @@ def watch_video(
 
         paused = bool(video_state.get("paused", False))
 
+        # Periodic watching progress & stalled playback check:
+        # Check every 10s if progress is stalled (e.g. stuck at 00:00, paused, or ad displaying), otherwise every 30s
+        video_duration = float(video_state.get("duration", 0.0))
+        is_stalled = (
+            previous_progress_time is not None
+            and not ended
+            and (
+                _format_clock(curr_time) == _format_clock(previous_progress_time)
+                or abs(curr_time - previous_progress_time) < 0.5
+            )
+        )
+        progress_check_interval = 10.0 if is_stalled else 30.0
+
+        if now - last_progress_log >= progress_check_interval or last_progress_log == 0.0:
+            last_progress_log = now
+            if video_duration > 0 and not is_ad:
+                percent = int((curr_time / video_duration) * 100)
+                emit(
+                    log_queue,
+                    f"Watching progress: {_format_clock(curr_time)} / "
+                    f"{_format_clock(video_duration)} ({percent}%)",
+                )
+            elif is_ad:
+                emit(
+                    log_queue,
+                    f"Watching progress: {_format_clock(curr_time)} (ad currently displaying)",
+                )
+
+            # Check if the watching progress remains the same with the previous watching progress
+            if is_stalled:
+                curr_clock = _format_clock(curr_time)
+                # Determine whether video is currently displaying an ad or not playing/paused
+                is_displaying_ad = is_ad or bool(driver.execute_script("""
+                    var p = document.querySelector('.html5-video-player');
+                    var adShowing = !!(p && (p.classList.contains('ytp-showing-ad') || p.classList.contains('ad-showing')));
+                    var adContainer = !!document.querySelector('.ytp-ad-player-container');
+                    var skipBtn = !!document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, button[id*="skip-button"]');
+                    return adShowing || adContainer || skipBtn;
+                """))
+
+                if is_displaying_ad:
+                    emit(log_queue, f"Watching progress unchanged at {curr_clock} — ad detected. Attempting to skip ad...")
+                    if trigger_skip_ad(driver):
+                        emit(log_queue, "Clicked Skip Ad button.")
+                else:
+                    emit(log_queue, f"Watching progress stalled at {curr_clock} (video is not playing or paused). Pressing play button.")
+                    ensure_video_playing(driver, log_queue=log_queue)
+
+            previous_progress_time = curr_time
+
         # ------------------------------------------------------------ ads ----
         if is_ad:
             # Highlight skip button with border as soon as detected on page
@@ -810,13 +863,6 @@ def watch_video(
         if is_full_mode and video_duration > 0 and curr_time >= threshold_time:
             return _result(True, "completion_cutoff")
 
-        # Check watch progress: if video progress is still zero, loop and tap play button
-        if not is_ad and not ended and curr_time <= 0.1:
-            zero_progress_seconds += delta
-            if zero_progress_seconds >= 2.0:
-                zero_progress_seconds = 0.0
-                ensure_video_playing(driver, log_queue=log_queue)
-
         # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
         resume_cutoff = threshold_time if is_full_mode else video_duration
         if paused and not ended and (video_duration == 0 or curr_time < resume_cutoff):
@@ -828,16 +874,7 @@ def watch_video(
                 except Exception as exc:
                     logging.debug(f"Could not resume playback: {exc}")
 
-        # Periodic progress
-        if now - last_progress_log >= 30:
-            last_progress_log = now
-            if video_duration > 0:
-                percent = int((curr_time / video_duration) * 100)
-                emit(
-                    log_queue,
-                    f"Watching progress: {_format_clock(curr_time)} / "
-                    f"{_format_clock(video_duration)} ({percent}%)",
-                )
+
 
         # Fixed-duration budget
         if not is_full_mode and duration_seconds is not None:
