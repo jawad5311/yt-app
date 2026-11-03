@@ -121,11 +121,17 @@ def is_within_cooldown(
     try:
         last_dt = datetime.fromisoformat(last_timestamp)
         now_dt = current_time or datetime.now()
+        if last_dt.tzinfo is not None and now_dt.tzinfo is None:
+            last_dt = last_dt.astimezone().replace(tzinfo=None)
+        elif last_dt.tzinfo is None and now_dt.tzinfo is not None:
+            now_dt = now_dt.astimezone().replace(tzinfo=None)
+
         elapsed_seconds = (now_dt - last_dt).total_seconds()
         cooldown_seconds = cooldown_hours * 3600.0
 
-        if 0 <= elapsed_seconds < cooldown_seconds:
-            remaining_hours = (cooldown_seconds - elapsed_seconds) / 3600.0
+        if -300.0 <= elapsed_seconds < cooldown_seconds:
+            remaining_seconds = max(0.0, cooldown_seconds - max(0.0, elapsed_seconds))
+            remaining_hours = remaining_seconds / 3600.0
             return True, remaining_hours
     except Exception:
         pass
@@ -248,7 +254,7 @@ class StatRecord:
         # video is later reassigned or deleted from the queue.
         self.channel = outcome.channel
         self.last_run = timestamp
-        if outcome.playback_finished or outcome.success:
+        if outcome.playback_finished or outcome.success or outcome.watched_seconds > 0:
             self.last_completed = timestamp
         self.last_result = outcome.result
 

@@ -1,6 +1,6 @@
-"""Unit tests for the 12-hour video rewatch cooldown feature."""
+"""Unit tests for the video rewatch cooldown feature."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from src.automation.watching_worker import WatchingWorker
@@ -162,3 +162,112 @@ class TestVideoCooldown:
 
         # With 0h cooldown (disabled), task is runnable
         assert is_video_task_runnable(task, [ch], stats_store, cooldown_hours=0.0) is True
+
+    def test_cooldown_updates_last_completed_on_watch(self):
+        now = datetime(2026, 11, 4, 12, 0, 0)
+        rec = StatRecord(label="Rewatch Video")
+        outcome = TaskOutcome(
+            video_key="vid123",
+            success=False,
+            playback_finished=False,
+            watched_seconds=111.5,
+        )
+        timestamp = (now - timedelta(hours=1)).isoformat()
+        rec.merge(outcome, timestamp)
+
+        assert rec.last_completed == timestamp
+        assert rec.last_run == timestamp
+
+        # Under 12h cooldown, should be on cooldown based on the recent watch 1h ago!
+        is_cool, remaining = rec.is_on_cooldown(12.0, current_time=now)
+        assert is_cool is True
+        assert round(remaining, 1) == 11.0
+
+    def test_is_within_cooldown_timezone_awareness(self):
+        now = datetime.now(timezone.utc)
+        one_hour_ago = (now - timedelta(hours=1)).isoformat()
+
+        # Should not raise TypeError when subtracting timezone aware and naive
+        is_cool, remaining = is_within_cooldown(one_hour_ago, 12.0, current_time=datetime.now())
+        assert is_cool is True
+        assert 10.0 <= remaining <= 11.5
+
+    def test_home_shorts_filter_by_cooldown(self, tmp_path):
+        config_mgr = ConfigManager(config_file=tmp_path / "settings.json")
+        config_mgr.set_setting("VideoCooldownHours", "12")
+        config_mgr.update_video_queue(lambda q: [
+            {"url": "https://www.youtube.com/shorts/cool_short_1", "title": "Cool Short 1", "enabled": True, "is_short": True},
+            {"url": "https://www.youtube.com/shorts/cool_short_2", "title": "Cool Short 2", "enabled": True, "is_short": True},
+        ])
+
+        now = datetime.now()
+        stats_store = MagicMock()
+        # cool_short_1 was watched 1 hour ago -> within 12h cooldown
+        rec1 = StatRecord(label="Cool Short 1", last_run=(now - timedelta(hours=1)).isoformat())
+        # cool_short_2 was watched 20 hours ago -> expired
+        rec2 = StatRecord(label="Cool Short 2", last_run=(now - timedelta(hours=20)).isoformat())
+
+        def mock_find(task):
+            if "cool_short_1" in task.url:
+                return rec1
+            elif "cool_short_2" in task.url:
+                return rec2
+            return None
+
+        stats_store.find_for_task.side_effect = mock_find
+
+        worker = WatchingWorker(
+            account=Account(email="test@gmail.com", password="pwd"),
+            channels=[Channel(name="Target Channel", url="")],
+            config_mgr=config_mgr,
+            stats_store=stats_store,
+        )
+
+        # get_target_shorts with filter_cooldown=True should only return cool_short_2!
+        available_shorts = worker.get_target_shorts(filter_cooldown=True)
+        assert len(available_shorts) == 1
+        assert "cool_short_2" in available_shorts[0].url
+
+    def test_shorts_reel_skips_target_short_on_cooldown(self, tmp_path):
+        import queue
+        import threading
+        from unittest.mock import patch
+
+        config_mgr = ConfigManager(config_file=tmp_path / "settings.json")
+        config_mgr.set_setting("VideoCooldownHours", "12")
+        config_mgr.set_setting("NonTargetReelsLimit", 2)
+
+        now = datetime.now()
+        stats_store = MagicMock()
+        # On cooldown (watched 1h ago)
+        rec_cool = StatRecord(label="Cool Short", last_completed=(now - timedelta(hours=1)).isoformat())
+        stats_store.get.return_value = rec_cool
+        stats_store.find_for_task.return_value = rec_cool
+
+        worker = WatchingWorker.__new__(WatchingWorker)
+        worker.config_mgr = config_mgr
+        worker.stats_store = stats_store
+        worker.stop_event = threading.Event()
+        worker.pause_event = threading.Event()
+        worker.log_queue = queue.Queue()
+        worker.check_pause = MagicMock()
+        worker.get_target_channels = MagicMock(return_value=[Channel(name="Target Channel", url="")])
+        worker.get_target_shorts = MagicMock(return_value=[])
+        worker.channel_tracker = MagicMock()
+
+        # Reel returns the target short, which is on cooldown
+        worker.get_active_short_info = MagicMock(return_value={
+            "video_id": "cool_vid_123",
+            "url": "https://www.youtube.com/shorts/cool_vid_123",
+            "title": "Cool Short",
+            "channel_name": "Target Channel",
+        })
+        worker._skip_non_target_reel = MagicMock(side_effect=lambda: worker.stop_event.set())
+
+        with patch("src.automation.watching_worker.watch_short") as mock_ws:
+            worker._run_shorts_reel_loop(session_watched_keys=set())
+            # watch_short must NOT be called for short on cooldown
+            mock_ws.assert_not_called()
+            # _skip_non_target_reel was invoked to advance past the cooldown short
+            worker._skip_non_target_reel.assert_called_once()
+
