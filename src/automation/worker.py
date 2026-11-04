@@ -14,7 +14,7 @@ from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .dispatcher import TaskDispatcher
-from .driver import close_driver, setup_driver
+from .driver import close_driver, is_driver_alive, setup_driver
 from .email_reporter import EmailReporter, SessionReport
 from .login import perform_google_login
 from .navigation import navigate_to_video_organically
@@ -721,10 +721,24 @@ class AutomationWorker:
                 random_videos_count=report_data.get("random_videos_count", 0),
                 search_queries_count=report_data.get("search_queries_count", 0),
             )
+            rep_driver = getattr(self, "reporting_driver", None)
+            if rep_driver and not is_driver_alive(rep_driver):
+                try:
+                    close_driver(rep_driver, log_queue=self.log_queue)
+                except Exception:
+                    pass
+                rep_driver = None
+                self.reporting_driver = None
+
+            watch_driver = getattr(self, "driver", None)
+            if watch_driver and not is_driver_alive(watch_driver):
+                watch_driver = None
+
+            chosen_driver = rep_driver or watch_driver
             ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
-                driver=self.reporting_driver or self.driver,
+                driver=chosen_driver,
                 account=self.account,
                 log_queue=self.log_queue,
             )

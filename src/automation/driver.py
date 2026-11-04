@@ -228,7 +228,7 @@ def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None)
         finally:
             if os.name == "nt":
                 for pid in (browser_pid, service_pid):
-                    if pid:
+                    if isinstance(pid, int) and pid > 0:
                         try:
                             subprocess.run(
                                 ["taskkill", "/F", "/T", "/PID", str(pid)],
@@ -243,3 +243,60 @@ def close_driver(driver: Optional[Any], log_queue: Optional[queue.Queue] = None)
                 except Exception:
                     pass
         emit(log_queue, "Browser session closed.")
+
+
+try:
+    from selenium.common.exceptions import (
+        InvalidSessionIdException,
+        NoSuchWindowException,
+        WebDriverException,
+    )
+except ImportError:
+    InvalidSessionIdException = Exception
+    NoSuchWindowException = Exception
+    WebDriverException = Exception
+
+
+def is_session_disconnected_error(exc: Optional[BaseException]) -> bool:
+    """Check if an exception indicates the browser session is dead or disconnected."""
+    if exc is None:
+        return False
+    if isinstance(exc, (InvalidSessionIdException, NoSuchWindowException)):
+        return True
+    msg = (getattr(exc, "msg", None) or str(exc)).lower()
+    return any(
+        term in msg
+        for term in (
+            "invalid session id",
+            "invalidsessionid",
+            "disconnected",
+            "not connected to devtools",
+            "chrome not reachable",
+            "session deleted",
+            "target window already closed",
+            "no such window",
+        )
+    )
+
+
+def is_driver_alive(driver: Optional[Any]) -> bool:
+    """Check if the Selenium WebDriver instance has an active, responsive browser session."""
+    if driver is None:
+        return False
+    session_id = getattr(driver, "session_id", None)
+    if session_id is None:
+        return False
+    if isinstance(session_id, str) and not session_id.strip():
+        return False
+    try:
+        driver.execute_script("return 1;")
+        return True
+    except Exception as exc:
+        if is_session_disconnected_error(exc):
+            return False
+        try:
+            url = getattr(driver, "current_url", None)
+            return bool(url)
+        except Exception:
+            return False
+

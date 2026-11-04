@@ -111,8 +111,7 @@ class ReportProgressModal(Toplevel):
         self.is_generating = False
         try:
             self.progress_bar.stop()
-            self.progress_bar.configure(mode="determinate")
-            self.progress_bar.set(1.0)
+            self.progress_bar.pack_forget()
         except Exception:
             pass
 

@@ -39,7 +39,12 @@ from ..models.video_task import (
 from ..models.watch_stats import TaskOutcome, WatchResult, resolve_video_key
 from ..utils.helpers import extract_video_id, human_like_delay
 from ..utils.logger import emit
-from .driver import close_driver, setup_driver
+from .driver import (
+    close_driver,
+    is_driver_alive,
+    is_session_disconnected_error,
+    setup_driver,
+)
 from .login import perform_google_login
 from .navigation import (
     dismiss_youtube_dialogs,
@@ -1074,6 +1079,9 @@ class WatchingWorker:
             items_list = raw_items if isinstance(raw_items, list) else []
             return [it for it in items_list if not is_candidate_ad(it)]
         except Exception as exc:
+            if is_session_disconnected_error(exc):
+                emit(self.log_queue, f"Browser session disconnected during home page videos fetch: {exc}", logging.ERROR)
+                raise
             emit(self.log_queue, f"Error fetching home page videos: {exc}", logging.WARNING)
             return []
 
@@ -1099,6 +1107,9 @@ class WatchingWorker:
             items_list = raw_items if isinstance(raw_items, list) else []
             return [it for it in items_list if not is_candidate_ad(it)]
         except Exception as exc:
+            if is_session_disconnected_error(exc):
+                emit(self.log_queue, f"Browser session disconnected during recommended videos fetch: {exc}", logging.ERROR)
+                raise
             emit(self.log_queue, f"Error fetching recommended videos: {exc}", logging.WARNING)
             return []
 
@@ -2329,6 +2340,9 @@ class WatchingWorker:
             items = self.driver.execute_script(HOME_SHORTS_JS)
             return items if isinstance(items, list) else []
         except Exception as exc:
+            if is_session_disconnected_error(exc):
+                emit(self.log_queue, f"Browser session disconnected during home shorts fetch: {exc}", logging.ERROR)
+                raise
             emit(self.log_queue, f"Error fetching home shorts: {exc}", logging.DEBUG)
             return []
 
@@ -3655,6 +3669,10 @@ class WatchingWorker:
                 if self.stop_event.is_set():
                     break
 
+                if not is_driver_alive(self.driver):
+                    emit(self.log_queue, "Browser session closed or disconnected. Exiting watch loop.", logging.WARNING)
+                    break
+
                 target_channels = self.get_target_channels()
                 if not target_channels:
                     emit(self.log_queue, "No active target channels found in settings. Aborting watching session.", logging.WARNING)
@@ -4000,15 +4018,22 @@ class WatchingWorker:
             self._report_status(summary, "info")
 
         except Exception as exc:
-            emit(self.log_queue, f"Critical error during watching session: {exc}", logging.ERROR)
-            self._report_status(f"Watching error: {exc}", "error")
-            alert_type = "Critical Failure / Worker Crash"
             err_str = str(exc)
-            if any(c in err_str.lower() for c in ("proxy", "connection", "err_internet")):
-                alert_type = "Proxy / Network Failure"
-            self._send_critical_alert(alert_type, f"Worker crashed with exception: {err_str}")
-            session_status = alert_type
-            session_err = err_str
+            if is_session_disconnected_error(exc):
+                emit(self.log_queue, f"Browser session disconnected or closed externally: {err_str}", logging.WARNING)
+                self._report_status("Browser session closed", "warning")
+                alert_type = "Browser Disconnected"
+                session_status = "Browser Closed / Disconnected"
+                session_err = f"Browser session was disconnected or closed externally: {err_str}"
+            else:
+                emit(self.log_queue, f"Critical error during watching session: {exc}", logging.ERROR)
+                self._report_status(f"Watching error: {exc}", "error")
+                alert_type = "Critical Failure / Worker Crash"
+                if any(c in err_str.lower() for c in ("proxy", "connection", "err_internet")):
+                    alert_type = "Proxy / Network Failure"
+                self._send_critical_alert(alert_type, f"Worker crashed with exception: {err_str}")
+                session_status = alert_type
+                session_err = err_str
         finally:
             if "session_status" not in locals() or not session_status:
                 session_status = "Completed"
@@ -4016,7 +4041,7 @@ class WatchingWorker:
                 session_err = None
             if self.stop_event.is_set():
                 session_status = "Stopped by user"
-            if "exc" in locals() and locals()["exc"] is not None:
+            elif "exc" in locals() and locals()["exc"] is not None and not session_status:
                 session_status = "Error"
                 session_err = str(locals()["exc"])
 
@@ -4152,10 +4177,24 @@ class WatchingWorker:
                 random_videos_count=report_data.get("random_videos_count", 0),
                 search_queries_count=report_data.get("search_queries_count", 0),
             )
+            rep_driver = getattr(self, "reporting_driver", None)
+            if rep_driver and not is_driver_alive(rep_driver):
+                try:
+                    close_driver(rep_driver, log_queue=self.log_queue)
+                except Exception:
+                    pass
+                rep_driver = None
+                self.reporting_driver = None
+
+            watch_driver = getattr(self, "driver", None)
+            if watch_driver and not is_driver_alive(watch_driver):
+                watch_driver = None
+
+            chosen_driver = rep_driver or watch_driver
             ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
-                driver=self.reporting_driver or self.driver,
+                driver=chosen_driver,
                 account=self.account,
                 log_queue=self.log_queue,
             )

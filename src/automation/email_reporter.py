@@ -1112,6 +1112,13 @@ class EmailReporter:
         thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Deliver report email using an active, visible Chrome browser session, threading into existing session if possible."""
+        from .driver import is_driver_alive
+
+        if not is_driver_alive(driver):
+            if log_queue:
+                emit(log_queue, "Browser session is not alive or disconnected. Cannot deliver via active browser.", logging.INFO)
+            return False
+
         target_thread = report.thread_url or cls.last_thread_url
         if target_thread or report.custom_subject:
             reply_ok = cls._deliver_via_gmail_thread_reply(
@@ -1127,6 +1134,9 @@ class EmailReporter:
             )
             if reply_ok:
                 return True
+
+            if not is_driver_alive(driver):
+                return False
 
             # Retry by navigating to Sent folder to locate session thread
             if log_queue:
@@ -1144,6 +1154,9 @@ class EmailReporter:
             )
             if reply_ok:
                 return True
+
+            if not is_driver_alive(driver):
+                return False
 
         if log_queue:
             emit(log_queue, "Could not reply directly to existing thread. Falling back to compose delivery...", logging.WARNING)
@@ -1533,12 +1546,21 @@ class EmailReporter:
                 log_queue=log_queue,
             )
 
-        # 2. If a browser driver is already supplied (persistent headless reporting browser or active browser):
+        # 2. If a browser driver is already supplied and alive:
         if driver is not None:
-            return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
+            from .driver import is_driver_alive
+            if is_driver_alive(driver):
+                browser_ok = cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
+                if browser_ok:
+                    return True
+                if log_queue:
+                    emit(log_queue, "Active browser email delivery did not succeed. Attempting fallback delivery...", logging.INFO)
+            else:
+                if log_queue:
+                    emit(log_queue, "Supplied browser session is disconnected or inactive. Falling back to fresh headless browser / SMTP...", logging.INFO)
 
-        # 3. Headless Browser Gmail (Default / Auto):
-        # Uses headless browser with the account profile if account is available.
+        # 3. Headless Browser Gmail (Default / Auto / Fallback):
+        # Uses fresh headless browser with the account profile if account is available.
         if account is not None:
             headless_ok = cls.send_via_headless_browser_gmail(
                 account=account,
@@ -1553,9 +1575,11 @@ class EmailReporter:
             if headless_ok:
                 return True
 
-        # Fallback to driver if driver is available
+        # Fallback to driver if alive and not yet attempted
         if driver is not None:
-            return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
+            from .driver import is_driver_alive
+            if is_driver_alive(driver):
+                return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
 
         # Fallback to SMTP if creds available
         if has_smtp_creds:

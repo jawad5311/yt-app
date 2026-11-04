@@ -52,6 +52,7 @@ class TestReportProgressModal:
 
             assert modal.is_generating is False
             modal.progress_bar.stop.assert_called_once()
+            modal.progress_bar.pack_forget.assert_called_once()
             modal.action_btn.pack.assert_called_once()
             assert "Report Sent Successfully!" in modal.title_label.configure.call_args[1].get("text", "")
 
