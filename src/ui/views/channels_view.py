@@ -2356,13 +2356,13 @@ class ChannelsView(Frame):
                 if hasattr(self.app_controller, "on_queue_changed"):
                     self.app_controller.on_queue_changed(new_tasks)
 
-            # Only refresh queue views if they are currently visible, else defer to tab switch
+            # Only refresh queue views if they are currently visible or not set, else defer to tab switch
             current_view = getattr(self.app_controller, "current_view_name", "")
             queue = self._queue_view()
             if queue is not None:
                 if added_tasks or updated_count > 0:
                     queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                if current_view == "queue":
+                if current_view == "queue" or not current_view:
                     queue.refresh_list()
                 else:
                     self.app_controller._queue_needs_refresh = True
@@ -2371,7 +2371,7 @@ class ChannelsView(Frame):
             if shorts_queue is not None:
                 if added_tasks or updated_count > 0:
                     shorts_queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                if current_view == "shorts_queue":
+                if current_view == "shorts_queue" or not current_view:
                     shorts_queue.refresh_list()
                 else:
                     self.app_controller._shorts_queue_needs_refresh = True
@@ -2598,13 +2598,13 @@ class ChannelsView(Frame):
                 if hasattr(self.app_controller, "on_queue_changed"):
                     self.app_controller.on_queue_changed(new_tasks)
 
-            # Only refresh queue views if they are currently visible, else defer to tab switch
+            # Only refresh queue views if they are currently visible or not set, else defer to tab switch
             current_view = getattr(self.app_controller, "current_view_name", "")
             queue = self._queue_view()
             if queue is not None:
                 if added_tasks or updated_count > 0:
                     queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                if current_view == "queue":
+                if current_view == "queue" or not current_view:
                     queue.refresh_list()
                 else:
                     self.app_controller._queue_needs_refresh = True
@@ -2613,7 +2613,7 @@ class ChannelsView(Frame):
             if shorts_queue is not None:
                 if added_tasks or updated_count > 0:
                     shorts_queue.video_tasks = list(self.app_controller.queued_video_tasks)
-                if current_view == "shorts_queue":
+                if current_view == "shorts_queue" or not current_view:
                     shorts_queue.refresh_list()
                 else:
                     self.app_controller._shorts_queue_needs_refresh = True
