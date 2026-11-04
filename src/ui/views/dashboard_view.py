@@ -43,16 +43,16 @@ class DashboardView(Frame):
         self.loop_label = Label(
             self.loop_frame,
             text="Automation Passes:",
-            font=Font(size=14, weight="bold"),
+            font=Font(size=10, weight="bold"),
             style="Card.TLabel",
         )
         initial_loops = self.app_controller.config_mgr.get_int("AutomationLoops", 1) if hasattr(self.app_controller, "config_mgr") else 1
-        self.loop_entry = Entry(self.loop_frame, width=80, font=Font(size=13))
+        self.loop_entry = Entry(self.loop_frame, width=80, font=Font(size=9))
         self.loop_entry.insert(0, str(max(1, initial_loops)))
         self.loop_hint = Label(
             self.loop_frame,
             text="(queue repetitions; e.g. 2 = run all queue tasks 2 times)",
-            font=Font(size=12),
+            font=Font(size=9),
             style="CardMuted.TLabel",
         )
 
@@ -63,13 +63,13 @@ class DashboardView(Frame):
         self.browsing_limit_label = Label(
             self.browsing_limit_frame,
             text="Browsing Target Limit:",
-            font=Font(size=14, weight="bold"),
+            font=Font(size=10, weight="bold"),
             style="Card.TLabel",
         )
         self.browsing_limit_label.pack(side="left", padx=(0, 10))
 
         initial_browsing_limit = self.app_controller.config_mgr.get_int("BrowsingTargetLimit", 1) if hasattr(self.app_controller, "config_mgr") else 1
-        self.browsing_limit_entry = Entry(self.browsing_limit_frame, width=80, font=Font(size=13))
+        self.browsing_limit_entry = Entry(self.browsing_limit_frame, width=80, font=Font(size=9))
         self.browsing_limit_entry.insert(0, str(max(1, initial_browsing_limit)))
         self.browsing_limit_entry.pack(side="left")
 
@@ -86,8 +86,8 @@ class DashboardView(Frame):
 
         self.browsing_hint = Label(
             self.browsing_limit_frame,
-            text="(target video attempts; 1 = at most 1 target video attempt)",
-            font=Font(size=12),
+            text="(target video attempts; 1 = max attempt)",
+            font=Font(size=9),
             style="CardMuted.TLabel",
         )
         self.browsing_hint.pack(side="left")
@@ -104,7 +104,7 @@ class DashboardView(Frame):
         self.start_watching_btn = Button(
             self.btn_grid,
             text="▶ Start Browsing",
-            font=Font(size=14, weight="bold"),
+            font=Font(size=10, weight="bold"),
             style="Primary.TButton",
             command=getattr(self.app_controller, "start_watching", None),
         )
@@ -113,7 +113,7 @@ class DashboardView(Frame):
         self.stop_btn = Button(
             self.btn_grid,
             text="⏹ Stop",
-            font=Font(size=14, weight="bold"),
+            font=Font(size=10, weight="bold"),
             style="Danger.TButton",
             state="disabled",
             command=getattr(self.app_controller, "stop_automation", None),
@@ -123,7 +123,7 @@ class DashboardView(Frame):
         self.pause_btn = Button(
             self.btn_grid,
             text="⏸ Pause",
-            font=Font(size=14, weight="bold"),
+            font=Font(size=10, weight="bold"),
             style="Warning.TButton",
             state="disabled",
             command=getattr(self.app_controller, "toggle_pause_watching", None),
@@ -131,7 +131,7 @@ class DashboardView(Frame):
         self.pause_btn.grid(row=0, column=2, padx=(5, 0), pady=0, sticky="ew")
 
         # Progress Bar
-        self.progress_label = Label(self.action_frame, text="Ready to launch tasks.", font=Font(size=13), style="Card.TLabel")
+        self.progress_label = Label(self.action_frame, text="Ready to launch tasks.", font=Font(size=9), style="Card.TLabel")
         self.progress_label.pack(padx=30, pady=(20, 5), anchor="w")
 
         self.progress_bar = ProgressBar(self.action_frame)

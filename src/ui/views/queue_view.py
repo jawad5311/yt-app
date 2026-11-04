@@ -746,7 +746,7 @@ class QueueView(Frame):
         title_lbl = ctk.CTkLabel(
             header,
             text=title,
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=11, weight="bold"),
             justify="left",
             anchor="w",
             cursor="hand2",
@@ -759,7 +759,7 @@ class QueueView(Frame):
             url_lbl = ctk.CTkLabel(
                 header,
                 text=group.url,
-                font=ctk.CTkFont(size=12),
+                font=ctk.CTkFont(size=9),
                 text_color=("gray30", "gray70"),
                 justify="left",
                 anchor="w",
@@ -1033,7 +1033,7 @@ class QueueView(Frame):
             card,
             text=info_text,
             justify="left",
-            font=ctk.CTkFont(size=13),
+            font=ctk.CTkFont(size=10, weight="bold"),
             anchor="w",
             text_color=("gray50", "gray50") if (not task.enabled or not channel_enabled or is_limit_reached) else None,
         )
@@ -1050,7 +1050,7 @@ class QueueView(Frame):
                 unit="views" if is_short_item else "runs",
             ),
             justify="left",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=8),
             anchor="w",
             text_color=("gray40", "gray60"),
         )
@@ -1062,11 +1062,11 @@ class QueueView(Frame):
 
         target_entry = None
         if not is_short_item:
-            ctk.CTkLabel(action_btn_frame, text="Target:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 2))
+            ctk.CTkLabel(action_btn_frame, text="Target:", font=ctk.CTkFont(size=9, weight="bold")).pack(side="left", padx=(0, 2))
             target_entry = ctk.CTkEntry(
                 action_btn_frame,
-                width=46,
-                height=28,
+                width=34,
+                height=24,
                 placeholder_text="0",
                 justify="center",
             )
@@ -1075,7 +1075,7 @@ class QueueView(Frame):
             target_entry.pack(side="left", padx=(0, 2))
             ctk.CTkLabel(action_btn_frame, text="x", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
 
-        ctk.CTkLabel(action_btn_frame, text="Max Views:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=(0, 2))
+        ctk.CTkLabel(action_btn_frame, text="Max Views:", font=ctk.CTkFont(size=9, weight="bold")).pack(side="left", padx=(0, 2))
         views_entry = ctk.CTkEntry(
             action_btn_frame,
             width=46,
@@ -1177,7 +1177,8 @@ class QueueView(Frame):
         ctk.CTkButton(
             action_btn_frame,
             text="✏ Edit",
-            width=60,
+            width=52,
+            font=ctk.CTkFont(size=9, weight="bold"),
             fg_color="#1F6AA5",
             hover_color="#144870",
             command=lambda i=index: self.open_video_modal(edit_index=i),
@@ -1186,7 +1187,8 @@ class QueueView(Frame):
         ctk.CTkButton(
             action_btn_frame,
             text="🗑 Delete",
-            width=65,
+            width=58,
+            font=ctk.CTkFont(size=9, weight="bold"),
             fg_color="#D32F2F",
             hover_color="#9A0007",
             command=lambda i=index: self.remove_task(i),

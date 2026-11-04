@@ -68,8 +68,8 @@ class YTBotApp(tk.Tk):
         self.stats_store = stats_store or StatsStore()
 
         self.title("YouTube Playback Automation Tool - V2.1 (Modular)")
-        self.geometry("1100x700")
-        self.minsize(950, 600)
+        self.geometry("1180x740")
+        self.minsize(1020, 620)
 
         self.apply_appearance_mode(self.config_mgr.get_setting("AppearanceMode", "Dark"), persist=False)
 
@@ -126,8 +126,8 @@ class YTBotApp(tk.Tk):
             self.sidebar,
             text="YT Organic Bot",
             style="Sidebar.TLabel",
-            font=get_font(size=14, weight="bold"),
-        ).grid(row=0, column=0, padx=20, pady=(20, 20))
+            font=get_font(size=13, weight="bold"),
+        ).grid(row=0, column=0, padx=16, pady=(18, 16))
 
         self.nav_buttons: Dict[str, Any] = {}
         nav_items = [
