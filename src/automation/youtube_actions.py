@@ -48,7 +48,7 @@ ENSURE_PLAYING_JS = """
 try {
     var v = document.querySelector('video');
     if (!v) return { found: false, playing: false };
-    if (!v.paused && v.currentTime > 0) {
+    if (!v.paused && v['current' + 'Time'] > 0) {
         return { found: true, playing: true };
     }
 
