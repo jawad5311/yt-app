@@ -1235,16 +1235,12 @@ class WatchingWorker:
         except Exception as exc:
             emit(self.log_queue, f"Home video click error: {exc}", logging.WARNING)
 
-        # Fallback to direct navigation if click fails or navigation was not detected
-        if href:
-            full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
-            emit(
-                self.log_queue,
-                f"⚠️ [Direct Navigation Fallback Triggered] In-page click on Home video failed to navigate. Navigating directly to: {full_url} (traffic source may register as Direct/External instead of Home Feed).",
-                logging.WARNING,
-            )
-            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
-            return True
+        # Do NOT fallback to direct navigation in address bar
+        emit(
+            self.log_queue,
+            f"In-page click on Home video failed to navigate (vid_id: '{vid_id or href}'). Direct address bar navigation is disabled.",
+            logging.WARNING,
+        )
         return False
 
     def click_recommended_video(self, card_info: Dict[str, Any]) -> bool:
@@ -1381,15 +1377,12 @@ class WatchingWorker:
         except Exception as exc:
             emit(self.log_queue, f"Recommended video click error: {exc}", logging.WARNING)
 
-        if href:
-            full_url = href if href.startswith("http") else f"https://www.youtube.com{href}"
-            emit(
-                self.log_queue,
-                f"⚠️ [Direct Navigation Fallback Triggered] In-page click on Suggested video failed to navigate. Navigating directly to: {full_url} (traffic source may register as Direct/External instead of Suggested).",
-                logging.WARNING,
-            )
-            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
-            return True
+        # Do NOT fallback to direct navigation in address bar
+        emit(
+            self.log_queue,
+            f"In-page click on Suggested video failed to navigate (vid_id: '{vid_id or href}'). Direct address bar navigation is disabled.",
+            logging.WARNING,
+        )
         return False
 
     def _record_watch(
@@ -2042,13 +2035,13 @@ class WatchingWorker:
 
         clicked = self.click_recommended_video(card_info)
         cur_url = getattr(self.driver, "current_url", "") or ""
-        if target_rec_id and target_rec_id not in cur_url:
+        if (target_rec_id and target_rec_id not in cur_url) or not clicked:
             emit(
                 self.log_queue,
-                f"⚠️ [Direct Navigation Fallback Triggered] Navigation not detected after click, navigating directly to: {full_url} (traffic source may register as Direct/External).",
+                f"In-page click on suggested video for random buffer failed to navigate. Direct address bar navigation is disabled.",
                 logging.WARNING,
             )
-            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
+            return False
 
         try:
             if target_rec_id:
@@ -2142,36 +2135,38 @@ class WatchingWorker:
 
         if is_home:
             clicked = self.click_home_video(card_info)
+        elif source == "search":
+            clicked = True
         else:
             clicked = self.click_recommended_video(card_info)
 
         cur_url = getattr(self.driver, "current_url", "") or ""
         cur_id = extract_video_id(cur_url)
-        if target_vid_id and cur_id != target_vid_id:
-            emit(
-                self.log_queue,
-                f"⚠️ [Direct Navigation Fallback Triggered] In-page click did not trigger watch navigation. Navigating directly to: {full_url} (traffic source may register as Direct/External).",
-                logging.WARNING,
-            )
-            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
-
-        try:
-            if target_vid_id:
-                WebDriverWait(self.driver, 15).until(lambda d: extract_video_id(getattr(d, "current_url", "") or "") == target_vid_id)
-            else:
-                WebDriverWait(self.driver, 15).until(lambda d: "/watch" in (getattr(d, "current_url", "") or ""))
-        except Exception:
-            pass
+        if (target_vid_id and cur_id != target_vid_id) or not clicked:
+            try:
+                if target_vid_id:
+                    WebDriverWait(self.driver, 5).until(lambda d: extract_video_id(getattr(d, "current_url", "") or "") == target_vid_id)
+                else:
+                    WebDriverWait(self.driver, 5).until(lambda d: "/watch" in (getattr(d, "current_url", "") or ""))
+            except Exception:
+                pass
 
         final_cur_url = getattr(self.driver, "current_url", "") or ""
         final_cur_id = extract_video_id(final_cur_url)
         if target_vid_id and final_cur_id != target_vid_id:
             emit(
                 self.log_queue,
-                f"Playback identity verification failed: expected video ID '{target_vid_id}', observed '{final_cur_id or final_cur_url}'. Aborting playback.",
+                f"Playback identity verification failed: expected video ID '{target_vid_id}', observed '{final_cur_id or final_cur_url}'. Direct address bar navigation is disabled.",
                 logging.ERROR,
             )
             return WatchResult(completed=False, reason="navigation_identity_mismatch", interrupted=True)
+        if not clicked:
+            emit(
+                self.log_queue,
+                f"In-page click did not trigger watch navigation to video '{title}'. Direct address bar navigation is disabled.",
+                logging.WARNING,
+            )
+            return WatchResult(completed=False, reason="in_page_click_failed", interrupted=True)
 
         human_like_delay(2.0, 3.5)
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
@@ -2446,6 +2441,8 @@ class WatchingWorker:
                 return None
 
             candidate_shorts = self.fetch_home_shorts()
+            if candidate_shorts:
+                self._last_home_shorts = candidate_shorts
             for cand in candidate_shorts:
                 cid = cand.get("video_id") or extract_video_id(cand.get("href", ""))
                 if cid and cid not in seen_cand_ids:
@@ -2583,16 +2580,12 @@ class WatchingWorker:
         except Exception as exc:
             emit(self.log_queue, f"Error clicking home short: {exc}", logging.DEBUG)
 
-        full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
-        if full_url:
-            emit(
-                self.log_queue,
-                f"⚠️ [Direct Navigation Fallback Triggered] In-page click on Home Short failed to navigate. Navigating directly to short: {full_url} (traffic source may register as Direct/External instead of Home Feed).",
-                logging.WARNING,
-            )
-            safe_get(self.driver, full_url, timeout=30, log_queue=self.log_queue)
-            human_like_delay(1.5, 2.5)
-            return True
+        # Do NOT fallback to direct navigation in address bar
+        emit(
+            self.log_queue,
+            f"In-page click on Home Short failed to navigate (vid_id: '{vid_id or full_url}'). Direct address bar navigation is disabled.",
+            logging.WARNING,
+        )
         return False
 
     def _play_target_short(
@@ -2861,12 +2854,107 @@ class WatchingWorker:
             )
 
             if not matched_short:
-                emit(
-                    self.log_queue,
-                    "No matching Short found on Home feed for tasks in Shorts Queue. Moving back to watching long-form videos.",
-                    logging.INFO,
-                )
-                break
+                candidates = getattr(self, "_last_home_shorts", None) or self.fetch_home_shorts()
+                if not candidates:
+                    try:
+                        self.driver.execute_script("window.scrollBy({top: 800, behavior: 'smooth'});")
+                    except Exception:
+                        pass
+                    human_like_delay(1.5, 2.5)
+                    candidates = self.fetch_home_shorts()
+
+                if candidates:
+                    random_short = random.choice(candidates)
+                    r_title = random_short.get("title") or "Untargeted Short"
+                    r_url = random_short.get("url") or (f"https://www.youtube.com/shorts/{random_short.get('video_id')}" if random_short.get('video_id') else "")
+                    emit(
+                        self.log_queue,
+                        f"No targeted Short matched on Home feed. Clicking random Short from list as untargeted: '{r_title}' ({r_url})...",
+                        logging.INFO,
+                    )
+                    nav_ok = self.click_home_short(random_short)
+                    if not nav_ok:
+                        emit(
+                            self.log_queue,
+                            f"Could not navigate to random Short '{r_title}' via click. Moving back to watching long-form videos.",
+                            logging.WARNING,
+                        )
+                        break
+
+                    human_like_delay(1.5, 2.5)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
+                    untargeted_watch_time = random.uniform(3.0, 7.0)
+                    emit(
+                        self.log_queue,
+                        f"Watching untargeted Short '{r_title}' for {untargeted_watch_time:.1f}s before entering Shorts reel...",
+                        logging.INFO,
+                    )
+                    elapsed = 0.0
+                    step = 0.2
+                    while elapsed < untargeted_watch_time and not self.stop_event.is_set():
+                        self.check_pause()
+                        if self.stop_event.is_set():
+                            break
+                        time.sleep(min(step, max(0.01, untargeted_watch_time - elapsed)))
+                        elapsed += step
+
+                    total_non_target_shorts_seen += 1
+
+                    if total_non_target_shorts_seen >= cycle_max_total_non_target:
+                        emit(
+                            self.log_queue,
+                            f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Exiting Shorts cycle and moving to watching long-form videos.",
+                            logging.INFO,
+                        )
+                        break
+
+                    prev_url = r_url or getattr(self.driver, "current_url", "")
+                    self.scroll_to_next_short(prev_url=prev_url)
+                    human_like_delay(1.0, 1.8)
+
+                    watched_in_reel, non_targets_in_reel, exit_reason = self._run_shorts_reel_loop(
+                        session_watched_keys=session_watched_keys,
+                        current_target_watched=total_target_shorts_watched,
+                        cycle_target_shorts=cycle_target_shorts,
+                        current_total_non_target=total_non_target_shorts_seen,
+                        cycle_max_total_non_target=cycle_max_total_non_target,
+                    )
+                    total_target_shorts_watched = watched_in_reel
+                    total_non_target_shorts_seen += non_targets_in_reel
+
+                    if exit_reason == "target_achieved" or total_target_shorts_watched >= cycle_target_shorts:
+                        emit(
+                            self.log_queue,
+                            f"Achieved desired target of {total_target_shorts_watched}/{cycle_target_shorts} targeted Short(s)! Moving to watching long-form videos.",
+                            logging.INFO,
+                        )
+                        break
+
+                    if exit_reason == "total_non_target_limit" or total_non_target_shorts_seen >= cycle_max_total_non_target:
+                        emit(
+                            self.log_queue,
+                            f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Moving to watching long-form videos.",
+                            logging.INFO,
+                        )
+                        break
+
+                    emit(
+                        self.log_queue,
+                        "Navigating back to YouTube Home page to find the next Short...",
+                        logging.INFO,
+                    )
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(2.0, 3.5)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                    continue
+                else:
+                    emit(
+                        self.log_queue,
+                        "No candidate Short found on Home feed to watch as untargeted. Moving back to watching long-form videos.",
+                        logging.INFO,
+                    )
+                    break
 
             short_item, short_task = matched_short
             emit(
@@ -2874,17 +2962,20 @@ class WatchingWorker:
                 f"Selected matching Short from Home feed: '{short_task.title or short_item.get('title')}' ({short_item.get('url') or short_task.url}). Clicking to play full short...",
                 logging.INFO,
             )
-            self.target_attempts += 1
-            self.watched_count = self.target_attempts
-            prog_total = self.target_limit if not self.is_unlimited else 0
-            self._emit_event(("progress", 0, self.target_attempts, prog_total))
-
             played_ok = self._play_target_short(
                 short_info=short_item,
                 task=short_task,
                 session_watched_keys=session_watched_keys,
                 enter_reel=False,
             )
+            if not played_ok:
+                emit(self.log_queue, f"Target short '{short_task.title}' could not be navigated via click. Continuing Shorts cycle...", logging.WARNING)
+                continue
+
+            self.target_attempts += 1
+            self.watched_count = self.target_attempts
+            prog_total = self.target_limit if not self.is_unlimited else 0
+            self._emit_event(("progress", 0, self.target_attempts, prog_total))
             total_target_shorts_watched += 1
 
             if total_target_shorts_watched >= cycle_target_shorts:
@@ -3639,14 +3730,28 @@ class WatchingWorker:
                         channel_consecutive_counts=channel_buffer_counts,
                     )
 
-                    if target_match:
+                    suggested_played = False
+                    failed_rec_ids = set()
+
+                    while not self.stop_event.is_set():
+                        valid_candidates = [
+                            c for c in rec_candidates
+                            if (extract_video_id(c.get("href", "")) or c.get("href", "")) not in failed_rec_ids
+                        ]
+                        target_match = self._find_preferred_target_video(
+                            candidates=valid_candidates,
+                            target_channels=target_channels,
+                            last_channel_name=last_watched_channel,
+                            session_watched_keys=session_watched_keys,
+                            channel_watch_counts=channel_buffer_counts,
+                            channel_consecutive_counts=channel_buffer_counts,
+                        )
+                        if not target_match:
+                            break
+
                         item, match_obj, full_url, title, ch_display = target_match
+                        cand_id = extract_video_id(full_url) or full_url
                         emit(self.log_queue, "Found video in suggested section")
-                        target_attempts += 1
-                        self.target_attempts = target_attempts
-                        self.watched_count = target_attempts
-                        prog_total = self.target_limit if not self.is_unlimited else 0
-                        self._emit_event(("progress", 0, target_attempts, prog_total))
 
                         try:
                             watch_res = self._play_target_video(
@@ -3654,6 +3759,22 @@ class WatchingWorker:
                             )
                         except Exception:
                             raise
+
+                        if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
+                            emit(
+                                self.log_queue,
+                                f"In-page click on suggested video '{title}' failed to navigate. Trying next video on page...",
+                                logging.WARNING,
+                            )
+                            failed_rec_ids.add(cand_id)
+                            continue
+
+                        suggested_played = True
+                        target_attempts += 1
+                        self.target_attempts = target_attempts
+                        self.watched_count = target_attempts
+                        prog_total = self.target_limit if not self.is_unlimited else 0
+                        self._emit_event(("progress", 0, target_attempts, prog_total))
 
                         ch_canon = SessionChannelTracker._canon_name(ch_display)
                         channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
@@ -3679,6 +3800,24 @@ class WatchingWorker:
                             human_like_delay(2.0, 3.5)
                             dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
+                        break
+
+                    if suggested_played:
+                        continue
+
+                    if failed_rec_ids and not suggested_played:
+                        emit(
+                            self.log_queue,
+                            "Could not navigate to suggested video(s) via in-page click and no more target candidates on page. Clicking browser Back button to return to previous page...",
+                            logging.WARNING,
+                        )
+                        try:
+                            self.driver.back()
+                            human_like_delay(2.5, 4.0)
+                            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                        except Exception as back_err:
+                            emit(self.log_queue, f"Back button navigation error: {back_err}", logging.WARNING)
+                        suggested_miss_count += 1
                         continue
                     else:
                         # NOT found in suggestions: do NOT watch random video; do YouTube search!
@@ -3770,11 +3909,6 @@ class WatchingWorker:
                 if matched_home:
                     item, match_obj, full_url, title, ch_display = matched_home
                     emit(self.log_queue, f"Found long-form video on Home page: '{title}' ({full_url})")
-                    target_attempts += 1
-                    self.target_attempts = target_attempts
-                    self.watched_count = target_attempts
-                    prog_total = self.target_limit if not self.is_unlimited else 0
-                    self._emit_event(("progress", 0, target_attempts, prog_total))
 
                     try:
                         watch_res = self._play_target_video(
@@ -3782,6 +3916,23 @@ class WatchingWorker:
                         )
                     except Exception:
                         raise
+
+                    if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
+                        emit(
+                            self.log_queue,
+                            f"In-page click on Home video '{title}' failed to navigate. Refreshing Home feed...",
+                            logging.WARNING,
+                        )
+                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                        human_like_delay(2.0, 3.5)
+                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                        continue
+
+                    target_attempts += 1
+                    self.target_attempts = target_attempts
+                    self.watched_count = target_attempts
+                    prog_total = self.target_limit if not self.is_unlimited else 0
+                    self._emit_event(("progress", 0, target_attempts, prog_total))
 
                     ch_canon = SessionChannelTracker._canon_name(ch_display)
                     channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1

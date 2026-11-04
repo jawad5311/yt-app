@@ -527,10 +527,9 @@ class TestWatchingWorker:
 
         with patch("src.automation.watching_worker.safe_get") as mock_safe_get:
             res = worker.click_recommended_video({"index": 0, "href": "/watch?v=rec12345678"})
-            assert res is True
-            mock_safe_get.assert_called_once_with(
-                mock_driver, "https://www.youtube.com/watch?v=rec12345678", timeout=30, log_queue=worker.log_queue
-            )
+            # In-page click fails, direct navigation fallback must NOT be called
+            assert res is False
+            mock_safe_get.assert_not_called()
 
     @patch("src.automation.watching_worker.human_like_delay")
     @patch("src.automation.watching_worker.setup_driver")
@@ -1227,9 +1226,9 @@ class TestAdSlotFiltering:
             res = worker.click_recommended_video(target_card)
             # Must NOT click the ad element
             ad_card_element.click.assert_not_called()
-            # Falls back to safe direct navigation to the legitimate video URL
-            mock_safe_get.assert_called_once()
-            assert "targetvid12" in mock_safe_get.call_args[0][1]
+            # Direct address bar fallback is removed; returns False
+            assert res is False
+            mock_safe_get.assert_not_called()
 
     def test_video_with_action_buttons_not_flagged_as_ad(self):
         from src.automation.watching_worker import is_candidate_ad

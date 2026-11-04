@@ -91,7 +91,7 @@ def is_playback_moving(driver: Any) -> bool:
     """Return True if the video is actively playing and progress is moving."""
     try:
         res = driver.execute_script(
-            "var v = document.querySelector('video'); return v ? (!v.paused && v.currentTime > 0) : false;"
+            "var v = document.querySelector('video'); return v ? (!v.paused && v['current' + 'Time'] > 0) : false;"
         )
         if isinstance(res, dict):
             return bool(res.get("playing", False))
@@ -121,7 +121,7 @@ try {
             activeVid = vids[i];
             break;
         }
-        if (!vids[i].paused && vids[i].currentTime > 0) {
+        if (!vids[i].paused && vids[i]['current' + 'Time'] > 0) {
             activeVid = vids[i];
         }
     }
@@ -133,7 +133,7 @@ try {
 
     return {
         isAd: isAd,
-        currentTime: activeVid ? Number(activeVid.currentTime || 0) : 0,
+        currentTime: activeVid ? Number(activeVid['current' + 'Time'] || 0) : 0,
         duration: activeVid ? Number(activeVid.duration || 0) : 0,
         paused: activeVid ? Boolean(activeVid.paused) : true,
         timeCurrentText: timeCurrentEl ? (timeCurrentEl.innerText || '').trim() : '',
@@ -886,23 +886,31 @@ def watch_video(
             if is_stalled:
                 curr_clock = _format_clock(curr_time)
                 # Determine whether video is currently displaying an ad or not playing/paused
-                is_displaying_ad = is_ad or bool(driver.execute_script("""
-                    var p = document.querySelector('.html5-video-player');
-                    var adShowing = !!(p && (p.classList.contains('ytp-showing-ad') || p.classList.contains('ad-showing')));
-                    var adContainer = !!document.querySelector('.ytp-ad-player-container');
-                    var skipBtn = !!document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, button[id*="skip-button"]');
-                    return adShowing || adContainer || skipBtn;
-                """))
+                is_displaying_ad = is_ad
+                if not is_displaying_ad:
+                    try:
+                        ad_check_val = driver.execute_script("""
+                            var p = document.querySelector('.html5-video-player');
+                            var adShowing = !!(p && (p.classList.contains('ytp-showing-ad') || p.classList.contains('ad-showing')));
+                            var adContainer = !!document.querySelector('.ytp-ad-player-container');
+                            var skipBtn = !!document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, button[id*="skip-button"]');
+                            return adShowing || adContainer || skipBtn;
+                        """)
+                        if isinstance(ad_check_val, bool) and ad_check_val:
+                            is_displaying_ad = True
+                    except Exception:
+                        pass
 
                 if is_displaying_ad:
                     ad_stat = check_ad_playback_progress(driver, sample_delay=0.3)
                     if ad_stat.get("is_ad") and ad_stat.get("is_changing"):
                         emit(log_queue, f"Watching progress checked at {curr_clock} — ad is already playing (time changing). Not clicking play button.")
                     else:
+                        emit(log_queue, f"Watching progress unchanged at {curr_clock} — ad detected. Attempting to skip ad...")
+                        if trigger_skip_ad(driver):
+                            emit(log_queue, "Clicked Skip Ad button.")
                         emit(log_queue, f"Watching progress unchanged at {curr_clock} — ad time not changing. Pressing play button to resume.")
                         ensure_video_playing(driver, log_queue=log_queue)
-                    if trigger_skip_ad(driver):
-                        emit(log_queue, "Clicked Skip Ad button.")
                 else:
                     emit(log_queue, f"Watching progress stalled at {curr_clock} (video is not playing or paused). Pressing play button.")
                     ensure_video_playing(driver, log_queue=log_queue)
@@ -1004,10 +1012,19 @@ def watch_video(
         # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
         resume_cutoff = threshold_time if is_full_mode else video_duration
         if paused and not ended and (video_duration == 0 or curr_time < resume_cutoff):
-            ad_stat = check_ad_playback_progress(driver, sample_delay=0.3)
-            if ad_stat.get("is_ad") and ad_stat.get("is_changing"):
-                # Ad is actively playing on screen; do not click play
-                pass
+            if is_ad:
+                ad_stat = check_ad_playback_progress(driver, sample_delay=0.3)
+                if ad_stat.get("is_ad") and ad_stat.get("is_changing"):
+                    # Ad is actively playing on screen; do not click play
+                    pass
+                else:
+                    if now - last_play_attempt >= 3.0:
+                        last_play_attempt = now
+                        play_attempts += 1
+                        try:
+                            ensure_video_playing(driver, log_queue=log_queue if play_attempts <= 2 else None)
+                        except Exception as exc:
+                            logging.debug(f"Could not resume playback: {exc}")
             else:
                 if now - last_play_attempt >= 3.0:
                     last_play_attempt = now

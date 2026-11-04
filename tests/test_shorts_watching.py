@@ -791,3 +791,53 @@ def test_find_target_short_on_home_diagnostic_logging():
     correctly_missing = any("Shorts shelf/items not yet visible in Home feed" in log for log in empty_logs)
     assert correctly_missing is True
 
+
+def test_shorts_cycle_watches_random_untargeted_short_when_no_target_found(tmp_path):
+    """When no target Short matches on Home feed, a random Short from the list is clicked and watched as untargeted, continuing the cycle into the reel."""
+    from unittest.mock import MagicMock, patch
+    from src.automation.watching_worker import WatchingWorker
+    from src.config.manager import ConfigManager
+    from src.models.account import Account
+
+    cfg = ConfigManager(config_file=tmp_path / "settings.json")
+    cfg.set_setting("TargetShortsPerCycle", 5)
+    cfg.set_setting("TotalNonTargetShortsLimit", 10)
+
+    worker = WatchingWorker(
+        account=Account(email="test@gmail.com", password="pwd"),
+        channels=[],
+        config_mgr=cfg,
+    )
+    mock_driver = MagicMock()
+    mock_driver.current_url = "https://www.youtube.com/"
+    worker.driver = mock_driver
+
+    candidate_shorts = [
+        {"url": "https://www.youtube.com/shorts/rnd11111111", "video_id": "rnd11111111", "title": "Random Short 1"},
+        {"url": "https://www.youtube.com/shorts/rnd22222222", "video_id": "rnd22222222", "title": "Random Short 2"},
+    ]
+
+    worker.find_target_short_on_home = MagicMock(return_value=None)
+    worker.fetch_home_shorts = MagicMock(return_value=candidate_shorts)
+    worker.click_home_short = MagicMock(return_value=True)
+    worker.scroll_to_next_short = MagicMock()
+
+    # Simulate reel loop achieving target and exiting
+    worker._run_shorts_reel_loop = MagicMock(return_value=(5, 2, "target_achieved"))
+
+    with patch("time.sleep", return_value=None), \
+         patch("src.automation.watching_worker.human_like_delay", return_value=None):
+        watched = worker._run_shorts_cycle(session_watched_keys=set())
+
+    # Clicked home short should be called for one of the random candidates
+    assert worker.click_home_short.called
+    clicked_arg = worker.click_home_short.call_args[0][0]
+    assert clicked_arg in candidate_shorts
+
+    # Scroll to next short called to enter reel
+    assert worker.scroll_to_next_short.called
+
+    # Reel loop called to continue cycle
+    assert worker._run_shorts_reel_loop.called
+    assert watched == 5
+
