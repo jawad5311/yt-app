@@ -467,6 +467,7 @@ class ScrollableFrame(ttk.Frame):
             background=colors["bg"],
             width=width,
             height=height,
+            yscrollincrement=1,
         )
         self._scrollbar = ttk.Scrollbar(
             self._parent_frame,
@@ -486,9 +487,8 @@ class ScrollableFrame(ttk.Frame):
         self.bind("<Configure>", self._on_frame_configure)
         self._parent_canvas.bind("<Configure>", self._on_canvas_configure)
 
-        self._bind_mousewheel(self._parent_frame)
-        self._bind_mousewheel(self._parent_canvas)
-        self._bind_mousewheel(self)
+        from ..utils.scroll_helper import setup_smooth_scrolling
+        setup_smooth_scrolling(self, notch_pixels=65.0, damping=0.28)
 
     def _on_frame_configure(self, event=None):
         if self._parent_canvas.winfo_exists():
@@ -497,25 +497,6 @@ class ScrollableFrame(ttk.Frame):
     def _on_canvas_configure(self, event):
         if self._parent_canvas.winfo_exists():
             self._parent_canvas.itemconfig(self._window_id, width=event.width)
-
-    def _bind_mousewheel(self, widget: tk.Misc):
-        try:
-            widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
-            widget.bind("<Button-4>", self._on_mousewheel, add="+")
-            widget.bind("<Button-5>", self._on_mousewheel, add="+")
-        except Exception:
-            pass
-
-    def _on_mousewheel(self, event):
-        if not self._parent_canvas.winfo_exists():
-            return
-        if event.num == 4:
-            self._parent_canvas.yview_scroll(-2, "units")
-        elif event.num == 5:
-            self._parent_canvas.yview_scroll(2, "units")
-        elif event.delta:
-            step = -int(event.delta / 60)
-            self._parent_canvas.yview_scroll(step if step != 0 else (-1 if event.delta > 0 else 1), "units")
 
     # Delegate grid, pack, place to parent container
     def grid(self, **kwargs):

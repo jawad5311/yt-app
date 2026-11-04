@@ -98,7 +98,7 @@ class QueueView(Frame):
 
     def _setup_fast_scrolling(self):
         """Install smooth, responsive, animated mouse wheel scrolling on the scroll frame."""
-        setup_smooth_scrolling(self.scroll_frame, notch_pixels=120.0, damping=0.35)
+        setup_smooth_scrolling(self.scroll_frame, notch_pixels=65.0, damping=0.28)
 
     def _default_watch_duration(self) -> str:
         """Default duration for newly created tasks (Settings -> Default Watch Duration)."""

@@ -1,28 +1,35 @@
-"""Smooth and fast mouse wheel scrolling utility for CTkScrollableFrame."""
+"""Smooth and fast mouse wheel scrolling utility for CTkScrollableFrame / TTK ScrollableFrame."""
 
 from typing import Any, Optional
 
 
-
 def setup_smooth_scrolling(
     scroll_frame: Any,
-    notch_pixels: float = 120.0,
-    damping: float = 0.35,
-    max_accum: float = 600.0,
+    notch_pixels: float = 65.0,
+    damping: float = 0.28,
+    max_accum: float = 400.0,
 ) -> None:
-    """Install high-performance, smooth, animated mouse wheel scrolling on a CTkScrollableFrame.
+    """Install high-performance, smooth, animated mouse wheel scrolling on a ScrollableFrame.
 
-    - Neutralizes CustomTkinter's default slow 20px step recursion.
-    - Uses ease-out damping for smooth deceleration.
-    - Accurately checks widget hierarchy so stacked views never swallow each other's wheel events.
-    - Supports traditional mouse wheels (notch deltas of 120), precision touchpads, and Linux buttons.
+    - Sets yscrollincrement=1 on the underlying canvas for pixel-precise smooth scrolling.
+    - Uses ease-out damping for smooth deceleration on stepped mouse wheels (60 FPS animation loop).
+    - Immediate 1:1 pixel movement for precision touchpads.
+    - Accurately checks widget hierarchy and topmost window so stacked views never swallow each other's events.
+    - Prevents accumulation at boundaries (top and bottom limits).
     """
     canvas = getattr(scroll_frame, "_parent_canvas", None)
     if canvas is None:
         return
 
+    # Ensure 1 unit = 1 pixel for genuine pixel-level smooth interpolation
+    try:
+        canvas.configure(yscrollincrement=1)
+    except Exception:
+        pass
+
     # Neutralize CustomTkinter's internal slow mousewheel recursion
-    scroll_frame.check_if_master_is_canvas = lambda widget: False
+    if hasattr(scroll_frame, "check_if_master_is_canvas"):
+        scroll_frame.check_if_master_is_canvas = lambda widget: False
 
     canvas_str = str(canvas)
     canvas_prefix = canvas_str + "."
@@ -30,19 +37,36 @@ def setup_smooth_scrolling(
     target_accum = 0.0
     anim_job: Optional[str] = None
 
+    def _is_descendant(child: Any) -> bool:
+        cur = child
+        while cur is not None:
+            if cur == canvas or cur == scroll_frame:
+                return True
+            cur = getattr(cur, "master", None)
+        return False
+
     def _is_mouse_over(event) -> bool:
         try:
             if not canvas.winfo_exists():
                 return False
+
+            # 1. Direct widget or ancestor check
             w = getattr(event, "widget", None)
-            w_str = str(w) if w else ""
-            if w_str == canvas_str or w_str.startswith(canvas_prefix):
-                return True
-            if hasattr(event, "x_root") and hasattr(event, "y_root"):
-                top_w = canvas.winfo_containing(event.x_root, event.y_root)
-                top_str = str(top_w) if top_w else ""
-                if top_str == canvas_str or top_str.startswith(canvas_prefix):
+            if w is not None:
+                w_str = str(w)
+                if w_str == canvas_str or w_str.startswith(canvas_prefix) or _is_descendant(w):
                     return True
+
+            # 2. Geometry / cursor position check (winfo_containing)
+            xr = getattr(event, "x_root", None)
+            yr = getattr(event, "y_root", None)
+            if isinstance(xr, (int, float)) and isinstance(yr, (int, float)):
+                top_w = canvas.winfo_containing(int(xr), int(yr))
+                if top_w is not None:
+                    top_str = str(top_w)
+                    if top_str == canvas_str or top_str.startswith(canvas_prefix) or _is_descendant(top_w):
+                        return True
+
             return False
         except Exception:
             return False
@@ -60,9 +84,13 @@ def setup_smooth_scrolling(
             if target_accum < 0 and y_view[0] <= 0.0:
                 target_accum = 0.0
                 return
+            # If at bottom and trying to scroll down, halt immediately
+            if target_accum > 0 and y_view[1] >= 1.0:
+                target_accum = 0.0
+                return
 
             if abs(target_accum) < 1.0:
-                if abs(target_accum) > 0.001:
+                if abs(target_accum) > 0.01:
                     canvas.yview("scroll", int(round(target_accum)), "units")
                 target_accum = 0.0
                 return
@@ -78,8 +106,11 @@ def setup_smooth_scrolling(
             canvas.yview("scroll", int(round(step)), "units")
             new_top = canvas.yview()[0]
 
-            # If attempting to scroll down but position didn't move at all and we are at the bottom, halt
+            # Boundary checks
             if target_accum > 0 and new_top == old_top and canvas.yview()[1] >= 1.0:
+                target_accum = 0.0
+                return
+            if target_accum < 0 and new_top == old_top and canvas.yview()[0] <= 0.0:
                 target_accum = 0.0
                 return
 
@@ -94,18 +125,24 @@ def setup_smooth_scrolling(
             return
 
         delta = getattr(event, "delta", 0)
+        if not delta:
+            return
+
         if abs(delta) >= 120:
-            # Standard mouse wheel notch on Windows (120 units)
+            # Standard mouse wheel notch on Windows (120 units per notch)
             step = -int((delta / 120.0) * notch_pixels)
+            target_accum += step
+            target_accum = max(-max_accum, min(max_accum, target_accum))
+
+            if anim_job is None and canvas.winfo_exists():
+                anim_job = canvas.after(0, _step_anim)
         else:
-            # Precision touchpad with small frequent deltas
-            step = -int(delta * 2.5)
-
-        target_accum += step
-        target_accum = max(-max_accum, min(max_accum, target_accum))
-
-        if anim_job is None and canvas.winfo_exists():
-            anim_job = canvas.after(0, _step_anim)
+            # Precision touchpad: direct 1:1 responsive pixel scrolling
+            step = -int(delta * 1.5)
+            if step != 0 and canvas.winfo_exists():
+                y_view = canvas.yview()
+                if (step < 0 and y_view[0] > 0.0) or (step > 0 and y_view[1] < 1.0):
+                    canvas.yview("scroll", step, "units")
 
         return "break"
 

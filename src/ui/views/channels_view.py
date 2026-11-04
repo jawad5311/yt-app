@@ -27,6 +27,7 @@ from ...utils.channel_fetcher import (
     fetch_channel_videos,
 )
 from ...utils.helpers import extract_video_id
+from ...utils.scroll_helper import setup_smooth_scrolling
 from ..tooltip import add_tooltip
 from .channel_import_modal import ChannelImportModal
 
@@ -188,54 +189,8 @@ class ChannelsView(Frame):
         self.load_channels()
 
     def _setup_fast_scrolling(self):
-        """Install smooth, responsive, batched mouse wheel scrolling on the scroll frame."""
-        canvas = self.scroll_frame._parent_canvas
-        canvas_str = str(canvas)
-
-        self._wheel_accum = 0
-        self._wheel_job = None
-
-        def _flush_wheel():
-            self._wheel_job = None
-            delta = self._wheel_accum
-            self._wheel_accum = 0
-            if delta == 0:
-                return
-            try:
-                if abs(delta) < 10:
-                    step = -int(delta * 25)
-                else:
-                    step = -int(delta / 2)
-                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
-                    canvas.yview("scroll", step, "units")
-            except Exception:
-                pass
-
-        def _on_mousewheel(event):
-            w_str = str(event.widget)
-            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
-                self._wheel_accum += event.delta
-                if self._wheel_job is None:
-                    self._wheel_job = canvas.after_idle(_flush_wheel)
-                return "break"
-
-        def _on_linux_scroll_up(event):
-            w_str = str(event.widget)
-            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
-                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
-                    canvas.yview("scroll", -60, "units")
-                return "break"
-
-        def _on_linux_scroll_down(event):
-            w_str = str(event.widget)
-            if w_str == canvas_str or w_str.startswith(canvas_str + "."):
-                if canvas.winfo_exists() and canvas.yview() != (0.0, 1.0):
-                    canvas.yview("scroll", 60, "units")
-                return "break"
-
-        canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+")
-        canvas.bind_all("<Button-4>", _on_linux_scroll_up, add="+")
-        canvas.bind_all("<Button-5>", _on_linux_scroll_down, add="+")
+        """Install smooth, responsive, animated mouse wheel scrolling on the scroll frame."""
+        setup_smooth_scrolling(self.scroll_frame, notch_pixels=65.0, damping=0.28)
 
     # ---------------------------------------------------------------- storage
 
