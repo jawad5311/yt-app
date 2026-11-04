@@ -100,9 +100,126 @@ def is_playback_moving(driver: Any) -> bool:
         return False
 
 
+
+AD_PLAYBACK_PROBE_JS = """
+try {
+    var player = document.querySelector('.html5-video-player');
+    var isAd = !!(player && (
+        player.classList.contains('ad-showing') ||
+        player.classList.contains('ytp-showing-ad') ||
+        player.classList.contains('ad-interrupting')
+    ));
+    if (!isAd) {
+        isAd = !!document.querySelector('.ytp-ad-player-overlay, .ytp-ad-player-container, .ytp-ad-module, .video-ads .ytp-ad-text');
+    }
+    var vids = document.querySelectorAll('video');
+    var activeVid = null;
+    for (var i = 0; i < vids.length; i++) {
+        var s = String(vids[i].currentSrc || vids[i].src || '');
+        if (s.indexOf('adformat=') !== -1 || s.indexOf('/api/ads/') !== -1) {
+            isAd = true;
+            activeVid = vids[i];
+            break;
+        }
+        if (!vids[i].paused && vids[i].currentTime > 0) {
+            activeVid = vids[i];
+        }
+    }
+    if (!activeVid && vids.length) activeVid = vids[0];
+
+    var timeCurrentEl = document.querySelector('.ytp-time-current');
+    var timeDurationEl = document.querySelector('.ytp-time-duration');
+    var adTextEl = document.querySelector('.ytp-ad-duration-remaining, .ytp-ad-text');
+
+    return {
+        isAd: isAd,
+        currentTime: activeVid ? Number(activeVid.currentTime || 0) : 0,
+        duration: activeVid ? Number(activeVid.duration || 0) : 0,
+        paused: activeVid ? Boolean(activeVid.paused) : true,
+        timeCurrentText: timeCurrentEl ? (timeCurrentEl.innerText || '').trim() : '',
+        timeDurationText: timeDurationEl ? (timeDurationEl.innerText || '').trim() : '',
+        adText: adTextEl ? (adTextEl.innerText || '').trim() : ''
+    };
+} catch(e) {
+    return { isAd: false, error: String(e) };
+}
+"""
+
+
+def check_ad_playback_progress(driver: Any, sample_delay: float = 0.5) -> Dict[str, Any]:
+    """Check whether an ad is currently displaying and whether its playback time is actively advancing.
+
+    Samples the ad playback state, waits sample_delay, and samples again to check
+    if the time value (currentTime, time text, countdown) is changing.
+    Returns:
+        {
+            "is_ad": bool,
+            "is_changing": bool,
+            "time1": float,
+            "time2": float,
+            "time_display": str,
+        }
+    """
+    try:
+        sample1 = driver.execute_script(AD_PLAYBACK_PROBE_JS)
+    except Exception:
+        return {"is_ad": False, "is_changing": False, "time1": 0.0, "time2": 0.0, "time_display": ""}
+
+    if not isinstance(sample1, dict) or not sample1.get("isAd"):
+        return {"is_ad": False, "is_changing": False, "time1": 0.0, "time2": 0.0, "time_display": ""}
+
+    if sample_delay > 0:
+        time.sleep(sample_delay)
+
+    try:
+        sample2 = driver.execute_script(AD_PLAYBACK_PROBE_JS)
+    except Exception:
+        sample2 = sample1
+
+    if not isinstance(sample2, dict) or not sample2.get("isAd"):
+        return {"is_ad": False, "is_changing": True, "time1": 0.0, "time2": 0.0, "time_display": "ad_finished"}
+
+    t1 = float(sample1.get("currentTime", 0.0))
+    t2 = float(sample2.get("currentTime", 0.0))
+    txt1 = sample1.get("timeCurrentText", "")
+    txt2 = sample2.get("timeCurrentText", "")
+    ad_txt1 = sample1.get("adText", "")
+    ad_txt2 = sample2.get("adText", "")
+    paused2 = bool(sample2.get("paused", False))
+
+    time_delta = t2 - t1
+    is_time_advancing = time_delta > 0.05
+    is_text_changing = (bool(txt1 and txt2 and txt1 != txt2) or
+                        bool(ad_txt1 and ad_txt2 and ad_txt1 != ad_txt2))
+    is_playing_normally = (not paused2) and (is_time_advancing or is_text_changing or t2 > t1)
+
+    is_changing = is_time_advancing or is_text_changing or is_playing_normally
+
+    display_str = f"{t1:.1f}s -> {t2:.1f}s"
+    if txt2:
+        display_str += f" ({txt2})"
+    elif ad_txt2:
+        display_str += f" ({ad_txt2})"
+
+    return {
+        "is_ad": True,
+        "is_changing": is_changing,
+        "time1": t1,
+        "time2": t2,
+        "time_display": display_str,
+    }
+
 def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
     """Ensure video playback starts by tapping center play button, control bar, or player element."""
     try:
+        ad_check = check_ad_playback_progress(driver, sample_delay=0.4)
+        if ad_check.get("is_ad"):
+            if ad_check.get("is_changing"):
+                emit(log_queue, f"Ad is already playing (time changing: {ad_check.get('time_display')}). Not clicking play button.")
+                return True
+            else:
+                emit(log_queue, f"Ad playback is stalled (time not changing: {ad_check.get('time_display')}). Clicking play button to resume.")
+
         # Check if already playing via JS probe
         res = driver.execute_script(ENSURE_PLAYING_JS)
         if isinstance(res, dict) and res.get("playing"):
@@ -568,6 +685,8 @@ def watch_video(
     last_tick = started_at
     last_progress_log = 0.0
     last_ad_log = 0.0
+    last_ad_check_time = 0.0
+    last_ad_progress_time = 0.0
     last_heartbeat_log = 0.0
     video_missing_since: Optional[float] = None
     escape_warned = False
@@ -776,7 +895,12 @@ def watch_video(
                 """))
 
                 if is_displaying_ad:
-                    emit(log_queue, f"Watching progress unchanged at {curr_clock} — ad detected. Attempting to skip ad...")
+                    ad_stat = check_ad_playback_progress(driver, sample_delay=0.3)
+                    if ad_stat.get("is_ad") and ad_stat.get("is_changing"):
+                        emit(log_queue, f"Watching progress checked at {curr_clock} — ad is already playing (time changing). Not clicking play button.")
+                    else:
+                        emit(log_queue, f"Watching progress unchanged at {curr_clock} — ad time not changing. Pressing play button to resume.")
+                        ensure_video_playing(driver, log_queue=log_queue)
                     if trigger_skip_ad(driver):
                         emit(log_queue, "Clicked Skip Ad button.")
                 else:
@@ -794,6 +918,20 @@ def watch_video(
                     highlight_skip_button(driver, skip_candidate)
             except Exception:
                 pass
+
+            # Check if values between times are changing or if ad time is stalled
+            if last_ad_check_time > 0:
+                time_since_ad = now - last_ad_check_time
+                if time_since_ad >= 5.0:
+                    ad_diff = abs(curr_time - last_ad_progress_time)
+                    if ad_diff < 0.05 and paused:
+                        emit(log_queue, f"Ad time not changing at {_format_clock(curr_time)} (ad is stalled). Clicking play button to resume.")
+                        ensure_video_playing(driver, log_queue=log_queue)
+                    last_ad_progress_time = curr_time
+                    last_ad_check_time = now
+            else:
+                last_ad_progress_time = curr_time
+                last_ad_check_time = now
 
             if now - last_ad_log >= 30:
                 last_ad_log = now
@@ -866,13 +1004,18 @@ def watch_video(
         # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
         resume_cutoff = threshold_time if is_full_mode else video_duration
         if paused and not ended and (video_duration == 0 or curr_time < resume_cutoff):
-            if now - last_play_attempt >= 3.0:
-                last_play_attempt = now
-                play_attempts += 1
-                try:
-                    ensure_video_playing(driver, log_queue=log_queue if play_attempts <= 2 else None)
-                except Exception as exc:
-                    logging.debug(f"Could not resume playback: {exc}")
+            ad_stat = check_ad_playback_progress(driver, sample_delay=0.3)
+            if ad_stat.get("is_ad") and ad_stat.get("is_changing"):
+                # Ad is actively playing on screen; do not click play
+                pass
+            else:
+                if now - last_play_attempt >= 3.0:
+                    last_play_attempt = now
+                    play_attempts += 1
+                    try:
+                        ensure_video_playing(driver, log_queue=log_queue if play_attempts <= 2 else None)
+                    except Exception as exc:
+                        logging.debug(f"Could not resume playback: {exc}")
 
 
 

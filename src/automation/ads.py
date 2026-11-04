@@ -37,10 +37,11 @@ if (v.__ytToolSeekCount === undefined) {
 
 var player = document.querySelector('.html5-video-player');
 var showingAd = !!(player && (player.classList.contains('ytp-showing-ad')
-                              || player.classList.contains('ad-showing')));
+                              || player.classList.contains('ad-showing')
+                              || player.classList.contains('ad-interrupting')));
 var pod = document.querySelector('.video-ads');
 var podActive = !!(pod && pod.childElementCount > 0);
-var adContainer = !!document.querySelector('.ytp-ad-player-container');
+var adContainer = !!document.querySelector('.ytp-ad-player-container, .ytp-ad-module');
 var src = String(v.currentSrc || v.src || '');
 var srcIsAd = src.indexOf('adformat=') !== -1 || src.indexOf('/api/ads/') !== -1;
 
