@@ -583,10 +583,10 @@ class TestReportEnhancedMetricsAndAlerts:
         assert "6 video(s)" in text
         assert "1 video(s)" in text
 
-        # Verify exact column header ordering: Channel Name -> This Session -> Target Progress -> Videos Watched -> Lifetime Total
+        # Verify exact column header ordering: Channel Name -> Target Progress -> Lifetime Total -> This Session -> Videos Watched
         header_line = [line for line in text.splitlines() if "Channel Name" in line][0]
         col_names = [c.strip() for c in header_line.split("|")]
-        assert col_names == ["Channel Name", "This Session", "Target Progress", "Videos Watched", "Lifetime Total"]
+        assert col_names == ["Channel Name", "Target Progress", "Lifetime Total", "This Session", "Videos Watched"]
 
         html = sample_report.generate_html()
         assert "3.0h / 5.0h (60%)" in html
@@ -1186,3 +1186,30 @@ class TestPersistentHeadlessReportingBrowser:
             # Exactly "Notified successfully" should be emitted
             assert any("Notified successfully" in str(msg) for msg in messages)
 
+
+
+def test_html_dashboard_generation_includes_progress_bars_and_buttons(sample_report):
+    """Verify that HTML report includes progress bars, channel links, and CTA action buttons."""
+    sample_report.channel_reports = [
+        {
+            "name": "Alpha Channel",
+            "url": "https://youtube.com/@alphachannel",
+            "session_watch_seconds": 1800.0,
+            "final_watch_seconds": 3600.0,
+            "target_watch_seconds": 7200.0,
+            "target_goal_text": "1.0h / 2.0h (50%)",
+            "target_achieved": False,
+            "regular_videos_count": 2,
+            "shorts_count": 1,
+        }
+    ]
+    html = sample_report.generate_html()
+    assert "Open YouTube" in html
+    assert "YouTube Studio" in html
+    assert "Visit Channel" in html
+    assert "https://youtube.com/@alphachannel" in html
+    assert "background-color: #0284c7; width: 50.0%;" in html
+
+    body = sample_report.generate_html_body()
+    assert "Open YouTube" in body
+    assert "<!DOCTYPE html>" not in body

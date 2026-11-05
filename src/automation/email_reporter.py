@@ -140,22 +140,22 @@ class SessionReport:
         if not active_channels:
             lines.append("  (No entertainment was logged for any channel in this session)")
         else:
-            header = f"  {'Channel Name':<22} | {'This Session':<21} | {'Target Progress':<20} | {'Videos Watched':<16} | {'Lifetime Total'}"
+            header = f"  {'Channel Name':<22} | {'Target Progress':<25} | {'Lifetime Total':<16} | {'This Session':<21} | {'Videos Watched'}"
             lines.append(header)
-            lines.append("  " + "-" * 105)
+            lines.append("  " + "-" * 110)
 
             for ch in active_channels:
                 name = ch.get("name", "Unknown")[:20]
                 ses_sec = ch.get("session_watch_seconds", 0.0)
                 tot_sec = ch.get("final_watch_seconds", 0.0)
-                tgt_txt = ch.get("target_goal_text", "No target set")[:20]
+                tgt_txt = ch.get("target_goal_text", "No target set")[:25]
                 tot_vids = ch.get("total_videos_count")
                 if tot_vids is None:
                     tot_vids = ch.get("regular_videos_count", 0) + ch.get("shorts_count", 0)
                 vids_fmt = f"{tot_vids} video(s)"
                 ses_fmt = f"{format_duration(ses_sec)} ({format_hours(ses_sec)})"
                 tot_fmt = format_hours(tot_sec)
-                lines.append(f"  {name:<22} | {ses_fmt:<21} | {tgt_txt:<20} | {vids_fmt:<16} | {tot_fmt}")
+                lines.append(f"  {name:<22} | {tgt_txt:<25} | {tot_fmt:<16} | {ses_fmt:<21} | {vids_fmt}")
 
         lines.extend([
             "=" * 65,
@@ -163,8 +163,8 @@ class SessionReport:
         ])
         return "\n".join(lines)
 
-    def generate_html(self) -> str:
-        """Produce a clean, modern HTML email report compatible with Gmail and mobile."""
+    def generate_html_body(self) -> str:
+        """Produce the inner HTML dashboard body suitable for web composer injection and modern email."""
         start_str = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
         end_str = self.end_time.strftime("%Y-%m-%d %H:%M:%S")
         session_elapsed = format_duration(self.duration_seconds)
@@ -180,33 +180,52 @@ class SessionReport:
         rows_html = []
         for ch in active_channels:
             name = html.escape(ch.get("name", "Unknown"))
+            ch_url = ch.get("url", "")
             ses_sec = ch.get("session_watch_seconds", 0.0)
             init_sec = ch.get("initial_watch_seconds", 0.0)
             fin_sec = ch.get("final_watch_seconds", 0.0)
+            tgt_sec = ch.get("target_watch_seconds", 0.0)
             tgt_text = html.escape(ch.get("target_goal_text", "No target set"))
+
+            pct = 0.0
+            if tgt_sec > 0:
+                pct = min(100.0, max(0.0, (fin_sec / tgt_sec) * 100.0))
+
             if ch.get("target_achieved"):
-                tgt_badge = f'<span style="color: #059669; font-weight: 700;">{tgt_text}</span>'
+                tgt_badge = f'<span style="display: inline-block; background-color: #d1fae5; color: #047857; padding: 3px 8px; border-radius: 12px; font-weight: 700; font-size: 11px; border: 1px solid #a7f3d0;">{tgt_text}</span>'
+                bar_color = "#059669"
             elif "No target" not in tgt_text:
-                tgt_badge = f'<span style="color: #0284c7; font-weight: 600;">{tgt_text}</span>'
+                tgt_badge = f'<span style="display: inline-block; background-color: #e0f2fe; color: #0369a1; padding: 3px 8px; border-radius: 12px; font-weight: 600; font-size: 11px; border: 1px solid #bae6fd;">{tgt_text}</span>'
+                bar_color = "#0284c7"
             else:
-                tgt_badge = f'<span style="color: #94a3b8;">{tgt_text}</span>'
+                tgt_badge = f'<span style="color: #94a3b8; font-size: 11px;">{tgt_text}</span>'
+                bar_color = "#94a3b8"
+
+            progress_bar = f"""
+                <div style="background-color: #e2e8f0; border-radius: 9999px; height: 6px; width: 110px; overflow: hidden; margin-top: 5px;">
+                    <div style="background-color: {bar_color}; width: {pct:.1f}%; height: 100%; border-radius: 9999px;"></div>
+                </div>
+            """ if tgt_sec > 0 else ""
+
             tot_vids = ch.get("total_videos_count")
             if tot_vids is None:
                 tot_vids = ch.get("regular_videos_count", 0) + ch.get("shorts_count", 0)
             reg_cnt = ch.get("regular_videos_count", 0)
             sh_cnt = ch.get("shorts_count", 0)
             if sh_cnt > 0:
-                vids_html = f"<strong>{tot_vids}</strong> video(s) <span style=\"font-size: 11px; color: #64748b;\">({reg_cnt} vids, {sh_cnt} shorts)</span>"
+                vids_html = f"<strong>{tot_vids}</strong> video(s)<br><span style=\"font-size: 11px; color: #64748b;\">({reg_cnt} vids, {sh_cnt} shorts)</span>"
             else:
                 vids_html = f"<strong>{tot_vids}</strong> video(s)"
 
+            link_html = f'<br><a href="{html.escape(ch_url)}" target="_blank" style="display: inline-block; font-size: 11px; color: #0284c7; text-decoration: none; font-weight: 600; margin-top: 3px;">↗ Visit Channel</a>' if ch_url else ""
+
             rows_html.append(f"""
                 <tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 12px 14px; font-weight: 600; color: #1e293b;">{name}</td>
-                    <td style="padding: 12px 14px; color: #059669; font-weight: 700;">{format_duration(ses_sec)} <span style="font-size: 11px; color: #64748b; font-weight: normal;">({format_hours(ses_sec)})</span></td>
-                    <td style="padding: 12px 14px; font-size: 12px;">{tgt_badge}</td>
-                    <td style="padding: 12px 14px; color: #475569; font-size: 12px;">{vids_html}</td>
-                    <td style="padding: 12px 14px; color: #0f172a; font-weight: 600;">{format_hours(fin_sec)}</td>
+                    <td style="padding: 12px 14px; font-weight: 600; color: #1e293b; vertical-align: middle;">{name}{link_html}</td>
+                    <td style="padding: 12px 14px; font-size: 12px; vertical-align: middle;">{tgt_badge}{progress_bar}</td>
+                    <td style="padding: 12px 14px; color: #0f172a; font-weight: 700; vertical-align: middle;">{format_hours(fin_sec)}</td>
+                    <td style="padding: 12px 14px; color: #059669; font-weight: 700; vertical-align: middle;">{format_duration(ses_sec)} <span style="font-size: 11px; color: #64748b; font-weight: normal;">({format_hours(ses_sec)})</span></td>
+                    <td style="padding: 12px 14px; color: #475569; font-size: 12px; vertical-align: middle;">{vids_html}</td>
                 </tr>
             """)
 
@@ -232,24 +251,21 @@ class SessionReport:
             </div>
             """
 
-        html_template = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Session Entertainment Report</title>
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
-    <div style="max-width: 680px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1); border: 1px solid #e2e8f0;">
+        return f"""
+    <div style="max-width: 680px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
         
         <!-- Header -->
-        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 24px; color: #ffffff;">
-            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; font-weight: 700; margin-bottom: 6px;">Media Entertainment Activity</div>
-            <h1 style="margin: 0; font-size: 22px; font-weight: 700; line-height: 1.3;">Session Entertainment Report</h1>
-            <div style="margin-top: 10px; font-size: 13px; color: #94a3b8;">
-                <div style="margin-bottom: 4px; font-size: 14px;">System Name: <span style="color: #38bdf8; font-weight: 700;">{html.escape(self.system_name or 'N/A')}</span></div>
-                <div>Account: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.account_email or 'N/A')}</span> | Mode: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.session_mode)}</span></div>
+        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 26px 24px; color: #ffffff;">
+            <div style="display: table; width: 100%;">
+                <div style="display: table-cell; vertical-align: middle;">
+                    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; font-weight: 700; margin-bottom: 4px;">Media Entertainment Activity</div>
+                    <h1 style="margin: 0; font-size: 22px; font-weight: 800; line-height: 1.3;">Session Entertainment Report</h1>
+                    <div style="margin-top: 8px; font-size: 13px; color: #94a3b8;">
+                        <div style="margin-bottom: 4px; font-size: 14px;">System Name: <span style="color: #38bdf8; font-weight: 700;">{html.escape(self.system_name or 'N/A')}</span></div>
+                        <div>Account: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.account_email or 'N/A')}</span> | Mode: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.session_mode)}</span></div>
+                    </div>
+                </div>
+            </div>
             </div>
         </div>
 
@@ -317,10 +333,10 @@ class SessionReport:
                 <thead>
                     <tr style="background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1;">
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Channel</th>
-                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">This Session</th>
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Target Goal Progress</th>
-                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Videos Watched</th>
                         <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Lifetime Total</th>
+                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">This Session</th>
+                        <th style="padding: 10px 14px; font-weight: 700; color: #334155;">Videos Watched</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -328,16 +344,34 @@ class SessionReport:
                 </tbody>
             </table>
 
+            <!-- Action Buttons -->
+            <div style="margin-top: 28px; padding-top: 20px; border-top: 1px solid #e2e8f0; text-align: center;">
+                <a href="https://www.youtube.com" target="_blank" style="display: inline-block; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: #ffffff; padding: 10px 22px; border-radius: 8px; font-weight: 700; text-decoration: none; font-size: 13px; box-shadow: 0 2px 4px rgba(239,68,68,0.25); margin: 0 6px;">▶ Open YouTube</a>
+                <a href="https://studio.youtube.com" target="_blank" style="display: inline-block; background: #ffffff; color: #1e293b; border: 1px solid #cbd5e1; padding: 9px 20px; border-radius: 8px; font-weight: 600; text-decoration: none; font-size: 13px; margin: 0 6px;">📊 YouTube Studio</a>
+            </div>
+
             <!-- Footer -->
-            <div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center;">
+            <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8; text-align: center;">
                 Generated automatically by Entertainment Hub. All entertainment durations are measured from active playback.
             </div>
         </div>
     </div>
-</body>
-</html>
         """
-        return html_template.strip()
+
+    def generate_html(self) -> str:
+        """Produce a clean, modern HTML email report compatible with Gmail and mobile."""
+        body_content = self.generate_html_body()
+        return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session Entertainment Report</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+{body_content}
+</body>
+</html>""".strip()
 
 
 class EmailReporter:
@@ -440,6 +474,7 @@ class EmailReporter:
         log_queue: Optional[queue.Queue] = None,
         email_description: str = "report",
         thread_info: Optional[Dict[str, Any]] = None,
+        html_content: Optional[str] = None,
     ) -> bool:
         """Core Gmail compose automation in Chrome (works for visible and headless Chrome)."""
         if not driver:
@@ -457,8 +492,8 @@ class EmailReporter:
             if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient_email.lower():
                 compose_url += f"&bcc={quote(bcc_email)}"
             compose_url += f"&su={quote(subject)}"
-            # Pre-populate body in URL query string when within safe URL limits
-            if len(plain_text) < 7000:
+            # Pre-populate body in URL query string when within safe URL limits only if not injecting HTML
+            if not html_content and len(plain_text) < 7000:
                 compose_url += f"&body={quote(plain_text)}"
 
             driver.get(compose_url)
@@ -562,22 +597,44 @@ class EmailReporter:
             time.sleep(0.5)
 
             curr_body = (body_element.text or "").strip()
-            if not curr_body or len(curr_body) < 20:
+            if html_content or not curr_body or len(curr_body) < 20:
                 try:
                     driver.execute_script(
                         """
                         var el = arguments[0];
-                        var text = arguments[1];
+                        var html = arguments[1];
+                        var text = arguments[2];
                         el.focus();
-                        if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
-                            document.execCommand('selectAll', false, null);
-                            document.execCommand('insertText', false, text);
-                        } else {
-                            el.innerText = text;
-                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                        var inserted = false;
+                        if (html && document.queryCommandSupported && document.queryCommandSupported('insertHTML')) {
+                            try {
+                                document.execCommand('selectAll', false, null);
+                                inserted = document.execCommand('insertHTML', false, html);
+                            } catch (e) {
+                                inserted = false;
+                            }
                         }
+                        if (!inserted && html) {
+                            try {
+                                el.innerHTML = html;
+                                inserted = true;
+                            } catch (e) {
+                                inserted = false;
+                            }
+                        }
+                        if (!inserted) {
+                            if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
+                                document.execCommand('selectAll', false, null);
+                                document.execCommand('insertText', false, text);
+                            } else {
+                                el.innerText = text;
+                            }
+                        }
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
                         """,
                         body_element,
+                        html_content or "",
                         plain_text,
                     )
                 except Exception:
@@ -798,6 +855,7 @@ class EmailReporter:
         log_queue: Optional[queue.Queue] = None,
         email_description: str = "report",
         thread_info: Optional[Dict[str, Any]] = None,
+        html_content: Optional[str] = None,
     ) -> bool:
         """Reply directly to an existing session email thread in Gmail."""
         if not driver:
@@ -971,12 +1029,13 @@ class EmailReporter:
             except Exception:
                 pass
 
-            # Prepend report plain text at top of the reply body so the quoted message remains intact below
+            # Prepend report content at top of the reply body so the quoted message remains intact below
             try:
                 driver.execute_script(
                     """
                     var el = arguments[0];
-                    var text = arguments[1];
+                    var html = arguments[1];
+                    var text = arguments[2];
                     el.focus();
                     var sel = window.getSelection();
                     var range = document.createRange();
@@ -984,16 +1043,37 @@ class EmailReporter:
                     range.collapse(true);
                     sel.removeAllRanges();
                     sel.addRange(range);
-                    if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
-                        document.execCommand('insertText', false, text + '\\n\\n');
-                    } else {
-                        var existing = el.innerHTML || '';
-                        var formatted = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\n/g, '<br>');
-                        el.innerHTML = formatted + '<br><br>' + existing;
-                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                    var inserted = false;
+                    if (html && document.queryCommandSupported && document.queryCommandSupported('insertHTML')) {
+                        try {
+                            inserted = document.execCommand('insertHTML', false, html + '<br><br>');
+                        } catch (e) {
+                            inserted = false;
+                        }
                     }
+                    if (!inserted && html) {
+                        try {
+                            var existing = el.innerHTML || '';
+                            el.innerHTML = html + '<br><br>' + existing;
+                            inserted = true;
+                        } catch (e) {
+                            inserted = false;
+                        }
+                    }
+                    if (!inserted) {
+                        if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
+                            document.execCommand('insertText', false, text + '\\n\\n');
+                        } else {
+                            var existingText = el.innerHTML || '';
+                            var formatted = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\n/g, '<br>');
+                            el.innerHTML = formatted + '<br><br>' + existingText;
+                        }
+                    }
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
                     """,
                     body_element,
+                    html_content or "",
                     plain_text,
                 )
             except Exception:
@@ -1141,6 +1221,7 @@ class EmailReporter:
                 log_queue=log_queue,
                 email_description="session watch time report",
                 thread_info=thread_info,
+                html_content=report.generate_html_body(),
             )
             if reply_ok:
                 return True
@@ -1161,6 +1242,7 @@ class EmailReporter:
                 log_queue=log_queue,
                 email_description="session watch time report",
                 thread_info=thread_info,
+                html_content=report.generate_html_body(),
             )
             if reply_ok:
                 return True
@@ -1180,6 +1262,7 @@ class EmailReporter:
             log_queue=log_queue,
             email_description="session watch time report",
             thread_info=thread_info,
+            html_content=report.generate_html_body(),
         )
 
     @classmethod
@@ -1222,6 +1305,7 @@ class EmailReporter:
         email_description: str = "email notification",
         thread_url: Optional[str] = None,
         thread_info: Optional[Dict[str, Any]] = None,
+        html_content: Optional[str] = None,
     ) -> bool:
         """Launch headless Chrome with account profile, send email via Gmail web, and close."""
         from .driver import close_driver, setup_driver
@@ -1258,6 +1342,7 @@ class EmailReporter:
                     log_queue=log_queue,
                     email_description=email_description,
                     thread_info=thread_info,
+                    html_content=html_content,
                 )
                 if reply_ok:
                     return True
@@ -1271,6 +1356,7 @@ class EmailReporter:
                 log_queue=log_queue,
                 email_description=email_description,
                 thread_info=thread_info,
+                html_content=html_content,
             )
         except Exception as exc:
             if log_queue:
@@ -1595,6 +1681,7 @@ class EmailReporter:
                 account=account,
                 subject=report.generate_subject(),
                 body_text=report.generate_plain_text(),
+                html_content=report.generate_html_body(),
                 recipient_email=recipient,
                 bcc_email=bcc_email,
                 log_queue=log_queue,

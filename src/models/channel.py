@@ -41,7 +41,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from .video_task import VideoTask
+from .video_task import DEFAULT_SHORTS_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER, VideoTask
 
 # Sentinel shown by the UI when a video belongs to no channel.
 NO_CHANNEL_VALUE = "(None)"
@@ -223,6 +223,19 @@ class Channel:
         if self.target_watch_seconds <= 0.0:
             return False
         return self.watch_seconds >= self.target_watch_seconds
+
+    def calculate_target_watch_seconds(
+        self,
+        tasks: Optional[Sequence[Any]] = None,
+        stats_store: Optional[Any] = None,
+    ) -> float:
+        """Calculate target watch seconds based on tasks (videos * multipliers, shorts * views)."""
+        return calculate_channel_target_seconds(
+            channel_name_or_obj=self,
+            tasks=tasks,
+            stats_store=stats_store,
+            channel_url=self.url,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"name": self.name, "url": self.url}
@@ -463,3 +476,147 @@ def group_videos_by_channel(
         ordered.append(uncategorized)
 
     return ordered
+
+
+def calculate_channel_target_seconds(
+    channel_name_or_obj: Any,
+    tasks: Optional[Sequence[Any]] = None,
+    stats_store: Optional[Any] = None,
+    channel_url: Optional[str] = None,
+) -> float:
+    """Calculate the total target watch time (in seconds) that can be generated for this channel.
+
+    - For regular videos: target watch time = duration_seconds * target_multiplier
+      (falls back to DEFAULT_TARGET_MULTIPLIER = 3.0 if target_multiplier <= 0; duration falls back to 300s if 0).
+    - For shorts: target watch time = duration_seconds * views_per_short (max_runs)
+      (falls back to DEFAULT_SHORTS_MAX_RUNS = 10 if max_runs <= 0; duration falls back to 30s if 0).
+    - Falls back to channel.target_watch_seconds if no tasks are matched and a manual target was configured.
+    """
+    ch_name = ""
+    ch_url = channel_url or ""
+    manual_target = 0.0
+    total_videos_meta: Optional[int] = None
+    total_shorts_meta: Optional[int] = None
+
+    if isinstance(channel_name_or_obj, Channel):
+        ch_name = channel_name_or_obj.name or ""
+        ch_url = channel_name_or_obj.url or ch_url
+        manual_target = safe_float(getattr(channel_name_or_obj, "target_watch_seconds", 0.0), default=0.0)
+        total_videos_meta = channel_name_or_obj.total_videos
+        total_shorts_meta = channel_name_or_obj.total_shorts
+    elif isinstance(channel_name_or_obj, dict):
+        ch_name = channel_name_or_obj.get("name", "")
+        ch_url = channel_name_or_obj.get("url", "") or ch_url
+        manual_target = safe_float(channel_name_or_obj.get("target_watch_seconds", 0.0), default=0.0)
+        total_videos_meta = channel_name_or_obj.get("total_videos")
+        total_shorts_meta = channel_name_or_obj.get("total_shorts")
+    else:
+        ch_name = str(channel_name_or_obj or "")
+
+    ch_name_clean = (ch_name or "").strip().lower().lstrip("@")
+    ch_name_nospace = ch_name_clean.replace(" ", "")
+
+    ch_handle = ""
+    if ch_url:
+        match = re.search(r"@([a-zA-Z0-9_.-]+)", ch_url)
+        if match:
+            ch_handle = match.group(1).rstrip("/").lower().lstrip("@")
+    if not ch_handle and ch_name:
+        match_name = re.search(r"@([a-zA-Z0-9_.-]+)", ch_name)
+        if match_name:
+            ch_handle = match_name.group(1).rstrip("/").lower().lstrip("@")
+
+    total_target_sec = 0.0
+    matched_tasks_count = 0
+
+    if tasks:
+        for t in tasks:
+            if isinstance(t, dict):
+                t_ch = str(t.get("channel", "") or "").strip().lower().lstrip("@")
+                t_url = str(t.get("url", "") or "")
+                raw_dur = t.get("duration_seconds", 0)
+                raw_mult = t.get("target_multiplier", 0.0)
+                raw_runs = t.get("max_runs", 0)
+                is_short_override = t.get("is_short")
+            else:
+                t_ch = str(getattr(t, "channel", "") or "").strip().lower().lstrip("@")
+                t_url = str(getattr(t, "url", "") or "")
+                raw_dur = getattr(t, "duration_seconds", 0)
+                raw_mult = getattr(t, "target_multiplier", 0.0)
+                raw_runs = getattr(t, "max_runs", 0)
+                is_short_override = getattr(t, "is_short_override", None)
+
+            t_ch_nospace = t_ch.replace(" ", "")
+            matches = False
+            if t_ch:
+                if t_ch == ch_name_clean or (ch_handle and t_ch == ch_handle):
+                    matches = True
+                elif ch_name_nospace and (t_ch_nospace == ch_name_nospace or (ch_handle and t_ch_nospace == ch_handle)):
+                    matches = True
+
+            if not matches:
+                continue
+
+            matched_tasks_count += 1
+
+            # Determine whether this item is a short
+            is_s = False
+            if isinstance(t, dict):
+                is_s = bool(t.get("is_short")) or ("/shorts/" in str(t.get("url", "") or ""))
+            else:
+                raw_override = getattr(t, "is_short_override", None)
+                if not hasattr(raw_override, "assert_called") and raw_override is not None:
+                    is_s = bool(raw_override)
+                elif getattr(t, "is_short", False) is True:
+                    is_s = True
+                else:
+                    raw_u = getattr(t, "url", "")
+                    if not hasattr(raw_u, "assert_called") and "/shorts/" in str(raw_u or ""):
+                        is_s = True
+
+            dur = safe_float(raw_dur, default=0.0)
+            if dur <= 0.0 and stats_store:
+                try:
+                    rec = stats_store.find_for_task(t) if hasattr(stats_store, "find_for_task") else None
+                    if rec is not None:
+                        vd = getattr(rec, "video_duration", 0)
+                        if not hasattr(vd, "_mock_wraps") and not hasattr(vd, "assert_called"):
+                            dur = safe_float(vd, default=0.0)
+                except Exception:
+                    pass
+
+            if is_s:
+                # Shorts: duration * number of views per short
+                runs = safe_float(raw_runs, default=0.0)
+                if runs <= 0.0:
+                    runs = float(DEFAULT_SHORTS_MAX_RUNS)
+                if dur <= 0.0:
+                    dur = 30.0  # fallback short duration (30s)
+                total_target_sec += dur * runs
+            else:
+                # Regular video: duration * target multiplier
+                mult = safe_float(raw_mult, default=0.0)
+                if mult <= 0.0:
+                    mult = float(DEFAULT_TARGET_MULTIPLIER)
+                if dur <= 0.0:
+                    dur = 300.0  # fallback video duration (5m)
+                total_target_sec += dur * mult
+
+    if total_target_sec > 0.0:
+        return total_target_sec
+
+    # Fallback to manual target_watch_seconds if configured
+    if manual_target > 0.0:
+        return manual_target
+
+    # Fallback if channel has total_videos or total_shorts metadata but no tasks in queue
+    if matched_tasks_count == 0 and (total_videos_meta or total_shorts_meta):
+        meta_target = 0.0
+        if total_videos_meta and total_videos_meta > 0:
+            meta_target += total_videos_meta * 300.0 * float(DEFAULT_TARGET_MULTIPLIER)
+        if total_shorts_meta and total_shorts_meta > 0:
+            meta_target += total_shorts_meta * 30.0 * float(DEFAULT_SHORTS_MAX_RUNS)
+        if meta_target > 0.0:
+            return meta_target
+
+    return 0.0

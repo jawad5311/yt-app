@@ -16,7 +16,7 @@ import threading
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from ..models.channel import Channel
+from ..models.channel import Channel, calculate_channel_target_seconds
 from ..utils.logger import emit
 
 
@@ -30,12 +30,14 @@ class SessionChannelTracker:
         channels: Optional[List[Channel]] = None,
         emit_event: Optional[Callable[[Any], None]] = None,
         log_queue: Optional[queue.Queue] = None,
+        tasks: Optional[List[Any]] = None,
     ):
         self.config_mgr = config_mgr
         self.stats_store = stats_store
         self.channels = channels if channels is not None else []
         self.emit_event = emit_event
         self.log_queue = log_queue
+        self.tasks = tasks
 
         # Separate counter for each channel (in minutes) for the current session
         self.minute_counters: Dict[str, int] = {}
@@ -228,16 +230,7 @@ class SessionChannelTracker:
                 # If current_total is 0 or less than initial+session, reconcile
                 final_sec = max(current_total, initial_sec + session_sec)
 
-                target_sec = 0.0
-                for ch in self.channels:
-                    if self._canon_name(ch.name) == key:
-                        target_sec = getattr(ch, "target_watch_seconds", 0.0)
-                        break
-                if target_sec <= 0.0 and self.config_mgr:
-                    for ch_dict in self.config_mgr.get_channels():
-                        if self._canon_name(ch_dict.get("name", "")) == key:
-                            target_sec = float(ch_dict.get("target_watch_seconds", 0.0) or 0.0)
-                            break
+                target_sec = self.get_channel_target_seconds(name)
 
                 if target_sec > 0.0:
                     pct = min(100.0, (final_sec / target_sec) * 100.0)
@@ -303,21 +296,50 @@ class SessionChannelTracker:
                     return getattr(ch, "watch_seconds", 0.0)
         return 0.0
 
+    def get_channel_target_seconds(self, channel_name: str) -> float:
+        """Calculate and return target watch seconds for a channel based on videos and shorts."""
+        if not channel_name:
+            return 0.0
+        key = self._canon_name(channel_name)
+        target_ch: Optional[Channel] = None
+        for ch in self.channels:
+            if self._canon_name(ch.name) == key:
+                target_ch = ch
+                break
+        if target_ch is None and self.config_mgr:
+            try:
+                for ch_dict in self.config_mgr.get_channels():
+                    if self._canon_name(ch_dict.get("name", "")) == key:
+                        target_ch = Channel.from_dict(ch_dict)
+                        break
+            except Exception:
+                pass
+
+        tasks = self.tasks
+        if not tasks and self.config_mgr:
+            try:
+                tasks = self.config_mgr.get_video_queue()
+            except Exception:
+                tasks = []
+
+        target_sec = calculate_channel_target_seconds(
+            channel_name_or_obj=target_ch or channel_name,
+            tasks=tasks,
+            stats_store=self.stats_store,
+            channel_url=target_ch.url if target_ch else None,
+        )
+
+        if target_sec > 0.0 and target_ch is not None:
+            if getattr(target_ch, "target_watch_seconds", 0.0) <= 0.0:
+                target_ch.target_watch_seconds = target_sec
+
+        return target_sec
+
     def is_channel_target_achieved(self, channel_name: str) -> bool:
         """Check if channel has reached its configured target watch time (target_watch_seconds)."""
         if not channel_name:
             return False
-        key = self._canon_name(channel_name)
-        target_sec = 0.0
-        for ch in self.channels:
-            if self._canon_name(ch.name) == key:
-                target_sec = getattr(ch, "target_watch_seconds", 0.0)
-                break
-        if target_sec <= 0.0 and self.config_mgr:
-            for ch_dict in self.config_mgr.get_channels():
-                if self._canon_name(ch_dict.get("name", "")) == key:
-                    target_sec = float(ch_dict.get("target_watch_seconds", 0.0) or 0.0)
-                    break
+        target_sec = self.get_channel_target_seconds(channel_name)
         if target_sec <= 0.0:
             return False
         return self.get_current_total_watch_seconds(channel_name) >= target_sec

@@ -10,6 +10,7 @@ from ..components import Frame
 from ...models.channel import (
     UNCATEGORIZED_LABEL,
     Channel,
+    calculate_channel_target_seconds,
     canonical_channel_url,
     clean_channel_url,
 )
@@ -402,48 +403,19 @@ class ChannelsView(Frame):
 
     def get_channel_target_watch_seconds(self, channel: Channel) -> float:
         """Calculate the total target watch time (in seconds) that can be generated for this channel,
-        based on the duration and target multiplier of each video task assigned to this channel."""
+        based on the duration and target multiplier of each regular video, and views per short."""
         tasks = getattr(self.app_controller, "queued_video_tasks", None)
         if not tasks and hasattr(self.app_controller, "config_mgr"):
             raw = self.app_controller.config_mgr.get_video_queue()
             tasks = [VideoTask.from_dict(d) if isinstance(d, dict) else d for d in raw]
 
-        if not tasks:
-            return safe_float(getattr(channel, "target_watch_seconds", 0.0), default=0.0)
-
         store = getattr(self.app_controller, "stats_store", None)
-        ch_name_clean = (channel.name or "").strip().lower().lstrip("@")
-        ch_handle_clean = self.get_channel_handle(channel).strip().lower().lstrip("@")
-
-        total_target_sec = 0.0
-
-        for t in tasks:
-            t_ch = (getattr(t, "channel", "") or "").strip().lower().lstrip("@")
-            if t_ch and (t_ch == ch_name_clean or (ch_handle_clean and t_ch == ch_handle_clean)):
-                raw_dur = getattr(t, "duration_seconds", 0)
-                dur = safe_float(raw_dur, default=0.0)
-                if dur <= 0.0 and store:
-                    try:
-                        rec = store.find_for_task(t)
-                        if rec is not None:
-                            vd = getattr(rec, "video_duration", 0)
-                            if not hasattr(vd, "_mock_wraps") and not hasattr(vd, "assert_called"):
-                                dur = safe_float(vd, default=0.0)
-                    except Exception:
-                        pass
-
-                raw_mult = getattr(t, "target_multiplier", 0.0)
-                mult = safe_float(raw_mult, default=1.0)
-                if mult <= 0.0:
-                    mult = 1.0  # 1x duration if multiplier is not set or default
-
-                if dur > 0.0:
-                    total_target_sec += dur * mult
-
-        if total_target_sec > 0.0:
-            return total_target_sec
-
-        return safe_float(getattr(channel, "target_watch_seconds", 0.0), default=0.0)
+        return calculate_channel_target_seconds(
+            channel_name_or_obj=channel,
+            tasks=tasks,
+            stats_store=store,
+            channel_url=channel.url,
+        )
 
     def get_channel_watch_time_display(self, channel: Channel) -> str:
         """Calculate and format the watch time display for a channel (Option C: Progress Ratio Style)."""

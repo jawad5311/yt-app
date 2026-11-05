@@ -3214,7 +3214,9 @@ class WatchingWorker:
                             f"Skipping Target Short '{title}' from channel '{ch_display}': within {cooldown_hours:g}h cooldown period ({rem_str} remaining).",
                             logging.INFO,
                         )
-                        self._skip_non_target_reel()
+                        prev_u = full_url or getattr(self.driver, "current_url", "")
+                        self.scroll_to_next_short(prev_url=prev_u)
+                        human_like_delay(1.0, 1.8)
                         continue
 
                 # Reset scrolling page non-target counter back to 0!
