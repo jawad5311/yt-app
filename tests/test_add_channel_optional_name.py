@@ -73,15 +73,20 @@ def test_add_channel_submits_blank_name_and_fetches_via_backend(ctk_app):
 
         entries = []
         buttons = []
+        menus = []
         def _scan(widget):
             for w in widget.winfo_children():
                 if isinstance(w, ctk.CTkEntry):
                     entries.append(w)
                 elif isinstance(w, ctk.CTkButton):
                     buttons.append(w)
+                elif hasattr(w, "set") and (hasattr(w, "_values") or hasattr(w, "cget")):
+                    menus.append(w)
                 _scan(w)
 
         _scan(modal)
+        for m in menus:
+            m.set("100")
 
         # URL entry is first, Name entry is second
         url_entry = entries[0]

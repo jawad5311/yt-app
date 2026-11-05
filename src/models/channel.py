@@ -209,6 +209,15 @@ class Channel:
         return round(self.target_watch_seconds / 3600.0, 1)
 
     @property
+    def effective_url(self) -> str:
+        """Return the channel's URL, falling back to resolving from channel name if URL is unset."""
+        if self.url:
+            return self.url
+        if self.name and (("youtube.com" in self.name.lower()) or self.name.startswith("@") or self.name.startswith("http")):
+            return clean_channel_url(self.name)
+        return ""
+
+    @property
     def target_achieved(self) -> bool:
         """Whether this channel has achieved its configured target watch time."""
         if self.target_watch_seconds <= 0.0:
@@ -257,9 +266,14 @@ class Channel:
         raw_hns = data.get("has_new_shorts", False)
         if isinstance(raw_hns, str):
             raw_hns = raw_hns.lower() in ("true", "1", "yes")
+        raw_name = str(data.get("name") or "").strip()
+        raw_url = normalize_channel_url(str(data.get("url") or ""))
+        if not raw_url and raw_name:
+            if ("youtube.com" in raw_name.lower()) or raw_name.startswith("@") or raw_name.startswith("http"):
+                raw_url = clean_channel_url(raw_name)
         return cls(
-            name=str(data.get("name") or "").strip(),
-            url=normalize_channel_url(str(data.get("url") or "")),
+            name=raw_name,
+            url=raw_url,
             enabled=bool(enabled_val),
             archived=bool(archived_val),
             watch_seconds=watch_sec_val,
@@ -294,6 +308,9 @@ class Channel:
                 raise ValueError(f"A channel named '{channel.name}' already exists.")
 
         clean_url = clean_channel_url(url)
+        if not clean_url and clean_name:
+            if ("youtube.com" in clean_name.lower()) or clean_name.startswith("@") or clean_name.startswith("http"):
+                clean_url = clean_channel_url(clean_name)
         canon_url = canonical_channel_url(clean_url)
         if canon_url:
             for channel in existing:

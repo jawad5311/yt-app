@@ -22,7 +22,7 @@ def test_config_defaults_match_documented_settings():
     settings = ConfigManager.DEFAULT_DATA["settings"]
     assert settings["DirectLinkFallback"] is False
     assert settings["WatchtimeDuration"] == "Full Video"
-    assert settings["FullVideoTimeoutMinutes"] == 5
+    assert settings["FullVideoTimeoutMinutes"] == 0
     assert settings["AutoplayEndBufferSeconds"] == 10
     assert settings["AutomationLoops"] == 1
     assert settings["BrowsingTargetLimit"] == 1

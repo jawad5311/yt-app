@@ -7,6 +7,7 @@ from typing import List
 
 from ...models.account import Account
 from ..components import Button, Font, Frame, InputDialog, Label, ScrollableFrame
+from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 
 
 class AccountsView(Frame):
@@ -33,26 +34,47 @@ class AccountsView(Frame):
         btn_frame = Frame(self, style="Transparent.TFrame")
         btn_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
 
-        Button(
+        add_acc_btn = Button(
             btn_frame,
             text="+ Add Single Account",
-            command=self.add_account_dialog,
             style="Primary.TButton",
-        ).pack(side="left", padx=(0, 10))
+        )
+        add_acc_btn.configure(
+            command=with_button_feedback(add_acc_btn, "Adding Account...", self.add_account_dialog)
+        )
+        add_acc_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            add_acc_btn,
+            "Add a new Google account manually (email and password).",
+        )
 
-        Button(
+        load_acc_btn = Button(
             btn_frame,
             text="📂 Load Accounts File (accounts.txt)",
-            command=self.import_accounts_file,
             style="TButton",
-        ).pack(side="left", padx=10)
+        )
+        load_acc_btn.configure(
+            command=with_button_feedback(load_acc_btn, "Loading File...", self.import_accounts_file)
+        )
+        load_acc_btn.pack(side="left", padx=10)
+        add_tooltip(
+            load_acc_btn,
+            "Import accounts from a local accounts.txt file.",
+        )
 
-        Button(
+        clear_acc_btn = Button(
             btn_frame,
             text="🗑 Clear All",
-            command=self.clear_accounts,
             style="Danger.TButton",
-        ).pack(side="right")
+        )
+        clear_acc_btn.configure(
+            command=with_button_feedback(clear_acc_btn, "Clearing...", self.clear_accounts)
+        )
+        clear_acc_btn.pack(side="right")
+        add_tooltip(
+            clear_acc_btn,
+            "Remove all accounts from the system.",
+        )
 
         # Accounts List Scrollable Frame
         self.scroll_frame = ScrollableFrame(self, label_text="Loaded Accounts")
@@ -193,10 +215,14 @@ class AccountsView(Frame):
                 style="Card.TLabel",
             ).pack(side="left", padx=15, pady=10)
 
-            Button(
+            rem_btn = Button(
                 row,
                 text="Remove",
                 width=70,
                 style="Danger.TButton",
-                command=lambda i=idx: self.remove_account(i),
-            ).pack(side="right", padx=10, pady=10)
+            )
+            rem_btn.configure(
+                command=with_button_feedback(rem_btn, "Removed", lambda i=idx: self.remove_account(i))
+            )
+            rem_btn.pack(side="right", padx=10, pady=10)
+            add_tooltip(rem_btn, f"Remove account {acc.email}.")

@@ -1,7 +1,7 @@
 """Unit tests for the video rewatch cooldown feature."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.automation.watching_worker import WatchingWorker
 from src.config.manager import ConfigManager
@@ -270,4 +270,57 @@ class TestVideoCooldown:
             mock_ws.assert_not_called()
             # _skip_non_target_reel was invoked to advance past the cooldown short
             worker._skip_non_target_reel.assert_called_once()
+
+    def test_skip_non_target_reel_method_exists_and_delegates_to_scroll(self):
+        worker = WatchingWorker.__new__(WatchingWorker)
+        worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/shorts/current_123"
+
+        with patch.object(worker, "scroll_to_next_short", return_value=True) as mock_scroll, \
+             patch("src.automation.watching_worker.human_like_delay") as mock_delay:
+            res = worker._skip_non_target_reel()
+            assert res is True
+            mock_scroll.assert_called_once_with(prev_url="https://www.youtube.com/shorts/current_123")
+            mock_delay.assert_called_once()
+
+    def test_shorts_reel_loop_real_skip_non_target_reel_execution(self, tmp_path):
+        import queue
+        import threading
+        from unittest.mock import patch
+
+        config_mgr = ConfigManager(config_file=tmp_path / "settings.json")
+        config_mgr.set_setting("VideoCooldownHours", "12")
+
+        now = datetime.now()
+        stats_store = MagicMock()
+        rec_cool = StatRecord(label="Cool Short", last_completed=(now - timedelta(hours=1)).isoformat())
+        stats_store.get.return_value = rec_cool
+        stats_store.find_for_task.return_value = rec_cool
+
+        worker = WatchingWorker.__new__(WatchingWorker)
+        worker.config_mgr = config_mgr
+        worker.stats_store = stats_store
+        worker.stop_event = threading.Event()
+        worker.pause_event = threading.Event()
+        worker.log_queue = queue.Queue()
+        worker.check_pause = MagicMock()
+        worker.get_target_channels = MagicMock(return_value=[Channel(name="Target Channel", url="")])
+        worker.get_target_shorts = MagicMock(return_value=[])
+        worker.channel_tracker = MagicMock()
+        worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/shorts/cool_vid_123"
+
+        worker.get_active_short_info = MagicMock(return_value={
+            "video_id": "cool_vid_123",
+            "url": "https://www.youtube.com/shorts/cool_vid_123",
+            "title": "Cool Short",
+            "channel_name": "Target Channel",
+        })
+
+        assert hasattr(worker, "_skip_non_target_reel")
+
+        with patch.object(worker, "scroll_to_next_short", side_effect=lambda prev_url: worker.stop_event.set()) as mock_scroll, \
+             patch("src.automation.watching_worker.human_like_delay"):
+            worker._run_shorts_reel_loop(session_watched_keys=set())
+            mock_scroll.assert_called_once()
 

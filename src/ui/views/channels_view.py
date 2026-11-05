@@ -28,7 +28,7 @@ from ...utils.channel_fetcher import (
 )
 from ...utils.helpers import extract_video_id
 from ...utils.scroll_helper import setup_smooth_scrolling
-from ..tooltip import add_tooltip
+from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 from .channel_import_modal import ChannelImportModal
 
 # Called with the saved channel so callers (e.g. the queue modal) can react.
@@ -116,7 +116,9 @@ class ChannelsView(Frame):
             btn_frame,
             text="+ Add Channel",
             font=ctk.CTkFont(size=9, weight="bold"),
-            command=lambda: self.open_channel_modal(),
+        )
+        add_btn.configure(
+            command=with_button_feedback(add_btn, "Adding Channel...", lambda: self.open_channel_modal())
         )
         add_btn.pack(side="left", padx=(0, 10))
         add_tooltip(
@@ -131,7 +133,9 @@ class ChannelsView(Frame):
             fg_color="#0D9488",
             hover_color="#0F766E",
             font=ctk.CTkFont(weight="bold"),
-            command=self.sync_all_channel_data,
+        )
+        check_btn.configure(
+            command=with_button_feedback(check_btn, "Checking New", self.sync_all_channel_data)
         )
         check_btn.pack(side="left", padx=(0, 10))
         add_tooltip(
@@ -146,7 +150,9 @@ class ChannelsView(Frame):
             fg_color="#1F6AA5",
             hover_color="#144870",
             font=ctk.CTkFont(weight="bold"),
-            command=self.sync_data_all,
+        )
+        sync_data_btn.configure(
+            command=with_button_feedback(sync_data_btn, "Syncing Data", self.sync_data_all)
         )
         sync_data_btn.pack(side="left", padx=(0, 10))
         add_tooltip(
@@ -161,7 +167,9 @@ class ChannelsView(Frame):
             fg_color="#1F6AA5",
             hover_color="#144870",
             font=ctk.CTkFont(weight="bold"),
-            command=self.sync_all_channels_shorts,
+        )
+        self.sync_all_channels_shorts_btn.configure(
+            command=with_button_feedback(self.sync_all_channels_shorts_btn, "Syncing all shorts...", self.sync_all_channels_shorts)
         )
         self.sync_all_channels_shorts_btn.pack(side="left", padx=(0, 10))
         add_tooltip(
@@ -187,7 +195,9 @@ class ChannelsView(Frame):
             text="🗑 Clear All",
             fg_color="#D32F2F",
             hover_color="#9A0007",
-            command=self.clear_channels,
+        )
+        clear_btn.configure(
+            command=with_button_feedback(clear_btn, "Clearing...", self.clear_channels)
         )
         clear_btn.pack(side="right")
         add_tooltip(
@@ -211,6 +221,10 @@ class ChannelsView(Frame):
 
     def load_channels(self) -> None:
         self.channels = [Channel.from_dict(entry) for entry in self.app_controller.config_mgr.get_channels()]
+        for ch in self.channels:
+            if not ch.url and ch.name:
+                if ("youtube.com" in ch.name.lower()) or ch.name.startswith("@") or ch.name.startswith("http"):
+                    ch.url = clean_channel_url(ch.name)
         store = getattr(self.app_controller, "stats_store", None)
         if store:
             for ch in self.channels:
@@ -276,12 +290,17 @@ class ChannelsView(Frame):
             and canonical_channel_url(channel.url) == canonical_channel_url(url)
         )
 
-    def _submit_channel_job(self, loading, progress_bar, work, done, *, current=lambda: True):
+    def _submit_channel_job(self, loading, progress_bar, work, done, *, current=lambda: True, on_error_cleanup=None):
         """Bridge plain network results to live dialogs on the main thread."""
         def close_loading():
             if self._widget_exists(loading):
                 progress_bar.stop()
                 loading.destroy()
+            if callable(on_error_cleanup):
+                try:
+                    on_error_cleanup()
+                except Exception:
+                    pass
 
         def finish(result):
             close_loading()
@@ -473,7 +492,7 @@ class ChannelsView(Frame):
 
         modal = ctk.CTkToplevel(self)
         modal.title("Edit Channel" if is_editing else "Add Channel")
-        modal.geometry("540x480" if not is_editing else "540x260")
+        modal.geometry("540x510" if not is_editing else "540x280")
         if hasattr(modal, "resizable"):
             try:
                 modal.resizable(False, False)
@@ -492,18 +511,6 @@ class ChannelsView(Frame):
         url_entry.insert(0, target.url)
         url_entry.pack(padx=20, pady=(0, 8), fill="x")
 
-        if is_editing:
-            ev, es, et = self.get_existing_video_counts_for_channel(target.name)
-            v_cnt = target.total_videos if target.total_videos is not None else ev
-            s_cnt = target.total_shorts if target.total_shorts is not None else es
-            combined_total = v_cnt + s_cnt
-            ctk.CTkLabel(
-                modal,
-                text=f"all videos: {combined_total:,} | shorts: {s_cnt:,} | videos: {v_cnt:,}",
-                font=ctk.CTkFont(size=12, weight="bold"),
-                text_color=("#1D4ED8", "#93C5FD"),
-            ).pack(anchor="w", padx=20, pady=(0, 6))
-
         fetch_btn = None
         status_lbl = None
 
@@ -517,6 +524,93 @@ class ChannelsView(Frame):
         )
         name_entry.insert(0, target.name)
         name_entry.pack(padx=20, pady=(0, 8), fill="x")
+
+        # Under Channel Name: Fetch Channel Stats button and display
+        fetched_counts: List[Optional[Tuple[int, int]]] = [None]
+        if is_editing and (target.total_videos is not None or target.total_shorts is not None):
+            ev, es, et = self.get_existing_video_counts_for_channel(target.name)
+            v_cnt = target.total_videos if target.total_videos is not None else ev
+            s_cnt = target.total_shorts if target.total_shorts is not None else es
+            fetched_counts[0] = (v_cnt, s_cnt)
+
+        stats_row = ctk.CTkFrame(modal, fg_color="transparent")
+        stats_row.pack(padx=20, pady=(0, 10), fill="x")
+
+        stats_display_lbl = ctk.CTkLabel(
+            stats_row,
+            text="",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=("#1D4ED8", "#93C5FD"),
+            anchor="w",
+        )
+
+        def _update_stats_display(v_c: Optional[int], s_c: Optional[int], err_msg: Optional[str] = None):
+            if err_msg:
+                stats_display_lbl.configure(text=err_msg, text_color=("#DC2626", "#F87171"))
+            elif v_c is not None or s_c is not None:
+                v = v_c or 0
+                s = s_c or 0
+                stats_display_lbl.configure(
+                    text=f"all videos: {v + s:,} | shorts: {s:,} | videos: {v:,}",
+                    text_color=("#1D4ED8", "#93C5FD"),
+                )
+
+        if fetched_counts[0] is not None:
+            _update_stats_display(fetched_counts[0][0], fetched_counts[0][1])
+
+        def _on_fetch_stats():
+            raw_u = url_entry.get().strip()
+            if not raw_u:
+                raw_u = name_entry.get().strip()
+            if not raw_u:
+                _update_stats_display(None, None, err_msg="Please enter Channel URL or handle first.")
+                return
+
+            fetch_stats_btn.configure(state="disabled", text="Fetching...")
+            stats_display_lbl.configure(text="Fetching stats...", text_color=("#D97706", "#FBBF24"))
+
+            def _bg_fetch():
+                cfg_mgr = getattr(self.app_controller, "config_mgr", None)
+                res = fetch_channel_data(raw_u, video_limit=None, shorts_limit=None, config_mgr=cfg_mgr)
+
+                def _apply_ui():
+                    if not self._widget_exists(modal):
+                        return
+                    fetch_stats_btn.configure(state="normal", text="📊 Fetch Channel Stats")
+                    if res.error:
+                        _update_stats_display(None, None, err_msg=f"Error: {res.error}")
+                    else:
+                        v_cnt = res.total_videos if res.total_videos is not None else 0
+                        s_cnt = res.total_shorts if res.total_shorts is not None else 0
+                        fetched_counts[0] = (v_cnt, s_cnt)
+                        if not name_entry.get().strip() and res.channel_title:
+                            name_entry.delete(0, "end")
+                            name_entry.insert(0, res.channel_title)
+                        _update_stats_display(v_cnt, s_cnt)
+
+                try:
+                    modal.after(0, _apply_ui)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_bg_fetch, daemon=True).start()
+
+        fetch_stats_btn = ctk.CTkButton(
+            stats_row,
+            text="📊 Fetch Channel Stats",
+            width=150,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            command=_on_fetch_stats,
+        )
+        fetch_stats_btn.pack(side="left")
+        add_tooltip(
+            fetch_stats_btn,
+            "Fetch the number of videos and Shorts this channel has.",
+        )
+        stats_display_lbl.pack(side="left", padx=(10, 0), fill="x", expand=True)
 
         url_entry.bind("<Return>", lambda e: on_submit())
         name_entry.bind("<Return>", lambda e: on_submit())
@@ -555,7 +649,7 @@ class ChannelsView(Frame):
                 values=FETCH_DATA_OPTIONS,
                 width=160,
             )
-            videos_menu.set("100")
+            videos_menu.set("Fetch No Data")
             videos_menu.pack(anchor="w", padx=16, pady=(0, 10))
 
             # Shorts limit section
@@ -577,7 +671,7 @@ class ChannelsView(Frame):
                 values=FETCH_DATA_OPTIONS,
                 width=160,
             )
-            shorts_menu.set("100")
+            shorts_menu.set("Fetch No Data")
             shorts_menu.pack(anchor="w", padx=16, pady=(0, 14))
 
         def on_submit() -> None:
@@ -631,6 +725,9 @@ class ChannelsView(Frame):
                     )
                     return
 
+            total_vids = fetched_counts[0][0] if fetched_counts[0] is not None else (target.total_videos if is_editing else None)
+            total_shrts = fetched_counts[0][1] if fetched_counts[0] is not None else (target.total_shorts if is_editing else None)
+
             try:
                 channel = Channel.parse(
                     raw_name,
@@ -640,8 +737,8 @@ class ChannelsView(Frame):
                     archived=target.archived if is_editing else False,
                     watch_seconds=getattr(target, "watch_seconds", 0.0) if is_editing else 0.0,
                     target_watch_seconds=getattr(target, "target_watch_seconds", 0.0) if is_editing else 0.0,
-                    total_videos=target.total_videos if is_editing else None,
-                    total_shorts=target.total_shorts if is_editing else None,
+                    total_videos=total_vids,
+                    total_shorts=total_shrts,
                 )
             except ValueError as exc:
                 messagebox.showerror("Error", str(exc), parent=modal)
@@ -845,6 +942,7 @@ class ChannelsView(Frame):
         shorts_limit: Optional[int] = 100,
         on_imported: Optional[Callable[[], None]] = None,
         parent_modal: Optional[Any] = None,
+        source_button: Optional[Any] = None,
     ) -> None:
         """Fetch videos and/or shorts for a channel using YouTube Data API v3 and open selection modal."""
         active_parent = parent_modal if self._widget_exists(parent_modal) else self
@@ -856,6 +954,21 @@ class ChannelsView(Frame):
                 parent=active_parent,
             )
             return
+
+        original_btn_text = None
+        if source_button is not None and self._widget_exists(source_button):
+            try:
+                original_btn_text = source_button.cget("text")
+                source_button.configure(text="Syncing all the shorts", state="disabled")
+            except Exception:
+                pass
+
+        def _restore_button():
+            if source_button is not None and original_btn_text and self._widget_exists(source_button):
+                try:
+                    source_button.configure(text=original_btn_text, state="normal")
+                except Exception:
+                    pass
 
         if video_limit is None and shorts_limit is not None:
             s_desc = "all" if shorts_limit == 0 else f"up to {shorts_limit}"
@@ -983,12 +1096,17 @@ class ChannelsView(Frame):
                 config_mgr=getattr(self.app_controller, "config_mgr", None),
             )
 
+        def _submit_fetch_done(res: ChannelFetchResult):
+            _restore_button()
+            _on_fetch_done(res)
+
         self._submit_channel_job(
             loading,
             prog,
             _fetch_worker,
-            _on_fetch_done,
+            _submit_fetch_done,
             current=lambda: self._channel_is_current(channel, name, url),
+            on_error_cleanup=_restore_button,
         )
 
     def fetch_videos_for_channel(
@@ -2222,6 +2340,10 @@ class ChannelsView(Frame):
 
     def sync_all_channels_shorts(self) -> None:
         """Sync all available shorts across all configured channels directly into the queue."""
+        for ch in self.channels:
+            if not ch.url and ch.name:
+                if ("youtube.com" in ch.name.lower()) or ch.name.startswith("@") or ch.name.startswith("http"):
+                    ch.url = clean_channel_url(ch.name)
         channels_to_sync = [ch for ch in self.channels if ch.url and not ch.archived]
         if not channels_to_sync:
             channels_to_sync = [ch for ch in self.channels if ch.url]
@@ -2634,9 +2756,12 @@ class ChannelsView(Frame):
             discard=_close_loading,
         )
 
-    def sync_channel_all_shorts(self, channel: Channel) -> None:
+    def sync_channel_all_shorts(self, channel: Channel, *args, **kwargs) -> None:
         """Fetch all shorts for a specific channel and open the ChannelImportModal."""
-        self.fetch_data_for_channel(channel, video_limit=None, shorts_limit=0)
+        source_button = kwargs.get("source_button", None)
+        if not source_button and getattr(channel, "_source_button", None):
+            source_button = getattr(channel, "_source_button")
+        self.fetch_data_for_channel(channel, video_limit=None, shorts_limit=0, source_button=source_button)
 
     def sync_single_channel_data(self, channel: Channel) -> None:
         """Sync new available videos and/or shorts for a specific channel directly into the queue."""
@@ -3099,6 +3224,9 @@ class ChannelsView(Frame):
                 "Move this channel down in list order\nto deprioritize it during playback cycles.",
             )
 
+            if not channel.url and channel.name:
+                if ("youtube.com" in channel.name.lower()) or channel.name.startswith("@") or channel.name.startswith("http"):
+                    channel.url = clean_channel_url(channel.name)
             has_url = bool((channel.url or "").strip())
             has_new = getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False) or getattr(channel, "has_new_shorts", False)
 
@@ -3111,7 +3239,9 @@ class ChannelsView(Frame):
                 fg_color="#0D9488" if has_new else "gray30",
                 hover_color="#0F766E" if has_new else "gray30",
                 state="normal" if has_new else "disabled",
-                command=lambda ch=channel: self.sync_single_channel_data(ch),
+            )
+            sync_btn.configure(
+                command=with_button_feedback(sync_btn, "Syncing...", lambda ch=channel: self.sync_single_channel_data(ch))
             )
             sync_btn.grid(row=0, column=2, rowspan=2, padx=(0, 6), sticky="ns")
             add_tooltip(
@@ -3128,7 +3258,9 @@ class ChannelsView(Frame):
                 fg_color="#2563EB" if has_url else "gray30",
                 hover_color="#1D4ED8" if has_url else "gray30",
                 state="normal" if has_url else "disabled",
-                command=lambda ch=channel: self.sync_channel_all(ch),
+            )
+            sync_all_btn.configure(
+                command=with_button_feedback(sync_all_btn, "Syncing All...", lambda ch=channel: self.sync_channel_all(ch))
             )
             sync_all_btn.grid(row=0, column=3, padx=(0, 6), pady=(0, 2), sticky="ew")
             add_tooltip(
@@ -3145,8 +3277,12 @@ class ChannelsView(Frame):
                 fg_color="#2563EB" if has_url else "gray30",
                 hover_color="#1D4ED8" if has_url else "gray30",
                 state="normal" if has_url else "disabled",
-                command=lambda ch=channel: self.sync_channel_all_shorts(ch),
             )
+            def _on_sync_shorts(ch=channel, btn=sync_shorts_btn):
+                setattr(ch, "_source_button", btn)
+                self.sync_channel_all_shorts(ch)
+
+            sync_shorts_btn.configure(command=_on_sync_shorts)
             sync_shorts_btn.grid(row=1, column=3, padx=(0, 6), pady=(2, 0), sticky="ew")
             add_tooltip(
                 sync_shorts_btn,
@@ -3162,7 +3298,9 @@ class ChannelsView(Frame):
                     font=ctk.CTkFont(size=9, weight="bold"),
                     fg_color="#059669",
                     hover_color="#047857",
-                    command=lambda i=real_idx: self.unarchive_channel(i),
+                )
+                restore_btn.configure(
+                    command=with_button_feedback(restore_btn, "Restored", lambda i=real_idx: self.unarchive_channel(i))
                 )
                 restore_btn.grid(row=0, column=4, pady=(0, 2), sticky="ew")
                 add_tooltip(
@@ -3178,7 +3316,9 @@ class ChannelsView(Frame):
                     font=ctk.CTkFont(size=9, weight="bold"),
                     fg_color="#D97706",
                     hover_color="#B45309",
-                    command=lambda i=real_idx: self.archive_channel(i),
+                )
+                archive_btn.configure(
+                    command=with_button_feedback(archive_btn, "Archived", lambda i=real_idx: self.archive_channel(i))
                 )
                 archive_btn.grid(row=0, column=4, pady=(0, 2), sticky="ew")
                 add_tooltip(
@@ -3194,7 +3334,9 @@ class ChannelsView(Frame):
                 font=ctk.CTkFont(size=9, weight="bold"),
                 fg_color="#D32F2F",
                 hover_color="#9A0007",
-                command=lambda i=real_idx: self.remove_channel(i),
+            )
+            del_btn.configure(
+                command=with_button_feedback(del_btn, "Deleting...", lambda i=real_idx: self.remove_channel(i))
             )
             del_btn.grid(row=1, column=4, pady=(2, 0), sticky="ew")
             add_tooltip(

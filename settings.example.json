@@ -1,11 +1,12 @@
 {
   "settings": {
+    "SystemName": "",
     "AccountsFile": "accounts.txt",
     "DirectLinkFallback": false,
     "WatchtimeDuration": "Full Video",
     "ParallelBrowsers": 1,
     "AppearanceMode": "Dark",
-    "FullVideoTimeoutMinutes": 5,
+    "FullVideoTimeoutMinutes": 0,
     "VideoCooldownHours": 12,
     "BlockAds": false,
     "SkipAds": true,

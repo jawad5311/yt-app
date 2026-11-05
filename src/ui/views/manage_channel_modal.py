@@ -27,6 +27,7 @@ class ManageChannelModal(Toplevel):
         group_videos: List[Tuple[int, VideoTask]],
         app_controller: Any,
         on_applied: Optional[Callable[[], None]] = None,
+        shorts_only: Optional[bool] = None,
     ):
         super().__init__(parent)
         self.parent_view = parent
@@ -35,10 +36,19 @@ class ManageChannelModal(Toplevel):
         self.app_controller = app_controller
         self.on_applied = on_applied
 
+        if shorts_only is not None:
+            self.shorts_only = bool(shorts_only)
+        else:
+            self.shorts_only = bool(getattr(parent, "shorts_only", False))
+
         ch_title = channel.name or "Uncategorized"
         self.title(f"Manage Channel — {ch_title}")
-        self.geometry("540x630")
-        self.minsize(480, 560)
+        if self.shorts_only:
+            self.geometry("540x350")
+            self.minsize(480, 310)
+        else:
+            self.geometry("540x630")
+            self.minsize(480, 560)
         self.grab_set()
 
         self._build_ui()
@@ -59,7 +69,10 @@ class ManageChannelModal(Toplevel):
         ).pack(fill="x")
 
         curr_hrs = self.channel.watch_seconds / 3600.0
-        stats_txt = f"{len(self.group_videos)} video(s) in queue  •  Current watch time: {curr_hrs:.1f} hours"
+        if self.shorts_only:
+            stats_txt = f"{len(self.group_videos)} short(s) in queue"
+        else:
+            stats_txt = f"{len(self.group_videos)} video(s) in queue  •  Current watch time: {curr_hrs:.1f} hours"
         ctk.CTkLabel(
             header,
             text=stats_txt,
@@ -68,63 +81,74 @@ class ManageChannelModal(Toplevel):
             anchor="w",
         ).pack(fill="x", pady=(2, 0))
 
-        # 2. Box 1: Target Watch Multiplier (per Video)
-        card_mult = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
-        card_mult.grid(row=1, column=0, padx=24, pady=(6, 6), sticky="ew")
+        current_row = 1
 
-        ctk.CTkLabel(
-            card_mult,
-            text="Target Watch Multiplier (per Video)",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(10, 2))
+        # 2. Box 1: Target Watch Multiplier (per Video) - ONLY for Video Queue
+        if not self.shorts_only:
+            card_mult = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
+            card_mult.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
+            current_row += 1
 
-        ctk.CTkLabel(
-            card_mult,
-            text="Stop viewing each video once it generates this multiplier of its duration (e.g. 2.0 = 2x length). Set to 0 for unlimited.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray35", "gray65"),
-            wraplength=460,
-            justify="left",
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(0, 6))
+            ctk.CTkLabel(
+                card_mult,
+                text="Target Watch Multiplier (per Video)",
+                font=ctk.CTkFont(size=14, weight="bold"),
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=(10, 2))
 
-        init_mult = 0.0
-        if self.group_videos:
-            for _, t in self.group_videos:
-                if getattr(t, "target_multiplier", 0.0) > 0:
-                    init_mult = t.target_multiplier
-                    break
-        init_mult_str = str(int(init_mult)) if init_mult.is_integer() else f"{init_mult:.1f}"
+            ctk.CTkLabel(
+                card_mult,
+                text="Stop viewing each video once it generates this multiplier of its duration (e.g. 2.0 = 2x length). Set to 0 for unlimited.",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray35", "gray65"),
+                wraplength=460,
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=(0, 6))
 
-        mult_row = ctk.CTkFrame(card_mult, fg_color="transparent")
-        mult_row.pack(fill="x", padx=16, pady=(0, 10))
+            init_mult = 0.0
+            if self.group_videos:
+                for _, t in self.group_videos:
+                    if getattr(t, "target_multiplier", 0.0) > 0:
+                        init_mult = t.target_multiplier
+                        break
+            init_mult_str = str(int(init_mult)) if init_mult.is_integer() else f"{init_mult:.1f}"
 
-        self.multiplier_entry = ctk.CTkEntry(mult_row, width=90, font=ctk.CTkFont(size=13))
-        self.multiplier_entry.insert(0, init_mult_str)
-        self.multiplier_entry.pack(side="left")
+            mult_row = ctk.CTkFrame(card_mult, fg_color="transparent")
+            mult_row.pack(fill="x", padx=16, pady=(0, 10))
 
-        ctk.CTkLabel(
-            mult_row,
-            text="x target multiplier (e.g. 2.0 or 0 for unlimited)",
-            font=ctk.CTkFont(size=13),
-            text_color=("gray30", "gray70"),
-        ).pack(side="left", padx=(10, 0))
+            self.multiplier_entry = ctk.CTkEntry(mult_row, width=90, font=ctk.CTkFont(size=13))
+            self.multiplier_entry.insert(0, init_mult_str)
+            self.multiplier_entry.pack(side="left")
 
-        # 3. Box 2: Max Views Cap (per Video)
+            ctk.CTkLabel(
+                mult_row,
+                text="x target multiplier (e.g. 2.0 or 0 for unlimited)",
+                font=ctk.CTkFont(size=13),
+                text_color=("gray30", "gray70"),
+            ).pack(side="left", padx=(10, 0))
+
+        # 3. Box 2: Max Views Cap (per Short for shorts queue, per Video for video queue)
         card_views = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
-        card_views.grid(row=2, column=0, padx=24, pady=(6, 6), sticky="ew")
+        card_views.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
+        current_row += 1
 
+        views_title = "Max Views Cap (per Short)" if self.shorts_only else "Max Views Cap (per Video)"
         ctk.CTkLabel(
             card_views,
-            text="Max Views Cap (per Video)",
+            text=views_title,
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
         ).pack(fill="x", padx=16, pady=(10, 2))
 
+        views_desc = (
+            "Maximum number of views a short can have. Stops playing once reached to avoid YouTube algorithm flags. Set to 0 for unlimited."
+            if self.shorts_only
+            else "Maximum number of views a video can have. Stops playing once reached to avoid YouTube algorithm flags. Set to 0 for unlimited."
+        )
         ctk.CTkLabel(
             card_views,
-            text="Maximum number of views a video can have. Stops playing once reached to avoid YouTube algorithm flags. Set to 0 for unlimited.",
+            text=views_desc,
             font=ctk.CTkFont(size=12),
             text_color=("gray35", "gray65"),
             wraplength=460,
@@ -154,67 +178,69 @@ class ManageChannelModal(Toplevel):
             text_color=("gray30", "gray70"),
         ).pack(side="left", padx=(10, 0))
 
-        # 4. Box 3: Target Watch Time for Channel (Hours)
-        card_target = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
-        card_target.grid(row=3, column=0, padx=24, pady=(6, 6), sticky="ew")
+        # 4. Box 3: Target Channel Watch Time (Hours) - ONLY for Video Queue
+        if not self.shorts_only:
+            card_target = ctk.CTkFrame(self, fg_color=("gray92", "gray17"), corner_radius=8)
+            card_target.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
+            current_row += 1
 
-        ctk.CTkLabel(
-            card_target,
-            text="Target Channel Watch Time (Hours)",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(10, 2))
-
-        ctk.CTkLabel(
-            card_target,
-            text="The script stops playing this channel's videos once this total watch time is achieved. Set to 0 for unlimited.",
-            font=ctk.CTkFont(size=12),
-            text_color=("gray35", "gray65"),
-            wraplength=460,
-            justify="left",
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(0, 6))
-
-        target_row = ctk.CTkFrame(card_target, fg_color="transparent")
-        target_row.pack(fill="x", padx=16, pady=(0, 8))
-
-        init_target_hrs = 0.0
-        if getattr(self.channel, "target_watch_seconds", 0.0) > 0:
-            init_target_hrs = round(self.channel.target_watch_seconds / 3600.0, 1)
-
-        init_target_str = str(int(init_target_hrs)) if init_target_hrs.is_integer() else f"{init_target_hrs:.1f}"
-
-        self.target_entry = ctk.CTkEntry(target_row, width=90, font=ctk.CTkFont(size=13))
-        self.target_entry.insert(0, init_target_str)
-        self.target_entry.pack(side="left")
-
-        ctk.CTkLabel(
-            target_row,
-            text="hours (e.g. 5.0 or 10)",
-            font=ctk.CTkFont(size=13),
-            text_color=("gray30", "gray70"),
-        ).pack(side="left", padx=(10, 0))
-
-        # Status badge if target set
-        if getattr(self.channel, "target_watch_seconds", 0.0) > 0:
-            status_row = ctk.CTkFrame(card_target, fg_color="transparent")
-            status_row.pack(fill="x", padx=16, pady=(0, 10))
-            is_achieved = self.channel.target_achieved
-            color = "#10B981" if is_achieved else "#2563EB"
-            status_text = (
-                f"✓ Target Achieved ({curr_hrs:.1f} / {init_target_hrs:.1f}h) — Channel playback stopped"
-                if is_achieved
-                else f"Status: {curr_hrs:.1f} / {init_target_hrs:.1f} hours generated"
-            )
             ctk.CTkLabel(
-                status_row,
-                text=status_text,
-                font=ctk.CTkFont(size=12, weight="bold"),
-                text_color=color,
+                card_target,
+                text="Target Channel Watch Time (Hours)",
+                font=ctk.CTkFont(size=14, weight="bold"),
                 anchor="w",
-            ).pack(fill="x")
-        else:
-            ctk.CTkFrame(card_target, fg_color="transparent", height=4).pack()
+            ).pack(fill="x", padx=16, pady=(10, 2))
+
+            ctk.CTkLabel(
+                card_target,
+                text="The script stops playing this channel's videos once this total watch time is achieved. Set to 0 for unlimited.",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray35", "gray65"),
+                wraplength=460,
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=(0, 6))
+
+            target_row = ctk.CTkFrame(card_target, fg_color="transparent")
+            target_row.pack(fill="x", padx=16, pady=(0, 8))
+
+            init_target_hrs = 0.0
+            if getattr(self.channel, "target_watch_seconds", 0.0) > 0:
+                init_target_hrs = round(self.channel.target_watch_seconds / 3600.0, 1)
+
+            init_target_str = str(int(init_target_hrs)) if init_target_hrs.is_integer() else f"{init_target_hrs:.1f}"
+
+            self.target_entry = ctk.CTkEntry(target_row, width=90, font=ctk.CTkFont(size=13))
+            self.target_entry.insert(0, init_target_str)
+            self.target_entry.pack(side="left")
+
+            ctk.CTkLabel(
+                target_row,
+                text="hours (e.g. 5.0 or 10)",
+                font=ctk.CTkFont(size=13),
+                text_color=("gray30", "gray70"),
+            ).pack(side="left", padx=(10, 0))
+
+            # Status badge if target set
+            if getattr(self.channel, "target_watch_seconds", 0.0) > 0:
+                status_row = ctk.CTkFrame(card_target, fg_color="transparent")
+                status_row.pack(fill="x", padx=16, pady=(0, 10))
+                is_achieved = self.channel.target_achieved
+                color = "#10B981" if is_achieved else "#2563EB"
+                status_text = (
+                    f"✓ Target Achieved ({curr_hrs:.1f} / {init_target_hrs:.1f}h) — Channel playback stopped"
+                    if is_achieved
+                    else f"Status: {curr_hrs:.1f} / {init_target_hrs:.1f} hours generated"
+                )
+                ctk.CTkLabel(
+                    status_row,
+                    text=status_text,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    text_color=color,
+                    anchor="w",
+                ).pack(fill="x")
+            else:
+                ctk.CTkFrame(card_target, fg_color="transparent", height=4).pack()
 
         # 5. Error message area
         self.err_lbl = ctk.CTkLabel(
@@ -224,15 +250,17 @@ class ManageChannelModal(Toplevel):
             text_color="#EF4444",
             anchor="w",
         )
-        self.err_lbl.grid(row=4, column=0, padx=24, pady=(2, 4), sticky="w")
+        self.err_lbl.grid(row=current_row, column=0, padx=24, pady=(2, 4), sticky="w")
+        current_row += 1
 
         # 6. Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.grid(row=5, column=0, padx=24, pady=(6, 16), sticky="ew")
+        btn_frame.grid(row=current_row, column=0, padx=24, pady=(6, 16), sticky="ew")
 
+        del_txt = "🗑 Delete all shorts" if self.shorts_only else "🗑 Delete all videos"
         ctk.CTkButton(
             btn_frame,
-            text="🗑 Delete all videos",
+            text=del_txt,
             width=140,
             fg_color="#DC2626",
             hover_color="#991B1B",
@@ -259,9 +287,11 @@ class ManageChannelModal(Toplevel):
         ).pack(side="right")
 
     def _apply(self):
+        shorts_only = getattr(self, "shorts_only", False)
+
         # 1. Validate target multiplier
         mult_val = 0.0
-        if hasattr(self, "multiplier_entry"):
+        if not shorts_only and hasattr(self, "multiplier_entry"):
             raw_mult = self.multiplier_entry.get().strip()
             if raw_mult:
                 try:
@@ -290,7 +320,7 @@ class ManageChannelModal(Toplevel):
 
         # 3. Validate target watch hours
         target_hrs = 0.0
-        if hasattr(self, "target_entry"):
+        if not shorts_only and hasattr(self, "target_entry"):
             raw_target = self.target_entry.get().strip()
             if raw_target:
                 try:
@@ -304,9 +334,10 @@ class ManageChannelModal(Toplevel):
 
         target_seconds = round(target_hrs * 3600.0, 3)
 
-        # 4. Apply target multiplier and max views cap to all videos in this channel group
+        # 4. Apply target multiplier and max views cap to all items in this channel group
         for _, task in self.group_videos:
-            task.target_multiplier = mult_val
+            if not shorts_only:
+                task.target_multiplier = mult_val
             task.max_runs = max_views_val
 
         if hasattr(self.parent_view, "save_queue"):
@@ -314,19 +345,20 @@ class ManageChannelModal(Toplevel):
         if hasattr(self.parent_view, "refresh_list"):
             self.parent_view.refresh_list()
 
-        # 5. Apply target watch seconds to channel
-        ch_name_clean = (self.channel.name or "").strip().lower()
-        if ch_name_clean:
-            channels = [Channel.from_dict(c) for c in self.app_controller.config_mgr.get_channels()]
-            for ch in channels:
-                if ch.name.strip().lower() == ch_name_clean:
-                    ch.target_watch_seconds = target_seconds
-            self.app_controller.config_mgr.set_channels([c.to_dict() for c in channels])
-            self.channel.target_watch_seconds = target_seconds
+        # 5. Apply target watch seconds to channel (Video Queue only)
+        if not shorts_only:
+            ch_name_clean = (self.channel.name or "").strip().lower()
+            if ch_name_clean:
+                channels = [Channel.from_dict(c) for c in self.app_controller.config_mgr.get_channels()]
+                for ch in channels:
+                    if ch.name.strip().lower() == ch_name_clean:
+                        ch.target_watch_seconds = target_seconds
+                self.app_controller.config_mgr.set_channels([c.to_dict() for c in channels])
+                self.channel.target_watch_seconds = target_seconds
 
-            ch_view = getattr(self.app_controller, "views", {}).get("channels")
-            if ch_view is not None and hasattr(ch_view, "load_channels"):
-                ch_view.load_channels()
+                ch_view = getattr(self.app_controller, "views", {}).get("channels")
+                if ch_view is not None and hasattr(ch_view, "load_channels"):
+                    ch_view.load_channels()
 
         if callable(self.on_applied):
             self.on_applied()
@@ -334,43 +366,52 @@ class ManageChannelModal(Toplevel):
         self.destroy()
 
     def _delete_all_videos(self, confirm: bool = True):
-        """Remove all video tasks for this channel from the queue while preserving all historical stats and watch data."""
+        """Remove all video tasks or shorts for this channel from the queue while preserving all historical stats and watch data."""
+        shorts_only = getattr(self, "shorts_only", False)
         ch_name = self.channel.name or "Uncategorized"
         target_ch_name = (self.channel.name or "").strip().lower()
+        item_singular = "short" if shorts_only else "video"
+        item_plural = "shorts" if shorts_only else "videos"
 
         current_tasks = getattr(self.parent_view, "video_tasks", []) or []
-        if target_ch_name:
-            matching = [t for t in current_tasks if (t.channel or "").strip().lower() == target_ch_name]
-        else:
-            matching = [t for t in current_tasks if not bool((t.channel or "").strip())]
+
+        def task_channel_matches(t):
+            if target_ch_name:
+                return (t.channel or "").strip().lower() == target_ch_name
+            return not bool((t.channel or "").strip())
+
+        def task_type_matches(t):
+            if shorts_only:
+                return getattr(t, "is_short", False)
+            return not getattr(t, "is_short", False)
+
+        matching = [t for t in current_tasks if task_channel_matches(t) and task_type_matches(t)]
 
         if not matching:
             if confirm:
-                messagebox.showinfo("No Videos", f"There are no videos in the queue for '{ch_name}'.", parent=self)
+                messagebox.showinfo(
+                    f"No {item_plural.capitalize()}",
+                    f"There are no {item_plural} in the queue for '{ch_name}'.",
+                    parent=self,
+                )
             return
 
         if confirm:
             num = len(matching)
             ok = messagebox.askyesno(
-                "Delete All Videos",
-                f"Are you sure you want to remove all {num} video(s) of '{ch_name}' from the queue?\n\n"
+                f"Delete All {item_plural.capitalize()}",
+                f"Are you sure you want to remove all {num} {item_singular}(s) of '{ch_name}' from the queue?\n\n"
                 "Note: Watch time history, runs, and statistics will be safely preserved in storage.",
                 parent=self,
             )
             if not ok:
                 return
 
-        # Filter out this channel's videos without touching StatRecords
-        if target_ch_name:
-            self.parent_view.video_tasks = [
-                t for t in current_tasks
-                if (t.channel or "").strip().lower() != target_ch_name
-            ]
-        else:
-            self.parent_view.video_tasks = [
-                t for t in current_tasks
-                if bool((t.channel or "").strip())
-            ]
+        # Filter out matching items without touching StatRecords
+        self.parent_view.video_tasks = [
+            t for t in current_tasks
+            if not (task_channel_matches(t) and task_type_matches(t))
+        ]
 
         if hasattr(self.app_controller, "queued_video_tasks"):
             self.app_controller.queued_video_tasks = self.parent_view.video_tasks

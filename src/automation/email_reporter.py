@@ -78,13 +78,19 @@ class SessionReport:
     search_queries_count: int = 0
     thread_url: Optional[str] = None
     thread_message_id: Optional[str] = None
+    system_name: str = ""
 
     def generate_subject(self) -> str:
         """Produce a consistent subject line to ensure start and completion emails thread together in Gmail."""
         if self.custom_subject:
+            if self.system_name and not self.custom_subject.startswith(self.system_name):
+                return f"{self.system_name} - {self.custom_subject}"
             return self.custom_subject
         stamp = self.start_time.strftime("%d %b %Y - %I:%M %p")
-        return f"Entertainment Hub Session [{stamp}] - {self.account_email or 'Session'}"
+        base = f"Entertainment Hub Session [{stamp}] - {self.account_email or 'Session'}"
+        if self.system_name:
+            return f"{self.system_name} - {base}"
+        return base
 
     def generate_plain_text(self) -> str:
         """Produce a formatted plain-text report for terminal/log output and email."""
@@ -100,6 +106,7 @@ class SessionReport:
             "=" * 70,
             "                  ENTERTAINMENT HUB - SESSION REPORT                  ",
             "=" * 70,
+            f"System Name:          {self.system_name or 'N/A'}",
             f"Account:              {self.account_email or 'N/A'}",
             f"Session Mode:         {self.session_mode}",
             f"Status:               {self.status}",
@@ -240,7 +247,10 @@ class SessionReport:
         <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 24px; color: #ffffff;">
             <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; font-weight: 700; margin-bottom: 6px;">Media Entertainment Activity</div>
             <h1 style="margin: 0; font-size: 22px; font-weight: 700; line-height: 1.3;">Session Entertainment Report</h1>
-            <div style="margin-top: 8px; font-size: 13px; color: #94a3b8;">Account: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.account_email or 'N/A')}</span> | Mode: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.session_mode)}</span></div>
+            <div style="margin-top: 10px; font-size: 13px; color: #94a3b8;">
+                <div style="margin-bottom: 4px; font-size: 14px;">System Name: <span style="color: #38bdf8; font-weight: 700;">{html.escape(self.system_name or 'N/A')}</span></div>
+                <div>Account: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.account_email or 'N/A')}</span> | Mode: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.session_mode)}</span></div>
+            </div>
         </div>
 
         <div style="padding: 24px;">
@@ -1290,18 +1300,25 @@ class EmailReporter:
         alert_dt = datetime.now()
         stamp_str = alert_dt.strftime("%d %b %Y - %I:%M:%S %p")
         email_addr = getattr(account, "email", "N/A")
+        system_name = (config_mgr.get_setting("SystemName", "") or "").strip() if config_mgr else ""
 
         if not custom_subject:
             start_dt = start_time or alert_dt
             stamp = start_dt.strftime("%d %b %Y - %I:%M %p")
-            subject = f"Entertainment Hub Session [{stamp}] - {email_addr}"
+            base = f"Entertainment Hub Session [{stamp}] - {email_addr}"
+            subject = f"{system_name} - {base}" if system_name else base
         else:
-            subject = custom_subject
+            if system_name and not custom_subject.startswith(system_name):
+                subject = f"{system_name} - {custom_subject}"
+            else:
+                subject = custom_subject
 
+        system_line = f"- System Name:  {system_name}\n" if system_name else "- System Name:  N/A\n"
         plain_text = (
             f"URGENT ALERT: {alert_type.upper()}\n"
             f"{'=' * 50}\n\n"
             f"An issue requires attention during your session:\n\n"
+            f"{system_line}"
             f"- Account:      {email_addr}\n"
             f"- Alert Type:   {alert_type}\n"
             f"- Timestamp:    {stamp_str}\n"
@@ -1380,18 +1397,25 @@ class EmailReporter:
         start_dt = start_time or datetime.now()
         start_str = start_dt.strftime("%d %b %Y - %I:%M:%S %p")
         email_addr = getattr(account, "email", "N/A")
+        system_name = (config_mgr.get_setting("SystemName", "") or "").strip() if config_mgr else ""
 
         if not custom_subject:
             stamp = start_dt.strftime("%d %b %Y - %I:%M %p")
-            subject = f"Entertainment Hub Session [{stamp}] - {email_addr}"
+            base = f"Entertainment Hub Session [{stamp}] - {email_addr}"
+            subject = f"{system_name} - {base}" if system_name else base
         else:
-            subject = custom_subject
+            if system_name and not custom_subject.startswith(system_name):
+                subject = f"{system_name} - {custom_subject}"
+            else:
+                subject = custom_subject
 
         total_fmt = f"{format_hours(total_app_watch_seconds)} ({format_duration(total_app_watch_seconds)})"
+        system_line = f"- System Name: {system_name}\n" if system_name else "- System Name: N/A\n"
 
         plain_text = (
             f"Entertainment session has started.\n\n"
             f"Session Details:\n"
+            f"{system_line}"
             f"- Account: {email_addr}\n"
             f"- Timing: Started at {start_str}\n"
             f"- Session Mode: {session_mode}\n"
@@ -1520,6 +1544,11 @@ class EmailReporter:
         """Route report delivery based on configuration and available transports."""
         if not config_mgr:
             return False
+
+        if not report.system_name:
+            sys_name = (config_mgr.get_setting("SystemName", "") or "").strip()
+            if sys_name:
+                report.system_name = sys_name
 
         recipient, bcc_email = resolve_report_recipients(config_mgr)
 

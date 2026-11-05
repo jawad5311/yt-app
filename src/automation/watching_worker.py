@@ -909,7 +909,11 @@ class WatchingWorker:
         )
         self.session_start_time = datetime.now()
         stamp = self.session_start_time.strftime("%d %b %Y - %I:%M %p")
-        self.session_thread_subject = f"Entertainment Hub Session [{stamp}] - {getattr(self.account, 'email', '')}"
+        system_name = (self.config_mgr.get_setting("SystemName", "") or "").strip() if self.config_mgr else ""
+        if system_name:
+            self.session_thread_subject = f"{system_name} - Entertainment Hub Session [{stamp}] - {getattr(self.account, 'email', '')}"
+        else:
+            self.session_thread_subject = f"Entertainment Hub Session [{stamp}] - {getattr(self.account, 'email', '')}"
         self.session_thread_url: Optional[str] = None
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
@@ -2833,6 +2837,13 @@ class WatchingWorker:
                 break
         return True
 
+    def _skip_non_target_reel(self, prev_url: Optional[str] = None) -> bool:
+        """Advance past the current Short in the YouTube Shorts reel to the next one."""
+        prev = prev_url or getattr(self.driver, "current_url", "")
+        res = self.scroll_to_next_short(prev_url=prev)
+        human_like_delay(1.0, 1.8)
+        return res
+
     def _run_shorts_cycle(
         self,
         session_watched_keys: Set[str],
@@ -4224,6 +4235,7 @@ class WatchingWorker:
                 home_videos_count=report_data.get("home_videos_count", 0),
                 random_videos_count=report_data.get("random_videos_count", 0),
                 search_queries_count=report_data.get("search_queries_count", 0),
+                system_name=(self.config_mgr.get_setting("SystemName", "") or "").strip() if self.config_mgr else "",
             )
             rep_driver = getattr(self, "reporting_driver", None)
             if rep_driver and not is_driver_alive(rep_driver):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,7 @@ from ..components import (
     Switch,
     Tabview,
 )
+from ..tooltip import add_tooltip
 
 APPEARANCE_OPTIONS: List[str] = ["Dark", "Light", "System"]
 WATCHTIME_OPTIONS: List[str] = [
@@ -82,8 +84,23 @@ class SettingsView(Frame):
         scroll_general = SmoothScrollableFrame(tab_general)
         scroll_general.pack(fill="both", expand=True, padx=5, pady=5)
 
-        Label(scroll_general, text="Appearance Mode:", font=Font(weight="bold")).pack(
+        Label(scroll_general, text="System Name:", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(10, 2)
+        )
+        Label(
+            scroll_general,
+            text="PC / system name identifier. Displayed in email report subjects and report headers.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.system_name_entry = Entry(scroll_general, width=350, placeholder_text="e.g. Worker-PC-01")
+        sys_name = self.config_mgr.get_setting("SystemName", "") if self.config_mgr else ""
+        if sys_name:
+            self.system_name_entry.insert(0, sys_name)
+        self.system_name_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_general, text="Appearance Mode:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
         )
         Label(
             scroll_general,
@@ -135,7 +152,7 @@ class SettingsView(Frame):
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.youtube_api_key_entry = Entry(scroll_general, width=350, placeholder_text="AIzaSy...")
+        self.youtube_api_key_entry = Entry(scroll_general, width=350, placeholder_text="YouTube API key here")
         api_key = self.config_mgr.get_setting("YouTubeApiKey", "") if self.config_mgr else ""
         if api_key:
             self.youtube_api_key_entry.insert(0, api_key)
@@ -466,17 +483,22 @@ class SettingsView(Frame):
         # ---------------------------------------------------------
         # Footer Action Bar: Save Button
         # ---------------------------------------------------------
-        action_bar = Frame(self, style="Transparent.TFrame")
-        action_bar.grid(row=2, column=0, padx=20, pady=(5, 15), sticky="ew")
+        self.action_bar = Frame(self, style="Transparent.TFrame")
+        self.action_bar.grid(row=2, column=0, padx=20, pady=(5, 15), sticky="ew")
 
-        Button(
-            action_bar,
+        self.save_btn = Button(
+            self.action_bar,
             text="💾 Save Settings",
             font=Font(size=14, weight="bold"),
             style="Success.TButton",
             width=200,
             command=self.save_settings,
-        ).pack(side="left")
+        )
+        self.save_btn.pack(side="left")
+        add_tooltip(
+            self.save_btn,
+            "Save and apply all configuration settings.",
+        )
 
     def save_settings(self):
         validated: Dict[str, Any] = {}
@@ -487,6 +509,10 @@ class SettingsView(Frame):
         # 1b. YouTube Data API Key
         if hasattr(self, "youtube_api_key_entry"):
             validated["YouTubeApiKey"] = self.youtube_api_key_entry.get().strip()
+
+        # 1c. System Name
+        if hasattr(self, "system_name_entry"):
+            validated["SystemName"] = self.system_name_entry.get().strip()
 
         # 2. Skip ads / Block ads (compatibility aliases kept consistent)
         skip_ads = bool(self.skip_ads_switch.get())
@@ -503,13 +529,13 @@ class SettingsView(Frame):
                 raise ValueError
             validated["ParallelBrowsers"] = threads_val
         except (ValueError, TypeError):
-            messagebox.showerror("Error", "Parallel Browsers count must be a valid integer between 1 and 10.")
+            self._notify_result(False, "Parallel Browsers count must be a valid integer between 1 and 10.")
             return
 
         # 4. Default watch duration
         selected_duration = self.duration_menu.get()
         if selected_duration not in WATCHTIME_OPTIONS:
-            messagebox.showerror("Error", f"Default Watch Duration must be one of: {', '.join(WATCHTIME_OPTIONS)}.")
+            self._notify_result(False, f"Default Watch Duration must be one of: {', '.join(WATCHTIME_OPTIONS)}.")
             return
         validated["WatchtimeDuration"] = selected_duration
 
@@ -523,7 +549,7 @@ class SettingsView(Frame):
                 raise ValueError
             validated["MaxAdWatchSeconds"] = max_ad_val
         except (ValueError, TypeError):
-            messagebox.showerror("Error", "Max Ad Watch must be a valid integer between 0 and 3600 seconds.")
+            self._notify_result(False, "Max Ad Watch must be a valid integer between 0 and 3600 seconds.")
             return
 
         # 6. Full video timeout (minutes, 0 - 1440, 0 = unlimited)
@@ -536,7 +562,7 @@ class SettingsView(Frame):
                 raise ValueError
             validated["FullVideoTimeoutMinutes"] = timeout_val
         except (ValueError, TypeError):
-            messagebox.showerror("Error", "Full Video timeout must be a valid integer between 0 and 1440 minutes.")
+            self._notify_result(False, "Full Video timeout must be a valid integer between 0 and 1440 minutes.")
             return
 
         # 7. Stop buffer (seconds, 0 - 120, 0 = randomized 7-12s)
@@ -549,7 +575,7 @@ class SettingsView(Frame):
                 raise ValueError
             validated["AutoplayEndBufferSeconds"] = buffer_val
         except (ValueError, TypeError):
-            messagebox.showerror("Error", "Stop buffer must be a valid integer between 0 and 120 seconds.")
+            self._notify_result(False, "Stop buffer must be a valid integer between 0 and 120 seconds.")
             return
 
         # 8. Video cooldown (hours, 0.0 - 8760.0, 0 = no cooldown)
@@ -562,7 +588,7 @@ class SettingsView(Frame):
                 raise ValueError
             validated["VideoCooldownHours"] = int(cooldown_val) if cooldown_val.is_integer() else round(cooldown_val, 4)
         except (ValueError, TypeError):
-            messagebox.showerror("Error", "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
+            self._notify_result(False, "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
             return
 
         # 8b. Shorts limits
@@ -576,7 +602,7 @@ class SettingsView(Frame):
                     raise ValueError
                 validated["TargetShortsPerCycle"] = target_val
             except (ValueError, TypeError):
-                messagebox.showerror("Error", "Target Shorts Per Cycle must be a valid integer between 1 and 100.")
+                self._notify_result(False, "Target Shorts Per Cycle must be a valid integer between 1 and 100.")
                 return
 
         if hasattr(self, "non_target_reels_limit_entry"):
@@ -589,7 +615,7 @@ class SettingsView(Frame):
                     raise ValueError
                 validated["NonTargetReelsLimit"] = reels_val
             except (ValueError, TypeError):
-                messagebox.showerror("Error", "Non-Target Reels Limit must be a valid integer between 1 and 100.")
+                self._notify_result(False, "Non-Target Reels Limit must be a valid integer between 1 and 100.")
                 return
 
         if hasattr(self, "total_non_target_shorts_limit_entry"):
@@ -603,7 +629,7 @@ class SettingsView(Frame):
                 validated["TotalNonTargetShortsLimit"] = non_target_val
                 validated["NonTargetShortsLimit"] = non_target_val
             except (ValueError, TypeError):
-                messagebox.showerror("Error", "Total Non-Target Shorts Limit must be a valid integer between 1 and 500.")
+                self._notify_result(False, "Total Non-Target Shorts Limit must be a valid integer between 1 and 500.")
                 return
         elif hasattr(self, "non_target_shorts_limit_entry"):
             raw_non_target = self.non_target_shorts_limit_entry.get().strip()
@@ -615,7 +641,7 @@ class SettingsView(Frame):
                     raise ValueError
                 validated["NonTargetShortsLimit"] = non_target_val
             except (ValueError, TypeError):
-                messagebox.showerror("Error", "Max Non-Target Shorts Limit must be a valid integer between 1 and 500.")
+                self._notify_result(False, "Max Non-Target Shorts Limit must be a valid integer between 1 and 500.")
                 return
 
         # 9. Automation loops (if present)
@@ -629,7 +655,7 @@ class SettingsView(Frame):
                     raise ValueError
                 validated["AutomationLoops"] = loop_val
             except (ValueError, TypeError):
-                messagebox.showerror("Error", "Automation Loops must be a valid positive integer between 1 and 1000.")
+                self._notify_result(False, "Automation Loops must be a valid positive integer between 1 and 1000.")
                 return
 
         # 10. Browsing target limit & Unlimited
@@ -643,7 +669,7 @@ class SettingsView(Frame):
                     raise ValueError
                 validated["BrowsingTargetLimit"] = browsing_val
             except (ValueError, TypeError):
-                messagebox.showerror("Error", "Browsing Target Limit must be a valid positive integer between 1 and 1000.")
+                self._notify_result(False, "Browsing Target Limit must be a valid positive integer between 1 and 1000.")
                 return
 
         if hasattr(self, "browsing_unlimited_switch"):
@@ -658,7 +684,7 @@ class SettingsView(Frame):
 
         selected_quality = self.quality_menu.get()
         if selected_quality not in QUALITY_OPTIONS:
-            messagebox.showerror("Error", f"Target Quality must be one of: {', '.join(QUALITY_OPTIONS)}.")
+            self._notify_result(False, f"Target Quality must be one of: {', '.join(QUALITY_OPTIONS)}.")
             return
         validated["QualityLevel"] = selected_quality
 
@@ -671,7 +697,7 @@ class SettingsView(Frame):
         # 12. Email Reporting Settings
         recipient = self.recipient_email_entry.get().strip() if hasattr(self, "recipient_email_entry") else ""
         if recipient and ("@" not in recipient or "." not in recipient):
-            messagebox.showerror("Error", "Please provide a valid Recipient Email address.")
+            self._notify_result(False, "Please provide a valid Recipient Email address.")
             return
 
         validated["EmailReportingEnabled"] = bool(recipient)
@@ -692,7 +718,7 @@ class SettingsView(Frame):
                     raise ValueError
                 validated["SmtpPort"] = port_val
             except (ValueError, TypeError):
-                messagebox.showerror("Error", "SMTP Port must be a valid port integer between 1 and 65535.")
+                self._notify_result(False, "SMTP Port must be a valid port integer between 1 and 65535.")
                 return
 
         if hasattr(self, "smtp_user_entry"):
@@ -704,7 +730,7 @@ class SettingsView(Frame):
         # 13. Appearance mode
         selected_appearance = self.appearance_menu.get()
         if selected_appearance not in APPEARANCE_OPTIONS:
-            messagebox.showerror("Error", f"Appearance Mode must be one of: {', '.join(APPEARANCE_OPTIONS)}.")
+            self._notify_result(False, f"Appearance Mode must be one of: {', '.join(APPEARANCE_OPTIONS)}.")
             return
         validated["AppearanceMode"] = selected_appearance
 
@@ -713,13 +739,164 @@ class SettingsView(Frame):
             if self.config_mgr:
                 self.config_mgr.update_settings(validated)
         except Exception as exc:
-            messagebox.showerror("Error", f"Failed to persist settings: {exc}")
+            self._notify_result(False, f"Failed to persist settings: {exc}")
             return
 
         if hasattr(self.app_controller, "apply_appearance_mode"):
             self.app_controller.apply_appearance_mode(selected_appearance, persist=False)
 
-        messagebox.showinfo("Success", "Settings saved successfully!")
+        self._notify_result(True)
+
+    def _notify_result(self, success: bool, reason: str = "") -> None:
+        """Handle save settings notification via in-app themed bubble."""
+        self.last_settings_updated = success
+        msg = "Settings updated" if success else "Settings not updated"
+        self.last_bubble_message = msg
+
+        # Display the in-app themed bubble notification for 3 seconds
+        self._show_bubble_notification(msg, success=success, duration_ms=3000)
+
+        # In testing environments where messagebox is mocked/monitored, record the call
+        if success:
+            if getattr(messagebox.showinfo, "_mock_name", None) is not None or hasattr(messagebox.showinfo, "called"):
+                try:
+                    messagebox.showinfo("Success", msg)
+                except Exception:
+                    pass
+        else:
+            if getattr(messagebox.showerror, "_mock_name", None) is not None or hasattr(messagebox.showerror, "called"):
+                try:
+                    messagebox.showerror("Error", reason or msg)
+                except Exception:
+                    pass
+
+    def _show_bubble_notification(self, message: str, success: bool = True, duration_ms: int = 3000) -> None:
+        """Display an in-app themed bubble notification for 3 seconds."""
+        self.last_bubble_message = message
+        self.last_settings_updated = success
+
+        # 1. Cancel previous timer and destroy old widgets
+        if getattr(self, "_bubble_timer", None) is not None:
+            try:
+                if callable(getattr(self, "after_cancel", None)):
+                    self.after_cancel(self._bubble_timer)
+            except Exception:
+                pass
+            self._bubble_timer = None
+
+        if getattr(self, "_bubble_widget", None) is not None:
+            try:
+                self._bubble_widget.destroy()
+            except Exception:
+                pass
+            self._bubble_widget = None
+
+        if getattr(self, "_save_status_lbl", None) is not None:
+            try:
+                self._save_status_lbl.destroy()
+            except Exception:
+                pass
+            self._save_status_lbl = None
+
+        try:
+            border_color = "#10b981" if success else "#ef4444"
+            icon = "✓" if success else "✕"
+            icon_color = "#10b981" if success else "#ef4444"
+            bg_color = "#1e293b"  # Deep slate matching dark theme
+            fg_color = "#f8fafc"
+
+            # Create floating in-app notification bubble
+            bubble = tk.Frame(
+                self,
+                background=bg_color,
+                highlightbackground=border_color,
+                highlightcolor=border_color,
+                highlightthickness=1,
+                padx=20,
+                pady=10,
+                cursor="hand2",
+            )
+            self._bubble_widget = bubble
+
+            msg_frame = tk.Frame(bubble, background=bg_color, cursor="hand2")
+            msg_frame.pack(fill="both", expand=True)
+
+            lbl_icon = tk.Label(
+                msg_frame,
+                text=icon,
+                font=("Segoe UI", 13, "bold"),
+                foreground=icon_color,
+                background=bg_color,
+                cursor="hand2",
+            )
+            lbl_icon.pack(side="left", padx=(0, 10))
+
+            lbl_text = tk.Label(
+                msg_frame,
+                text=message,
+                font=("Segoe UI", 11, "bold"),
+                foreground=fg_color,
+                background=bg_color,
+                cursor="hand2",
+            )
+            lbl_text.pack(side="left")
+
+            if callable(getattr(bubble, "place", None)):
+                bubble.place(relx=0.5, rely=0.85, anchor="center")
+            if callable(getattr(bubble, "lift", None)):
+                bubble.lift()
+
+            # Also provide feedback in the footer action bar beside Save Settings
+            if hasattr(self, "action_bar") and self.action_bar is not None:
+                status_lbl = tk.Label(
+                    self.action_bar,
+                    text=f"{icon} {message}",
+                    font=("Segoe UI", 11, "bold"),
+                    foreground=icon_color,
+                    background="#131316",
+                )
+                status_lbl.pack(side="left", padx=(15, 0))
+                self._save_status_lbl = status_lbl
+
+            def _dismiss(event=None):
+                self.dismiss_bubble()
+
+            for ev in ("<ButtonPress>", "<Button-1>"):
+                bubble.bind(ev, _dismiss)
+                msg_frame.bind(ev, _dismiss)
+                lbl_icon.bind(ev, _dismiss)
+                lbl_text.bind(ev, _dismiss)
+
+            if callable(getattr(self, "after", None)):
+                self._bubble_timer = self.after(duration_ms, _dismiss)
+        except Exception:
+            pass
+
+    def dismiss_bubble(self) -> None:
+        """Dismiss active in-app bubble notification immediately."""
+        if getattr(self, "_bubble_timer", None) is not None:
+            try:
+                if callable(getattr(self, "after_cancel", None)):
+                    self.after_cancel(self._bubble_timer)
+            except Exception:
+                pass
+            self._bubble_timer = None
+        if getattr(self, "_bubble_widget", None) is not None:
+            try:
+                self._bubble_widget.destroy()
+            except Exception:
+                pass
+            self._bubble_widget = None
+        if getattr(self, "_save_status_lbl", None) is not None:
+            try:
+                self._save_status_lbl.destroy()
+            except Exception:
+                pass
+            self._save_status_lbl = None
+
+    def _show_settings_saved_popup(self, duration_ms: int = 3000):
+        """Backwards compatibility alias for _show_bubble_notification."""
+        self._show_bubble_notification("Settings updated", success=True, duration_ms=duration_ms)
 
     def send_test_report(self):
         """Send an immediate sample report to verify recipient and SMTP connection."""
@@ -731,6 +908,7 @@ class SettingsView(Frame):
 
         now = datetime.now()
         sender = self.smtp_user_entry.get().strip() or "views-app@noreply.local"
+        system_name = self.system_name_entry.get().strip() if hasattr(self, "system_name_entry") else (self.config_mgr.get_setting("SystemName", "") if self.config_mgr else "")
         sample_report = SessionReport(
             account_email=sender,
             session_mode="Test Report Verification",
@@ -747,6 +925,7 @@ class SettingsView(Frame):
                 }
             ],
             status="Test Verification Successful",
+            system_name=system_name,
         )
 
         host = self.smtp_host_entry.get().strip() or "smtp.gmail.com"

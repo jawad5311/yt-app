@@ -223,7 +223,7 @@ Open the **Settings** screen:
 | Enable Direct Link Fallback | off (`false`) | When organic search finds no match, navigate straight to the task URL |
 | Parallel Browsers Count | 1 | Accounts launched simultaneously; clamped to **1–10** |
 | Default Watch Duration | Full Video | Duration pre-selected when adding a new queue task |
-| Full Video Timeout (minutes) | 5 | Safety timeout for *Full Video* mode; clamped 0–1440, `0` = unlimited / disabled guard |
+| Full Video Timeout (minutes) | 0 | Safety timeout for *Full Video* mode; clamped 0–1440, `0` = unlimited / disabled guard |
 | Auto-Skip Ads | on (`true`) | Script-based native skip clicks *Skip Ad* after 5–10s; off = watch ads up to cap |
 | Max Ad Watch (seconds) | 32 | Cumulative ad watch budget while *Auto-Skip Ads* is **off**; clamped 0–3600, `0` = unlimited |
 | Full Video Stop Buffer (seconds) | 10 | Early stop buffer before video ends to avoid autoplay; `0` = randomized 7–12s |

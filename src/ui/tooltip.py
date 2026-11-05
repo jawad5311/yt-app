@@ -4,8 +4,9 @@ Provides lightweight, flicker-free, accessible hover descriptions.
 """
 from __future__ import annotations
 
+import functools
 import tkinter as tk
-from typing import Optional
+from typing import Any, Callable, Optional
 
 
 class ToolTip:
@@ -359,3 +360,79 @@ class ToolTip:
 def add_tooltip(widget: tk.Widget, text: str, *, delay_ms: int = 300, wraplength: int = 280) -> ToolTip:
     """Helper function to create and attach a ToolTip to a widget."""
     return ToolTip(widget, text, delay_ms=delay_ms, wraplength=wraplength)
+
+
+def flash_button_feedback(
+    button: Any,
+    feedback_text: str,
+    duration_ms: int = 3000,
+    original_text: Optional[str] = None,
+) -> None:
+    """Temporarily change a button's text to show feedback for 2-4 seconds, then restore original text."""
+    if button is None:
+        return
+    try:
+        if hasattr(button, "winfo_exists") and not button.winfo_exists():
+            return
+    except Exception:
+        return
+
+    # Cancel previous feedback timer if active
+    prev_timer = getattr(button, "_feedback_timer_id", None)
+    if prev_timer:
+        try:
+            button.after_cancel(prev_timer)
+        except Exception:
+            pass
+        setattr(button, "_feedback_timer_id", None)
+
+    # Determine original text
+    orig = original_text
+    if orig is None:
+        orig = getattr(button, "_feedback_original_text", None)
+    if orig is None:
+        try:
+            orig = button.cget("text")
+        except Exception:
+            orig = ""
+    setattr(button, "_feedback_original_text", orig)
+
+    try:
+        button.configure(text=feedback_text)
+    except Exception:
+        pass
+
+    def _restore():
+        setattr(button, "_feedback_timer_id", None)
+        try:
+            if hasattr(button, "winfo_exists") and button.winfo_exists():
+                restore_to = getattr(button, "_feedback_original_text", orig)
+                button.configure(text=restore_to)
+        except Exception:
+            pass
+
+    try:
+        timer_id = button.after(duration_ms, _restore)
+        setattr(button, "_feedback_timer_id", timer_id)
+    except Exception:
+        pass
+
+
+def with_button_feedback(
+    button: Any,
+    feedback_text: str,
+    command: Optional[Callable] = None,
+    duration_ms: int = 3000,
+) -> Callable:
+    """Wrap a command callback so clicking the button displays feedback text for 2-4 seconds."""
+    if command is None:
+        def _noop(*args, **kwargs):
+            flash_button_feedback(button, feedback_text, duration_ms=duration_ms)
+        return _noop
+
+    @functools.wraps(command)
+    def _wrapper(*args, **kwargs):
+        flash_button_feedback(button, feedback_text, duration_ms=duration_ms)
+        return command(*args, **kwargs)
+
+    return _wrapper

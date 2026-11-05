@@ -186,3 +186,72 @@ def test_manage_channel_modal_delete_all_videos():
     modal.destroy.assert_called_once()
     # Stats store is untouched
     assert not hasattr(mock_app.stats_store, "remove_for_task") or not mock_app.stats_store.remove_for_task.called
+
+
+def test_manage_channel_modal_shorts_only_separation():
+    # 1. Test shorts_only apply logic: only max_runs is updated, target_multiplier and channel target hours untouched
+    modal = ManageChannelModal.__new__(ManageChannelModal)
+    channel = Channel(name="ShortsCreator", target_watch_seconds=1200.0)
+    modal.channel = channel
+    modal.shorts_only = True
+
+    mock_app = MagicMock()
+    mock_app.config_mgr.get_channels.return_value = [channel.to_dict()]
+    modal.app_controller = mock_app
+
+    short_task1 = VideoTask(title="s1", channel="ShortsCreator", max_runs=1, target_multiplier=3.5, is_short_override=True)
+    short_task2 = VideoTask(title="s2", channel="ShortsCreator", max_runs=2, target_multiplier=3.5, is_short_override=True)
+    modal.group_videos = [(0, short_task1), (1, short_task2)]
+
+    modal.parent_view = MagicMock()
+    modal.on_applied = MagicMock()
+    modal.destroy = MagicMock()
+
+    mock_views_entry = MagicMock()
+    mock_views_entry.get.return_value = "8"
+    modal.max_views_entry = mock_views_entry
+    modal.err_lbl = MagicMock()
+
+    modal._apply()
+
+    assert short_task1.max_runs == 8
+    assert short_task2.max_runs == 8
+    # Multiplier and channel target watch seconds must remain completely unchanged
+    assert short_task1.target_multiplier == 3.5
+    assert short_task2.target_multiplier == 3.5
+    assert channel.target_watch_seconds == 1200.0
+    mock_app.config_mgr.set_channels.assert_not_called()
+    modal.parent_view.save_queue.assert_called_once()
+    modal.on_applied.assert_called_once()
+    modal.destroy.assert_called_once()
+
+
+def test_manage_channel_modal_shorts_only_delete_all():
+    modal = ManageChannelModal.__new__(ManageChannelModal)
+    modal.channel = Channel(name="MultiFormatChannel")
+    modal.shorts_only = True
+    modal.on_applied = MagicMock()
+    modal.destroy = MagicMock()
+
+    regular_video = VideoTask(title="Long Video", channel="MultiFormatChannel", is_short_override=False)
+    short_video = VideoTask(title="Short 1", channel="MultiFormatChannel", is_short_override=True)
+    other_short = VideoTask(title="Short 2", channel="OtherChannel", is_short_override=True)
+
+    mock_parent = MagicMock()
+    mock_parent.video_tasks = [regular_video, short_video, other_short]
+    modal.parent_view = mock_parent
+
+    mock_app = MagicMock()
+    mock_app.queued_video_tasks = [regular_video, short_video, other_short]
+    modal.app_controller = mock_app
+
+    # Execute deletion in shorts_only mode
+    modal._delete_all_videos(confirm=False)
+
+    # Only short_video of MultiFormatChannel should be deleted; regular_video and other_short must remain!
+    assert modal.parent_view.video_tasks == [regular_video, other_short]
+    assert mock_app.queued_video_tasks == [regular_video, other_short]
+    mock_parent.save_queue.assert_called_once()
+    mock_parent.refresh_list.assert_called_once()
+    modal.on_applied.assert_called_once()
+    modal.destroy.assert_called_once()

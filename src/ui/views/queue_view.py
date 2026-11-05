@@ -23,6 +23,7 @@ from ...models.watch_stats import (
 )
 from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
+from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 
 
 class QueueView(Frame):
@@ -56,36 +57,66 @@ class QueueView(Frame):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
 
-        add_btn_text = "+ Add Target Short" if getattr(self, "shorts_only", False) else "+ Add Target Video"
-        ctk.CTkButton(
+        is_shorts = getattr(self, "shorts_only", False)
+        add_btn_text = "+ Add Target Short" if is_shorts else "+ Add Target Video"
+        add_btn = ctk.CTkButton(
             btn_frame,
             text=add_btn_text,
-            command=lambda: self.open_video_modal(),
-        ).pack(side="left", padx=(0, 10))
+        )
+        add_btn.configure(
+            command=with_button_feedback(add_btn, "Adding...", lambda: self.open_video_modal())
+        )
+        add_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            add_btn,
+            "Add a new short task to the queue." if is_shorts else "Add a new video task to the queue.",
+        )
 
-        ctk.CTkButton(
+        bulk_btn = ctk.CTkButton(
             btn_frame,
             text="⚡ Bulk Apply",
             fg_color="#1F6AA5",
             hover_color="#144870",
-            command=self.open_bulk_apply_modal,
-        ).pack(side="left", padx=(0, 10))
+        )
+        bulk_cmd = self.open_shorts_bulk_apply_modal if is_shorts else self.open_video_bulk_apply_modal
+        bulk_btn.configure(
+            command=with_button_feedback(bulk_btn, "Applying...", bulk_cmd)
+        )
+        bulk_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            bulk_btn,
+            "Apply max views cap to multiple shorts at once." if is_shorts else "Apply target multipliers and view caps to multiple videos at once.",
+        )
 
-        ctk.CTkButton(
+        reset_btn = ctk.CTkButton(
             btn_frame,
             text="🗑 Reset Stats",
             fg_color="#616161",
             hover_color="#3F3F3F",
-            command=self.reset_stats,
-        ).pack(side="right", padx=(0, 10))
+        )
+        reset_btn.configure(
+            command=with_button_feedback(reset_btn, "Resetting...", self.reset_stats)
+        )
+        reset_btn.pack(side="right", padx=(0, 10))
+        add_tooltip(
+            reset_btn,
+            "Reset historical watch time and view counts for tasks in this queue.",
+        )
 
-        ctk.CTkButton(
+        clear_btn = ctk.CTkButton(
             btn_frame,
             text="🗑 Clear Queue",
             fg_color="#D32F2F",
             hover_color="#9A0007",
-            command=self.clear_queue,
-        ).pack(side="right")
+        )
+        clear_btn.configure(
+            command=with_button_feedback(clear_btn, "Clearing...", self.clear_queue)
+        )
+        clear_btn.pack(side="right")
+        add_tooltip(
+            clear_btn,
+            "Clear all tasks from this queue.",
+        )
 
         # Scrollable Task List
         scroll_label = "Queued Target Shorts" if getattr(self, "shorts_only", False) else "Queued Target Videos"
@@ -169,15 +200,24 @@ class QueueView(Frame):
         """Dropdown values for the task modal: every channel plus '(None)'."""
         return [NO_CHANNEL_VALUE] + [channel.name for channel in self._channels()]
 
-    def open_bulk_apply_modal(self):
-        """Open modal dialog to bulk configure multiplier and max views for all queue videos."""
+    def open_video_bulk_apply_modal(self) -> None:
+        """Open modal dialog to bulk configure multiplier and max views for video queue."""
+        self.open_bulk_apply_modal(shorts_only=False)
+
+    def open_shorts_bulk_apply_modal(self) -> None:
+        """Open modal dialog to bulk configure max views cap only for shorts queue."""
+        self.open_bulk_apply_modal(shorts_only=True)
+
+    def open_bulk_apply_modal(self, shorts_only: Optional[bool] = None) -> None:
+        """Open modal dialog to bulk configure multiplier and max views for queued videos or shorts."""
+        is_shorts = self.shorts_only if shorts_only is None else bool(shorts_only)
         matching_tasks = [
             t for t in self.video_tasks
-            if (getattr(t, "is_short", False) if getattr(self, "shorts_only", False) else not getattr(t, "is_short", False))
+            if (getattr(t, "is_short", False) if is_shorts else not getattr(t, "is_short", False))
         ]
         if not matching_tasks:
-            queue_name = "shorts" if getattr(self, "shorts_only", False) else "video"
-            messagebox.showinfo("Empty Queue", f"There are no videos in the {queue_name} queue to configure.", parent=self)
+            queue_name = "shorts" if is_shorts else "videos"
+            messagebox.showinfo("Empty Queue", f"There are no {queue_name} in the queue to configure.", parent=self)
             return
 
         from .bulk_apply_modal import BulkApplyModal
@@ -186,6 +226,7 @@ class QueueView(Frame):
             tasks=matching_tasks,
             app_controller=self.app_controller,
             on_applied=self.refresh_list,
+            shorts_only=is_shorts,
         )
 
     def open_manage_channel_modal(self, group: Any):
@@ -197,6 +238,7 @@ class QueueView(Frame):
             group_videos=group.videos,
             app_controller=self.app_controller,
             on_applied=self.refresh_list,
+            shorts_only=getattr(self, "shorts_only", False),
         )
 
     def reassign_channel(self, old_name: str, new_name: str) -> None:
@@ -786,33 +828,54 @@ class QueueView(Frame):
                 if callable(update_dash):
                     update_dash()
 
-            ctk.CTkButton(
+            arch_btn = ctk.CTkButton(
                 header_btns,
                 text="📁 Archive",
                 width=80,
                 fg_color="#D97706",
                 hover_color="#B45309",
-                command=_archive_channel,
-            ).pack(side="left", padx=(0, 4))
+            )
+            arch_btn.configure(
+                command=with_button_feedback(arch_btn, "Archived", _archive_channel)
+            )
+            arch_btn.pack(side="left", padx=(0, 4))
+            add_tooltip(
+                arch_btn,
+                "Archive this channel and pause its automation.",
+            )
 
         if group.url:
-            ctk.CTkButton(
+            open_btn = ctk.CTkButton(
                 header_btns,
                 text="🔗 Open Channel",
                 width=110,
                 fg_color="#2E7D32",
                 hover_color="#1B5E20",
-                command=lambda u=group.url: webbrowser.open(u),
-            ).pack(side="left", padx=(0, 4))
+            )
+            open_btn.configure(
+                command=with_button_feedback(open_btn, "Opening...", lambda u=group.url: webbrowser.open(u))
+            )
+            open_btn.pack(side="left", padx=(0, 4))
+            add_tooltip(
+                open_btn,
+                "Open this channel's YouTube page in your web browser.",
+            )
 
-        ctk.CTkButton(
+        manage_btn = ctk.CTkButton(
             header_btns,
             text="⚙ Manage",
             width=85,
             fg_color="#1F6AA5",
             hover_color="#144870",
-            command=lambda g=group: self.open_manage_channel_modal(g),
-        ).pack(side="left")
+        )
+        manage_btn.configure(
+            command=with_button_feedback(manage_btn, "Opening...", lambda g=group: self.open_manage_channel_modal(g))
+        )
+        manage_btn.pack(side="left")
+        add_tooltip(
+            manage_btn,
+            "Configure target multipliers, max views caps, and watch goals for this channel.",
+        )
 
         if is_collapsed:
             return
@@ -923,7 +986,7 @@ class QueueView(Frame):
         reorder_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
         reorder_frame.grid(row=0, column=0, padx=(2, 6), sticky="")
 
-        ctk.CTkButton(
+        btn_mv_up = ctk.CTkButton(
             reorder_frame,
             text="▲",
             width=24,
@@ -934,9 +997,11 @@ class QueueView(Frame):
             hover_color="#4B5563" if can_move_up else "gray25",
             state="normal" if can_move_up else "disabled",
             command=on_move_up,
-        ).pack(side="top", pady=(0, 2))
+        )
+        btn_mv_up.pack(side="top", pady=(0, 2))
+        add_tooltip(btn_mv_up, "Move this video up in queue priority.")
 
-        ctk.CTkButton(
+        btn_mv_down = ctk.CTkButton(
             reorder_frame,
             text="▼",
             width=24,
@@ -947,7 +1012,9 @@ class QueueView(Frame):
             hover_color="#4B5563" if can_move_down else "gray25",
             state="normal" if can_move_down else "disabled",
             command=on_move_down,
-        ).pack(side="bottom", pady=(2, 0))
+        )
+        btn_mv_down.pack(side="bottom", pady=(2, 0))
+        add_tooltip(btn_mv_down, "Move this video down in queue priority.")
 
         # The video box itself
         card = ctk.CTkFrame(row_frame, corner_radius=6)
@@ -1174,25 +1241,33 @@ class QueueView(Frame):
         views_entry.bind("<FocusOut>", _revert_views)
         views_entry.bind("<Return>", _on_views_enter)
 
-        ctk.CTkButton(
+        edit_task_btn = ctk.CTkButton(
             action_btn_frame,
             text="✏ Edit",
             width=52,
             font=ctk.CTkFont(size=9, weight="bold"),
             fg_color="#1F6AA5",
             hover_color="#144870",
-            command=lambda i=index: self.open_video_modal(edit_index=i),
-        ).pack(side="left", padx=(0, 4))
+        )
+        edit_task_btn.configure(
+            command=with_button_feedback(edit_task_btn, "Editing...", lambda i=index: self.open_video_modal(edit_index=i))
+        )
+        edit_task_btn.pack(side="left", padx=(0, 4))
+        add_tooltip(edit_task_btn, "Edit this video's settings, URL, or target multiplier.")
 
-        ctk.CTkButton(
+        del_task_btn = ctk.CTkButton(
             action_btn_frame,
             text="🗑 Delete",
             width=58,
             font=ctk.CTkFont(size=9, weight="bold"),
             fg_color="#D32F2F",
             hover_color="#9A0007",
-            command=lambda i=index: self.remove_task(i),
-        ).pack(side="left")
+        )
+        del_task_btn.configure(
+            command=with_button_feedback(del_task_btn, "Deleted", lambda i=index: self.remove_task(i))
+        )
+        del_task_btn.pack(side="left")
+        add_tooltip(del_task_btn, "Remove this video from the queue.")
 
         # Progress bar with dynamic color transition
         has_target = (not is_short_item) and getattr(task, "target_multiplier", 0.0) > 0 and effective_duration > 0

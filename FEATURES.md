@@ -140,7 +140,7 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 | Enable Direct Link Fallback | Switch | `false` | When organic search finds no match, navigate straight to the task URL |
 | Parallel Browsers Count | Entry | `1` | Accounts launched simultaneously; clamped to 1–10 on save |
 | Default Watch Duration | Dropdown | `Full Video` | Default duration pre-selected for **new** queue tasks |
-| Full Video Timeout (minutes) | Entry | `5` | Safety timeout for *Full Video* mode; clamped 0–1440, `0` = unlimited / disabled guard |
+| Full Video Timeout (minutes) | Entry | `0` | Safety timeout for *Full Video* mode; clamped 0–1440, `0` = unlimited / disabled guard |
 | Auto-Skip Ads | Switch | `true` | Script-based native skip clicks *Skip Ad* after 5–10s; off = watch ads up to cap |
 | Max Ad Watch (seconds) | Entry | `32` | Cumulative ad watch budget while *Auto-Skip Ads* is off; clamped 0–3600, `0` = unlimited |
 | Full Video Stop Buffer (seconds) | Entry | `10` | Early stop buffer before video ends to avoid autoplay; `0` = randomized 7–12s |
@@ -153,6 +153,7 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 | Accounts File | Config only | `accounts.txt` | Fallback file auto-loaded when no accounts are saved |
 
 Retired keys (`AccessKey`, `AIProvider`, `OpenAIKey`, `GeminiKey`, `OpenRouterKey`, `CommentType`) and removed video fields (`like`, `comment_type`, `custom_comment`) are **purged from `settings.json` on load**.
+- **Save Settings Feedback**: Clicking **💾 Save Settings** triggers a non-blocking in-app notification bubble styled with the dark application theme. It displays `✓ Settings updated` on successful persistence or `✕ Settings not updated` upon invalid fields, auto-dismissing after 3 seconds without modal OS confirmation dialogs.
 
 ### Quality & CI
 
