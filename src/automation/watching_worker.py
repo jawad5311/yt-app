@@ -2535,16 +2535,52 @@ class WatchingWorker:
         if total_candidates_seen > 0:
             emit(
                 self.log_queue,
-                f"No Short on Home feed matched your Shorts Queue ({total_candidates_seen} candidate(s) checked across {max_scrolls + 1} attempts). Moving back to watching long-form videos.",
+                f"No Short on Home feed matched your Shorts Queue ({total_candidates_seen} candidate(s) checked across {max_scrolls + 1} attempts).",
                 logging.INFO,
             )
         else:
             emit(
                 self.log_queue,
-                f"No Shorts shelf or items were detected on the Home feed after {max_scrolls + 1} scroll attempts. Moving back to watching long-form videos.",
+                f"No Shorts shelf or items were detected on the Home feed after {max_scrolls + 1} scroll attempts.",
                 logging.INFO,
             )
         return None
+
+    def click_shorts_tab(self) -> bool:
+        """Click on the Shorts navigation entry in YouTube's sidebar, or navigate directly."""
+        try:
+            clicked = self.driver.execute_script(r"""
+                var selectors = [
+                    'ytd-guide-entry-renderer a[title="Shorts"]',
+                    'ytd-guide-entry-renderer a[href*="/shorts"]',
+                    'ytd-mini-guide-entry-renderer a[title="Shorts"]',
+                    'ytd-mini-guide-entry-renderer a[href*="/shorts"]',
+                    'a#endpoint[title="Shorts"]',
+                    'a[title="Shorts"]',
+                    'a[href="/shorts"]'
+                ];
+                for (var i = 0; i < selectors.length; i++) {
+                    var el = document.querySelector(selectors[i]);
+                    if (el && el.offsetParent !== null) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            """)
+            if clicked:
+                human_like_delay(2.0, 3.5)
+                return True
+        except Exception:
+            pass
+
+        try:
+            safe_get(self.driver, "https://www.youtube.com/shorts", timeout=30, log_queue=self.log_queue)
+            human_like_delay(2.0, 3.5)
+            return True
+        except Exception as exc:
+            emit(self.log_queue, f"Failed to navigate to YouTube Shorts: {exc}", logging.WARNING)
+            return False
 
     def click_home_short(self, short_info: Dict[str, Any]) -> bool:
         """Click on the target short card on the home page and verify navigation."""
@@ -2730,7 +2766,8 @@ class WatchingWorker:
         except Exception:
             pass
 
-        curr_url = getattr(self.driver, "current_url", "")
+        raw_url = getattr(self.driver, "current_url", "")
+        curr_url = raw_url if isinstance(raw_url, str) else ""
         return {
             "found": False,
             "channel_name": "",
@@ -2877,6 +2914,10 @@ class WatchingWorker:
                     human_like_delay(1.5, 2.5)
                     candidates = self.fetch_home_shorts()
 
+                r_title = "Untargeted Short"
+                r_url = ""
+                nav_ok = False
+
                 if candidates:
                     random_short = random.choice(candidates)
                     r_title = random_short.get("title") or "Untargeted Short"
@@ -2887,88 +2928,95 @@ class WatchingWorker:
                         logging.INFO,
                     )
                     nav_ok = self.click_home_short(random_short)
-                    if not nav_ok:
-                        emit(
-                            self.log_queue,
-                            f"Could not navigate to random Short '{r_title}' via click. Moving back to watching long-form videos.",
-                            logging.WARNING,
-                        )
-                        break
 
-                    human_like_delay(1.5, 2.5)
-                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-
-                    untargeted_watch_time = random.uniform(3.0, 7.0)
+                # Fallback: If no candidate Short was found on Home feed, or clicking failed, enter YouTube Shorts via navigation
+                if not nav_ok:
                     emit(
                         self.log_queue,
-                        f"Watching untargeted Short '{r_title}' for {untargeted_watch_time:.1f}s before entering Shorts reel...",
+                        "No Shorts found on Home feed. Entering YouTube Shorts via navigation to discover targeted channels in reel...",
                         logging.INFO,
                     )
-                    elapsed = 0.0
-                    step = 0.2
-                    while elapsed < untargeted_watch_time and not self.stop_event.is_set():
-                        self.check_pause()
-                        if self.stop_event.is_set():
-                            break
-                        time.sleep(min(step, max(0.01, untargeted_watch_time - elapsed)))
-                        elapsed += step
+                    nav_ok = self.click_shorts_tab()
+                    if nav_ok:
+                        first_info = self.get_active_short_info()
+                        r_title = first_info.get("title") or "Untargeted Short"
+                        r_url = getattr(self.driver, "current_url", "") or "https://www.youtube.com/shorts"
 
-                    total_non_target_shorts_seen += 1
-
-                    if total_non_target_shorts_seen >= cycle_max_total_non_target:
-                        emit(
-                            self.log_queue,
-                            f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Exiting Shorts cycle and moving to watching long-form videos.",
-                            logging.INFO,
-                        )
-                        break
-
-                    prev_url = r_url or getattr(self.driver, "current_url", "")
-                    self.scroll_to_next_short(prev_url=prev_url)
-                    human_like_delay(1.0, 1.8)
-
-                    watched_in_reel, non_targets_in_reel, exit_reason = self._run_shorts_reel_loop(
-                        session_watched_keys=session_watched_keys,
-                        current_target_watched=total_target_shorts_watched,
-                        cycle_target_shorts=cycle_target_shorts,
-                        current_total_non_target=total_non_target_shorts_seen,
-                        cycle_max_total_non_target=cycle_max_total_non_target,
-                    )
-                    total_target_shorts_watched = watched_in_reel
-                    total_non_target_shorts_seen += non_targets_in_reel
-
-                    if exit_reason == "target_achieved" or total_target_shorts_watched >= cycle_target_shorts:
-                        emit(
-                            self.log_queue,
-                            f"Achieved desired target of {total_target_shorts_watched}/{cycle_target_shorts} targeted Short(s)! Moving to watching long-form videos.",
-                            logging.INFO,
-                        )
-                        break
-
-                    if exit_reason == "total_non_target_limit" or total_non_target_shorts_seen >= cycle_max_total_non_target:
-                        emit(
-                            self.log_queue,
-                            f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Moving to watching long-form videos.",
-                            logging.INFO,
-                        )
-                        break
-
+                if not nav_ok:
                     emit(
                         self.log_queue,
-                        "Navigating back to YouTube Home page to find the next Short...",
-                        logging.INFO,
+                        "Could not open YouTube Shorts. Moving back to watching long-form videos.",
+                        logging.WARNING,
                     )
-                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                    human_like_delay(2.0, 3.5)
-                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                    continue
-                else:
+                    break
+
+                human_like_delay(1.5, 2.5)
+                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
+                untargeted_watch_time = random.uniform(3.0, 7.0)
+                emit(
+                    self.log_queue,
+                    f"Watching untargeted Short '{r_title}' for {untargeted_watch_time:.1f}s before entering Shorts reel...",
+                    logging.INFO,
+                )
+                elapsed = 0.0
+                step = 0.2
+                while elapsed < untargeted_watch_time and not self.stop_event.is_set():
+                    self.check_pause()
+                    if self.stop_event.is_set():
+                        break
+                    time.sleep(min(step, max(0.01, untargeted_watch_time - elapsed)))
+                    elapsed += step
+
+                total_non_target_shorts_seen += 1
+
+                if total_non_target_shorts_seen >= cycle_max_total_non_target:
                     emit(
                         self.log_queue,
-                        "No candidate Short found on Home feed to watch as untargeted. Moving back to watching long-form videos.",
+                        f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Exiting Shorts cycle and moving to watching long-form videos.",
                         logging.INFO,
                     )
                     break
+
+                prev_url = r_url or getattr(self.driver, "current_url", "")
+                self.scroll_to_next_short(prev_url=prev_url)
+                human_like_delay(1.0, 1.8)
+
+                watched_in_reel, non_targets_in_reel, exit_reason = self._run_shorts_reel_loop(
+                    session_watched_keys=session_watched_keys,
+                    current_target_watched=total_target_shorts_watched,
+                    cycle_target_shorts=cycle_target_shorts,
+                    current_total_non_target=total_non_target_shorts_seen,
+                    cycle_max_total_non_target=cycle_max_total_non_target,
+                )
+                total_target_shorts_watched = watched_in_reel
+                total_non_target_shorts_seen += non_targets_in_reel
+
+                if exit_reason == "target_achieved" or total_target_shorts_watched >= cycle_target_shorts:
+                    emit(
+                        self.log_queue,
+                        f"Achieved desired target of {total_target_shorts_watched}/{cycle_target_shorts} targeted Short(s)! Moving to watching long-form videos.",
+                        logging.INFO,
+                    )
+                    break
+
+                if exit_reason == "total_non_target_limit" or total_non_target_shorts_seen >= cycle_max_total_non_target:
+                    emit(
+                        self.log_queue,
+                        f"Reached max total non-target limit of {total_non_target_shorts_seen}/{cycle_max_total_non_target} Short(s). Moving to watching long-form videos.",
+                        logging.INFO,
+                    )
+                    break
+
+                emit(
+                    self.log_queue,
+                    "Navigating back to YouTube Home page to find the next Short...",
+                    logging.INFO,
+                )
+                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                human_like_delay(2.0, 3.5)
+                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                continue
 
             short_item, short_task = matched_short
             emit(

@@ -88,10 +88,43 @@ class TestToolTip(unittest.TestCase):
         tip._on_enter()
         self.assertIsNotNone(tip._after_id)
 
-        # Calling leave cancels after_id
+        # Calling leave cancels after_id immediately
         tip._on_leave()
+        self.assertIsNone(tip._after_id)
         self.root.update()
         tip.hide()
+
+    def test_fast_pointer_outside_bounds_does_not_show_on_timer(self):
+        tip = ToolTip(self.btn, "Delayed tip", delay_ms=50)
+        tip._on_enter()
+        self.assertIsNotNone(tip._after_id)
+
+        # Pointer moves outside widget
+        with patch.object(tip, "_is_pointer_over_widget", return_value=False):
+            tip._on_timer_show()
+
+        # Window was NOT shown
+        self.assertIsNone(tip._tip_window)
+        tip.hide()
+
+    def test_poll_pointer_auto_hides_when_cursor_moved_away(self):
+        tip = ToolTip(self.btn, "Watchdog tip")
+        tip.show()
+        self.assertIsNotNone(tip._tip_window)
+
+        # Simulate pointer moving away while watchdog polls
+        with patch.object(tip, "_is_pointer_over_widget", return_value=False):
+            tip._poll_pointer()
+
+        self.assertIsNone(tip._tip_window)
+
+    def test_scroll_event_hides_tooltip(self):
+        tip = ToolTip(self.btn, "Scroll tip")
+        tip.show()
+        self.assertIsNotNone(tip._tip_window)
+
+        tip._on_scroll()
+        self.assertIsNone(tip._tip_window)
 
 
 if __name__ == "__main__":

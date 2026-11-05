@@ -154,6 +154,21 @@ class ChannelsView(Frame):
             "Fetch and synchronize public videos and shorts\nacross all channels into your playback queue.",
         )
 
+        self.sync_all_channels_shorts_btn = ctk.CTkButton(
+            btn_frame,
+            text="⚡ Sync All Channels Shorts",
+            width=175,
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            font=ctk.CTkFont(weight="bold"),
+            command=self.sync_all_channels_shorts,
+        )
+        self.sync_all_channels_shorts_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            self.sync_all_channels_shorts_btn,
+            "Fetch and synchronize all public shorts\nacross all channels into your playback queue.",
+        )
+
         self.current_tab = "Active"
         self.tab_selector = ctk.CTkSegmentedButton(
             btn_frame,
@@ -842,14 +857,24 @@ class ChannelsView(Frame):
             )
             return
 
+        if video_limit is None and shorts_limit is not None:
+            s_desc = "all" if shorts_limit == 0 else f"up to {shorts_limit}"
+            status_text = f"Fetching {s_desc} short(s) for\n'{channel.name}'..."
+            dialog_title = "Fetching Shorts..."
+        elif shorts_limit is None and video_limit is not None:
+            v_desc = "all" if video_limit == 0 else f"up to {video_limit}"
+            status_text = f"Fetching {v_desc} video(s) for\n'{channel.name}'..."
+            dialog_title = "Fetching Videos..."
+        else:
+            v_desc = "all" if video_limit == 0 else (f"up to {video_limit}" if video_limit is not None else "no")
+            s_desc = "all" if shorts_limit == 0 else (f"up to {shorts_limit}" if shorts_limit is not None else "no")
+            status_text = f"Fetching {v_desc} video(s) and {s_desc} short(s) for\n'{channel.name}'..."
+            dialog_title = "Fetching Data..."
+
         loading = ctk.CTkToplevel(active_parent)
-        loading.title("Fetching Data...")
+        loading.title(dialog_title)
         loading.geometry("400x150")
         loading.grab_set()
-
-        v_desc = "all" if video_limit == 0 else (f"up to {video_limit}" if video_limit is not None else "no")
-        s_desc = "all" if shorts_limit == 0 else (f"up to {shorts_limit}" if shorts_limit is not None else "no")
-        status_text = f"Fetching {v_desc} video(s) and {s_desc} short(s) for\n'{channel.name}'..."
         ctk.CTkLabel(
             loading,
             text=status_text,
@@ -880,9 +905,12 @@ class ChannelsView(Frame):
                 self.refresh_list()
 
             if not res.videos:
+                items_label = "shorts" if (video_limit is None and shorts_limit is not None) else (
+                    "videos" if (shorts_limit is None and video_limit is not None) else "public videos or shorts"
+                )
                 messagebox.showinfo(
                     "No Items Found",
-                    f"No public videos or shorts found for '{channel.name}'.",
+                    f"No {items_label} found for '{channel.name}'.",
                     parent=active_parent if self._widget_exists(active_parent) else self,
                 )
                 return
@@ -2192,6 +2220,180 @@ class ChannelsView(Frame):
             discard=_close,
         )
 
+    def sync_all_channels_shorts(self) -> None:
+        """Sync all available shorts across all configured channels directly into the queue."""
+        channels_to_sync = [ch for ch in self.channels if ch.url and not ch.archived]
+        if not channels_to_sync:
+            channels_to_sync = [ch for ch in self.channels if ch.url]
+        if not channels_to_sync:
+            messagebox.showinfo("Sync All Channels Shorts", "No channels with URLs configured to sync.", parent=self)
+            return
+
+        toast = ctk.CTkToplevel(self)
+        toast.title("Syncing All Channels Shorts...")
+        toast.geometry("420x150")
+        toast.grab_set()
+
+        lbl = ctk.CTkLabel(
+            toast,
+            text=f"Syncing shorts for all channels (0/{len(channels_to_sync)})...",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            wraplength=380,
+        )
+        lbl.pack(pady=(20, 10))
+
+        prog = ctk.CTkProgressBar(toast, mode="indeterminate", width=320)
+        prog.pack(pady=(0, 15))
+        prog.start()
+
+        snapshots = [(ch, ch.name, ch.url) for ch in channels_to_sync]
+        config_mgr = getattr(self.app_controller, "config_mgr", None)
+
+        def _bg_sync(report):
+            results = []
+            for i, (ch, name, url) in enumerate(snapshots, 1):
+                report((i, name))
+                try:
+                    res = fetch_channel_data(
+                        url,
+                        video_limit=None,
+                        shorts_limit=0,
+                        config_mgr=config_mgr,
+                    )
+                    results.append((ch, res))
+                except Exception as exc:
+                    results.append((ch, ChannelFetchResult(channel_url=url, error=str(exc))))
+            return results
+
+        def _close():
+            if self._widget_exists(toast):
+                prog.stop()
+                toast.destroy()
+
+        def _done(results):
+            _close()
+            api_errors = [f"• {ch.name}: {res.error}" for ch, res in results if res.error]
+            if api_errors:
+                messagebox.showerror(
+                    "YouTube API Error",
+                    "The following issue(s) occurred while contacting YouTube API:\n\n" + "\n".join(api_errors),
+                    parent=self,
+                )
+            current_tasks = getattr(self.app_controller, "queued_video_tasks", None)
+            if current_tasks is None:
+                current_tasks = [VideoTask.from_dict(d) for d in self.app_controller.config_mgr.get_video_queue()]
+                self.app_controller.queued_video_tasks = current_tasks
+
+            existing_by_id = {}
+            for t in current_tasks:
+                vid = extract_video_id(t.url)
+                if vid:
+                    existing_by_id[vid] = t
+                elif t.url:
+                    existing_by_id[t.url.strip().lower()] = t
+
+            all_added_tasks: List[VideoTask] = []
+            total_updated = 0
+
+            for ch, res in results:
+                if res.error:
+                    continue
+                if res.total_shorts is not None:
+                    ch.total_shorts = res.total_shorts
+
+                for f_task in (res.videos or []):
+                    vid = extract_video_id(f_task.url) or (f_task.url.strip().lower() if f_task.url else "")
+                    if vid and vid in existing_by_id:
+                        exist = existing_by_id[vid]
+                        changed = False
+                        if not exist.channel and ch.name:
+                            exist.channel = ch.name
+                            changed = True
+                        if (exist.duration_seconds <= 0) and f_task.duration_seconds > 0:
+                            exist.duration_seconds = f_task.duration_seconds
+                            exist.duration_text = f_task.duration_text
+                            changed = True
+                        if changed:
+                            total_updated += 1
+                    else:
+                        new_task = VideoTask(
+                            url=f_task.url,
+                            title=f_task.title,
+                            title_2=getattr(f_task, "title_2", "") or "",
+                            title_3=getattr(f_task, "title_3", "") or "",
+                            keywords=getattr(f_task, "keywords", "") or f_task.title,
+                            channel=ch.name,
+                            target_multiplier=3.0,
+                            max_runs=5,
+                            watchtime_duration="Full Video",
+                            enabled=True,
+                            duration_seconds=getattr(f_task, "duration_seconds", 0.0),
+                            duration_text=getattr(f_task, "duration_text", ""),
+                            is_short_override=True,
+                        )
+                        all_added_tasks.append(new_task)
+                        if vid:
+                            existing_by_id[vid] = new_task
+
+                # Re-evaluate channel new shorts status
+                ev, es, et = self.get_existing_video_counts_for_channel(ch.name)
+                yt_s = ch.total_shorts if ch.total_shorts is not None else 0
+                ch.has_new_shorts = (ch.total_shorts is not None and yt_s > es)
+
+            if all_added_tasks:
+                new_dicts = [t.to_dict() for t in all_added_tasks]
+                updated_raw = self.app_controller.config_mgr.append_video_tasks(new_dicts, deduplicate=True)
+                self.app_controller.queued_video_tasks = [VideoTask.from_dict(d) for d in updated_raw]
+            elif total_updated > 0:
+                self.app_controller.config_mgr.set_video_queue([t.to_dict() for t in current_tasks])
+
+            self.save_channels()
+            self.refresh_list()
+
+            current_view = getattr(self.app_controller, "current_view_name", "")
+            queue = self._queue_view()
+            if queue is not None:
+                if current_view == "queue":
+                    queue.refresh_list()
+                else:
+                    self.app_controller._queue_needs_refresh = True
+            shorts_queue = self._shorts_queue_view()
+            if shorts_queue is not None:
+                if current_view == "shorts_queue":
+                    shorts_queue.refresh_list()
+                else:
+                    self.app_controller._shorts_queue_needs_refresh = True
+            update_dash = getattr(self.app_controller, "update_dashboard_stats", None)
+            if callable(update_dash):
+                update_dash()
+
+            msg = f"Sync All Channels Shorts completed for {len(channels_to_sync)} channel(s):"
+            if all_added_tasks:
+                msg += f"\n• Added {len(all_added_tasks)} new short(s) to queue."
+            else:
+                msg += "\n• All channels are up to date; no new shorts found."
+            if total_updated > 0:
+                msg += f"\n• Updated metadata for {total_updated} existing short(s)."
+
+            messagebox.showinfo("Sync All Channels Shorts Complete", msg, parent=self)
+
+        def _progress(data):
+            idx, name = data
+            lbl.configure(text=f"Syncing shorts for '{name}' ({idx}/{len(channels_to_sync)})...")
+
+        def _failed(exc):
+            _close()
+            messagebox.showerror("Sync Error", f"Failed to sync all channels shorts:\n{exc}", parent=self)
+
+        self.app_controller.background_jobs.submit(
+            _bg_sync,
+            done=_done,
+            error=_failed,
+            progress=_progress,
+            current=lambda: self._widget_exists(self) and self._widget_exists(toast),
+            discard=_close,
+        )
+
     def sync_channel_all(self, channel: Channel) -> None:
         """Fully sync all videos and shorts for a specific channel in batches of 50 until completed."""
         if not channel.url:
@@ -2431,6 +2633,10 @@ class ChannelsView(Frame):
             current=lambda: self._widget_exists(self) and self._widget_exists(loading),
             discard=_close_loading,
         )
+
+    def sync_channel_all_shorts(self, channel: Channel) -> None:
+        """Fetch all shorts for a specific channel and open the ChannelImportModal."""
+        self.fetch_data_for_channel(channel, video_limit=None, shorts_limit=0)
 
     def sync_single_channel_data(self, channel: Channel) -> None:
         """Sync new available videos and/or shorts for a specific channel directly into the queue."""
@@ -2870,7 +3076,7 @@ class ChannelsView(Frame):
                 state="normal" if can_up else "disabled",
                 command=_move_channel_up,
             )
-            btn_up.pack(side="left", padx=(0, 2))
+            btn_up.grid(row=0, column=0, rowspan=2, padx=(0, 2))
             add_tooltip(
                 btn_up,
                 "Move this channel up in list order\nto prioritize it during playback cycles.",
@@ -2887,44 +3093,64 @@ class ChannelsView(Frame):
                 state="normal" if can_down else "disabled",
                 command=_move_channel_down,
             )
-            btn_down.pack(side="left", padx=(0, 6))
+            btn_down.grid(row=0, column=1, rowspan=2, padx=(0, 6))
             add_tooltip(
                 btn_down,
                 "Move this channel down in list order\nto deprioritize it during playback cycles.",
             )
 
             has_url = bool((channel.url or "").strip())
-            sync_all_btn = ctk.CTkButton(
-                action_frame,
-                text="⚡ Sync All",
-                width=75,
-                font=ctk.CTkFont(size=9, weight="bold"),
-                fg_color="#2563EB" if has_url else "gray30",
-                hover_color="#1D4ED8" if has_url else "gray30",
-                state="normal" if has_url else "disabled",
-                command=lambda ch=channel: self.sync_channel_all(ch),
-            )
-            sync_all_btn.pack(side="left", padx=(0, 4))
-            add_tooltip(
-                sync_all_btn,
-                "Fetch and sync all public long-form videos\nand shorts from this channel into the queue.",
-            )
-
             has_new = getattr(channel, "has_new_content", False) or getattr(channel, "has_new_videos", False) or getattr(channel, "has_new_shorts", False)
+
             sync_btn = ctk.CTkButton(
                 action_frame,
                 text="⚡ Sync Recent",
-                width=90,
+                width=92,
+                height=46,
                 font=ctk.CTkFont(size=9, weight="bold"),
                 fg_color="#0D9488" if has_new else "gray30",
                 hover_color="#0F766E" if has_new else "gray30",
                 state="normal" if has_new else "disabled",
                 command=lambda ch=channel: self.sync_single_channel_data(ch),
             )
-            sync_btn.pack(side="left", padx=(0, 4))
+            sync_btn.grid(row=0, column=2, rowspan=2, padx=(0, 6), sticky="ns")
             add_tooltip(
                 sync_btn,
                 "Fetch newly published videos or shorts\navailable on YouTube for this channel.",
+            )
+
+            sync_all_btn = ctk.CTkButton(
+                action_frame,
+                text="⚡ Sync All",
+                width=110,
+                height=22,
+                font=ctk.CTkFont(size=9, weight="bold"),
+                fg_color="#2563EB" if has_url else "gray30",
+                hover_color="#1D4ED8" if has_url else "gray30",
+                state="normal" if has_url else "disabled",
+                command=lambda ch=channel: self.sync_channel_all(ch),
+            )
+            sync_all_btn.grid(row=0, column=3, padx=(0, 6), pady=(0, 2), sticky="ew")
+            add_tooltip(
+                sync_all_btn,
+                "Fetch and sync all public long-form videos\nand shorts from this channel into the queue.",
+            )
+
+            sync_shorts_btn = ctk.CTkButton(
+                action_frame,
+                text="⚡ Sync All Shorts",
+                width=110,
+                height=22,
+                font=ctk.CTkFont(size=9, weight="bold"),
+                fg_color="#2563EB" if has_url else "gray30",
+                hover_color="#1D4ED8" if has_url else "gray30",
+                state="normal" if has_url else "disabled",
+                command=lambda ch=channel: self.sync_channel_all_shorts(ch),
+            )
+            sync_shorts_btn.grid(row=1, column=3, padx=(0, 6), pady=(2, 0), sticky="ew")
+            add_tooltip(
+                sync_shorts_btn,
+                "Fetch all public shorts from this channel\nand choose which ones to import into the queue.",
             )
 
             if channel.archived:
@@ -2932,12 +3158,13 @@ class ChannelsView(Frame):
                     action_frame,
                     text="📂 Restore",
                     width=68,
+                    height=22,
                     font=ctk.CTkFont(size=9, weight="bold"),
                     fg_color="#059669",
                     hover_color="#047857",
                     command=lambda i=real_idx: self.unarchive_channel(i),
                 )
-                restore_btn.pack(side="left", padx=(0, 4))
+                restore_btn.grid(row=0, column=4, pady=(0, 2), sticky="ew")
                 add_tooltip(
                     restore_btn,
                     "Restore this archived channel back\nto the active channel list.",
@@ -2947,12 +3174,13 @@ class ChannelsView(Frame):
                     action_frame,
                     text="📁 Archive",
                     width=68,
+                    height=22,
                     font=ctk.CTkFont(size=9, weight="bold"),
                     fg_color="#D97706",
                     hover_color="#B45309",
                     command=lambda i=real_idx: self.archive_channel(i),
                 )
-                archive_btn.pack(side="left", padx=(0, 4))
+                archive_btn.grid(row=0, column=4, pady=(0, 2), sticky="ew")
                 add_tooltip(
                     archive_btn,
                     "Archive this channel to pause automation\nwithout losing its saved statistics.",
@@ -2961,13 +3189,14 @@ class ChannelsView(Frame):
             del_btn = ctk.CTkButton(
                 action_frame,
                 text="🗑 Delete",
-                width=62,
+                width=68,
+                height=22,
                 font=ctk.CTkFont(size=9, weight="bold"),
                 fg_color="#D32F2F",
                 hover_color="#9A0007",
                 command=lambda i=real_idx: self.remove_channel(i),
             )
-            del_btn.pack(side="left")
+            del_btn.grid(row=1, column=4, pady=(2, 0), sticky="ew")
             add_tooltip(
                 del_btn,
                 "Permanently delete this channel\nand remove it from your saved list.",

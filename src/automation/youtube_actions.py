@@ -109,8 +109,22 @@ try {
         player.classList.contains('ytp-showing-ad') ||
         player.classList.contains('ad-interrupting')
     ));
+    if (!isAd && player && typeof player.getAdState === 'function') {
+        var adState = player.getAdState();
+        if (adState === 1 || adState === 2) isAd = true;
+    }
     if (!isAd) {
-        isAd = !!document.querySelector('.ytp-ad-player-overlay, .ytp-ad-player-container, .ytp-ad-module, .video-ads .ytp-ad-text');
+        var pod = document.querySelector('.video-ads');
+        if (pod && pod.childElementCount > 0) {
+            var adTextCheck = pod.querySelector('.ytp-ad-text, .ytp-ad-preview-text, .ytp-ad-duration-remaining');
+            if (adTextCheck && (adTextCheck.offsetParent !== null || (adTextCheck.innerText || '').trim().length > 0)) {
+                isAd = true;
+            }
+            var skipCheck = pod.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, button[id*="skip-button"]');
+            if (skipCheck && skipCheck.offsetParent !== null) {
+                isAd = true;
+            }
+        }
     }
     var vids = document.querySelectorAll('video');
     var activeVid = null;
@@ -129,7 +143,8 @@ try {
 
     var timeCurrentEl = document.querySelector('.ytp-time-current');
     var timeDurationEl = document.querySelector('.ytp-time-duration');
-    var adTextEl = document.querySelector('.ytp-ad-duration-remaining, .ytp-ad-text');
+    var adDurEl = document.querySelector('.ytp-ad-duration-remaining');
+    var adTextEl = (adDurEl && adDurEl.offsetParent !== null) ? adDurEl : document.querySelector('.video-ads .ytp-ad-text');
 
     return {
         isAd: isAd,
@@ -138,7 +153,7 @@ try {
         paused: activeVid ? Boolean(activeVid.paused) : true,
         timeCurrentText: timeCurrentEl ? (timeCurrentEl.innerText || '').trim() : '',
         timeDurationText: timeDurationEl ? (timeDurationEl.innerText || '').trim() : '',
-        adText: adTextEl ? (adTextEl.innerText || '').trim() : ''
+        adText: (adTextEl && adTextEl.offsetParent !== null) ? (adTextEl.innerText || '').trim() : ''
     };
 } catch(e) {
     return { isAd: false, error: String(e) };
@@ -827,10 +842,14 @@ def watch_video(
 
         was_ad = is_ad
 
-        # Full video safety timeout covers main video playback only (not ads or pre-start delay).
-        if not is_ad and video_started and is_full_mode and full_timeout_seconds > 0 and elapsed >= full_timeout_seconds and not ended:
-            emit(log_queue, f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.", logging.WARNING)
-            return _result(False, "full_timeout")
+        # Full video safety timeout covers main video playback or total duration on video.
+        if is_full_mode and full_timeout_seconds > 0 and not ended:
+            if video_started and (elapsed >= full_timeout_seconds or watched_seconds >= full_timeout_seconds):
+                emit(log_queue, f"Full video safety timeout reached ({full_timeout_seconds}s). Stopping watch.", logging.WARNING)
+                return _result(False, "full_timeout")
+            if (now - started_at) >= full_timeout_seconds:
+                emit(log_queue, f"Full video safety timeout reached ({full_timeout_seconds}s total). Stopping watch.", logging.WARNING)
+                return _result(False, "full_timeout")
 
         if not video_state.get("found"):
             if video_missing_since is None:
@@ -891,10 +910,16 @@ def watch_video(
                     try:
                         ad_check_val = driver.execute_script("""
                             var p = document.querySelector('.html5-video-player');
-                            var adShowing = !!(p && (p.classList.contains('ytp-showing-ad') || p.classList.contains('ad-showing')));
-                            var adContainer = !!document.querySelector('.ytp-ad-player-container');
-                            var skipBtn = !!document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, button[id*="skip-button"]');
-                            return adShowing || adContainer || skipBtn;
+                            var adShowing = !!(p && (p.classList.contains('ytp-showing-ad') || p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting')));
+                            var pod = document.querySelector('.video-ads');
+                            var visibleAdText = false;
+                            if (pod && pod.childElementCount > 0) {
+                                var t = pod.querySelector('.ytp-ad-text, .ytp-ad-preview-text, .ytp-ad-duration-remaining');
+                                if (t && t.offsetParent !== null && (t.innerText || '').trim().length > 0) visibleAdText = true;
+                            }
+                            var skipBtn = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, button[id*="skip-button"]');
+                            var skipBtnVisible = !!(skipBtn && skipBtn.offsetParent !== null);
+                            return adShowing || visibleAdText || skipBtnVisible;
                         """)
                         if isinstance(ad_check_val, bool) and ad_check_val:
                             is_displaying_ad = True

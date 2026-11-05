@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -26,21 +28,26 @@ class LogsView(Frame):
         ).pack(side="left")
 
         # Action Buttons
-        Button(
+        self._clear_reset_timer: Optional[str] = None
+        self._copy_reset_timer: Optional[str] = None
+
+        self.clear_btn = Button(
             h_frame,
             text="Clear Logs",
             width=100,
             style="Danger.TButton",
             command=self.clear_logs,
-        ).pack(side="right")
+        )
+        self.clear_btn.pack(side="right")
 
-        Button(
+        self.copy_btn = Button(
             h_frame,
             text="📋 Copy Logs",
             width=110,
             style="Primary.TButton",
             command=self.copy_logs,
-        ).pack(side="right", padx=(0, 10))
+        )
+        self.copy_btn.pack(side="right", padx=(0, 10))
 
         # Logs Content Container (Allows floating scroll-down button overlay)
         self.logs_container = Frame(self, style="Transparent.TFrame")
@@ -333,6 +340,21 @@ class LogsView(Frame):
         except Exception:
             pass
 
+        # Flash feedback on the button for 2-3 seconds
+        try:
+            if hasattr(self, "clear_btn") and self.clear_btn is not None:
+                if getattr(self, "_clear_reset_timer", None):
+                    try:
+                        self.after_cancel(self._clear_reset_timer)
+                    except Exception:
+                        pass
+                self.clear_btn.configure(text="Cleared!")
+                self._clear_reset_timer = self.after(
+                    2500, lambda: self.clear_btn.configure(text="Clear Logs") if hasattr(self, "clear_btn") else None
+                )
+        except Exception:
+            pass
+
     def copy_logs(self):
         try:
             content = self.log_textbox.get("1.0", "end-1c")
@@ -340,6 +362,20 @@ class LogsView(Frame):
                 return
             self.clipboard_clear()
             self.clipboard_append(content)
-            messagebox.showinfo("Logs Copied", "Entire log output copied to clipboard!")
+        except Exception:
+            pass
+
+        # Flash feedback on the button for 2-3 seconds without showing a pop-up
+        try:
+            if hasattr(self, "copy_btn") and self.copy_btn is not None:
+                if getattr(self, "_copy_reset_timer", None):
+                    try:
+                        self.after_cancel(self._copy_reset_timer)
+                    except Exception:
+                        pass
+                self.copy_btn.configure(text="Copied!")
+                self._copy_reset_timer = self.after(
+                    2500, lambda: self.copy_btn.configure(text="📋 Copy Logs") if hasattr(self, "copy_btn") else None
+                )
         except Exception:
             pass

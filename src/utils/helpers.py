@@ -40,7 +40,7 @@ def slow_type(element: Any, text: str, min_delay: float = 0.02, max_delay: float
 
 def extract_video_id(url: Optional[str]) -> Optional[str]:
     """Extract YouTube video ID from URL string."""
-    if not url:
+    if not url or not isinstance(url, str):
         return None
     patterns = [
         r"(?:v=|\/vi\/|youtu\.be\/|\/v\/|\/embed\/|\/shorts\/|\/live\/)([A-Za-z0-9_\-]{11})",

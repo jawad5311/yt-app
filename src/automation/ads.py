@@ -39,9 +39,26 @@ var player = document.querySelector('.html5-video-player');
 var showingAd = !!(player && (player.classList.contains('ytp-showing-ad')
                               || player.classList.contains('ad-showing')
                               || player.classList.contains('ad-interrupting')));
+
 var pod = document.querySelector('.video-ads');
-var podActive = !!(pod && pod.childElementCount > 0);
-var adContainer = !!document.querySelector('.ytp-ad-player-container, .ytp-ad-module');
+var podActive = false;
+if (pod && pod.childElementCount > 0) {
+    var adText = pod.querySelector('.ytp-ad-text, .ytp-ad-preview-text, .ytp-ad-duration-remaining');
+    if (adText && (adText.offsetParent !== null || (adText.innerText || '').trim().length > 0)) {
+        podActive = true;
+    }
+    var skipBtn = pod.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, button[id*="skip-button"]');
+    if (skipBtn && skipBtn.offsetParent !== null) {
+        podActive = true;
+    }
+}
+
+var apiAd = false;
+if (player && typeof player.getAdState === 'function') {
+    var adState = player.getAdState();
+    if (adState === 1 || adState === 2) apiAd = true;
+}
+
 var src = String(v.currentSrc || v.src || '');
 var srcIsAd = src.indexOf('adformat=') !== -1 || src.indexOf('/api/ads/') !== -1;
 
@@ -55,7 +72,7 @@ return {
     seeking: v.seeking,
     seekCount: v.__ytToolSeekCount,
     playbackRate: v.playbackRate,
-    isAd: showingAd || podActive || adContainer || srcIsAd
+    isAd: showingAd || apiAd || podActive || srcIsAd
 };
 """
 

@@ -15,13 +15,15 @@ class ReportProgressModal(Toplevel):
         self,
         parent,
         title: str = "Generating Report",
-        message: str = "Generating session report... Please do not close the app.",
+        message: str = "Generating report, do not close the app.",
         on_close_callback: Optional[Callable[[], None]] = None,
+        auto_hide_seconds: Optional[float] = None,
     ):
         super().__init__(parent)
         self.parent_window = parent
         self.on_close_callback = on_close_callback
         self.is_generating: bool = True
+        self._auto_hide_id: Optional[str] = None
 
         self.title("Session Report")
         self.geometry("480x250")
@@ -58,6 +60,8 @@ class ReportProgressModal(Toplevel):
             pass
 
         self._build_ui(title, message)
+        if auto_hide_seconds is not None and auto_hide_seconds > 0:
+            self.schedule_auto_hide(auto_hide_seconds)
 
     def _build_ui(self, title: str, message: str) -> None:
         self.grid_columnconfigure(0, weight=1)
@@ -100,6 +104,29 @@ class ReportProgressModal(Toplevel):
             command=self.close_modal,
         )
 
+    def schedule_auto_hide(self, seconds: float = 2.0) -> None:
+        """Schedule the dialog to temporarily withdraw so the user can interact with the app."""
+        if getattr(self, "_auto_hide_id", None):
+            try:
+                self.after_cancel(self._auto_hide_id)
+            except Exception:
+                pass
+        self._auto_hide_id = self.after(int(seconds * 1000), self.hide_temporarily)
+
+    def hide_temporarily(self) -> None:
+        """Release modal grab and withdraw window during report generation."""
+        self._auto_hide_id = None
+        if not getattr(self, "is_generating", False):
+            return
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        try:
+            self.withdraw()
+        except Exception:
+            pass
+
     def set_completed(
         self,
         success: bool = True,
@@ -108,6 +135,13 @@ class ReportProgressModal(Toplevel):
         auto_close: bool = False,
     ) -> None:
         """Update modal state once report generation and email dispatch finishes."""
+        if getattr(self, "_auto_hide_id", None):
+            try:
+                self.after_cancel(self._auto_hide_id)
+            except Exception:
+                pass
+            self._auto_hide_id = None
+
         self.is_generating = False
         try:
             self.progress_bar.stop()
@@ -125,6 +159,14 @@ class ReportProgressModal(Toplevel):
             m = message or "Session wrap-up finished.\nYou may now close the app."
 
         self.msg_label.configure(text=m)
+
+        # Re-surface the dialog window if it was temporarily hidden
+        try:
+            self.deiconify()
+            self.lift()
+        except Exception:
+            pass
+
         if not auto_close:
             self.action_btn.pack(pady=(12, 10))
 

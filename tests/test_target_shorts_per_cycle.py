@@ -183,7 +183,7 @@ def test_run_shorts_reel_loop_resets_counter_on_target_short():
 
 
 def test_run_shorts_cycle_returns_to_home_and_exits_if_no_short_on_home():
-    """Verify _run_shorts_cycle navigates to Home, and if no matching Short is found, cleanly exits to long-form videos."""
+    """Verify _run_shorts_cycle cleanly exits to long-form videos if navigation fails."""
     mock_mgr = MagicMock()
     mock_mgr.get_int.side_effect = lambda key, default: 10 if key in ("TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit") else default
 
@@ -198,12 +198,79 @@ def test_run_shorts_cycle_returns_to_home_and_exits_if_no_short_on_home():
     )
     worker.driver = MagicMock()
 
-    # Home scan finds no short
+    # Home scan finds no short, no candidates, and shorts tab cannot be opened
     worker.find_target_short_on_home = MagicMock(return_value=None)
+    worker.fetch_home_shorts = MagicMock(return_value=[])
+    worker.click_shorts_tab = MagicMock(return_value=False)
 
     total_watched = worker._run_shorts_cycle(session_watched_keys=set())
     assert total_watched == 0
     worker.find_target_short_on_home.assert_called_once()
+    worker.click_shorts_tab.assert_called_once()
+
+
+def test_run_shorts_cycle_falls_back_to_random_short_and_enters_reel():
+    """Verify that if no target Short is matched on Home, a random candidate Short is clicked and enters reel loop."""
+    mock_mgr = MagicMock()
+    mock_mgr.get_int.side_effect = lambda key, default: 10 if key in ("TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit") else default
+
+    worker = WatchingWorker(
+        account=Account(email="test@gmail.com", password="pwd"),
+        channels=[Channel(name="Target Channel", url="https://youtube.com/@target")],
+        config_mgr=mock_mgr,
+        stats_store=MagicMock(),
+        log_queue=queue.Queue(),
+        stop_event=threading.Event(),
+        pause_event=threading.Event(),
+    )
+    worker.driver = MagicMock()
+
+    candidate = {"title": "Random Short 1", "url": "https://youtube.com/shorts/rnd1", "video_id": "rnd1"}
+    worker.find_target_short_on_home = MagicMock(return_value=None)
+    worker.fetch_home_shorts = MagicMock(return_value=[candidate])
+    worker.click_home_short = MagicMock(return_value=True)
+    worker.scroll_to_next_short = MagicMock()
+    worker._run_shorts_reel_loop = MagicMock(return_value=(2, 3, "target_achieved"))
+
+    with patch("time.sleep"), patch("src.automation.watching_worker.human_like_delay"):
+        total_watched = worker._run_shorts_cycle(session_watched_keys=set())
+
+    assert total_watched == 2
+    worker.click_home_short.assert_called_once_with(candidate)
+    worker.scroll_to_next_short.assert_called_once()
+    worker._run_shorts_reel_loop.assert_called_once()
+
+
+def test_run_shorts_cycle_falls_back_to_shorts_tab_when_no_home_shelf():
+    """Verify that if no Short shelf exists on Home, app navigates via click_shorts_tab into reel."""
+    mock_mgr = MagicMock()
+    mock_mgr.get_int.side_effect = lambda key, default: 10 if key in ("TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit") else default
+
+    worker = WatchingWorker(
+        account=Account(email="test@gmail.com", password="pwd"),
+        channels=[Channel(name="Target Channel", url="https://youtube.com/@target")],
+        config_mgr=mock_mgr,
+        stats_store=MagicMock(),
+        log_queue=queue.Queue(),
+        stop_event=threading.Event(),
+        pause_event=threading.Event(),
+    )
+    worker.driver = MagicMock()
+
+    worker.find_target_short_on_home = MagicMock(return_value=None)
+    worker.fetch_home_shorts = MagicMock(return_value=[])
+    worker.click_shorts_tab = MagicMock(return_value=True)
+    worker.get_active_short_info = MagicMock(return_value={"title": "Sidebar Short 1", "video_id": "s1"})
+    worker.scroll_to_next_short = MagicMock()
+    worker._run_shorts_reel_loop = MagicMock(return_value=(1, 4, "target_achieved"))
+
+    with patch("time.sleep"), patch("src.automation.watching_worker.human_like_delay"):
+        total_watched = worker._run_shorts_cycle(session_watched_keys=set())
+
+    assert total_watched == 1
+    worker.click_shorts_tab.assert_called_once()
+    worker.scroll_to_next_short.assert_called_once()
+    worker._run_shorts_reel_loop.assert_called_once()
 
 
 def test_settings_tab_order_and_separation(ctk_app, tmp_path):

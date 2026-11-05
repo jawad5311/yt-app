@@ -725,12 +725,20 @@ class YTBotApp(tk.Tk):
             if "dashboard" in self.views and hasattr(self.views["dashboard"], "set_paused_state"):
                 self.views["dashboard"].set_paused_state(True)
 
-    def show_report_modal(self, message: str = "Generating report... Please do not close the app.") -> None:
+    def show_report_modal(
+        self,
+        message: str = "Generating report, do not close the app.",
+        auto_hide_seconds: Optional[float] = 2.0,
+    ) -> None:
         """Display the modal pop-up indicating report generation in progress."""
         if self.__dict__.get("report_modal", None) is not None:
             try:
                 if self.report_modal.winfo_exists():
+                    self.report_modal.deiconify()
                     self.report_modal.lift()
+                    if not self.__dict__.get("is_closing", False) and auto_hide_seconds:
+                        if hasattr(self.report_modal, "schedule_auto_hide"):
+                            self.report_modal.schedule_auto_hide(auto_hide_seconds)
                     return
             except Exception:
                 pass
@@ -742,6 +750,7 @@ class YTBotApp(tk.Tk):
                 title="Generating Report",
                 message=message,
                 on_close_callback=self._on_report_modal_closed,
+                auto_hide_seconds=auto_hide_seconds if not self.__dict__.get("is_closing", False) else None,
             )
         except Exception as exc:
             logging.debug(f"Could not open ReportProgressModal (headless or mock): {exc}")
@@ -749,30 +758,37 @@ class YTBotApp(tk.Tk):
 
     def update_report_modal_completed(self, success: bool, message: str = "") -> None:
         """Update the report modal to indicate report completion and enable exit."""
+        is_closing = self.__dict__.get("is_closing", False)
+        title = "Report Sent Successfully!" if success else ("Session Ended" if is_closing else "Session Wrap-up Finished")
+        user_msg = (
+            ("The session report has been sent to your email.\nClosing application..." if is_closing else "The session report has been sent to your email.\nYou may now safely close the app.")
+            if success
+            else (message or ("Session wrap-up finished.\nClosing application..." if is_closing else "Session wrap-up finished. You may now close the app."))
+        )
+
         if self.__dict__.get("report_modal", None) is not None:
             try:
                 if self.report_modal.winfo_exists():
-                    is_closing = self.__dict__.get("is_closing", False)
-                    if is_closing:
-                        title = "Report Sent Successfully!" if success else "Session Ended"
-                        user_msg = (
-                            "The session report has been sent to your email.\nClosing application..."
-                            if success
-                            else (message or "Session wrap-up finished.\nClosing application...")
-                        )
-                        self.report_modal.set_completed(success=success, title=title, message=user_msg, auto_close=True)
-                    else:
-                        title = "Report Sent Successfully!" if success else "Session Wrap-up Finished"
-                        user_msg = (
-                            "The session report has been sent to your email.\nYou may now safely close the app."
-                            if success
-                            else (message or "Session wrap-up finished. You may now close the app.")
-                        )
-                        self.report_modal.set_completed(success=success, title=title, message=user_msg, auto_close=False)
+                    self.report_modal.set_completed(success=success, title=title, message=user_msg, auto_close=is_closing)
                     return
             except Exception as exc:
                 logging.debug(f"Could not update report modal: {exc}")
                 self.report_modal = None
+
+        if not is_closing:
+            try:
+                from .views.report_modal import ReportProgressModal
+
+                modal = ReportProgressModal(
+                    parent=self,
+                    title="Report Sent Successfully!" if success else "Session Completed",
+                    message=user_msg,
+                    on_close_callback=self._on_report_modal_closed,
+                )
+                modal.set_completed(success=success, title=title, message=user_msg, auto_close=False)
+                self.report_modal = modal
+            except Exception as exc:
+                logging.debug(f"Could not open completed ReportProgressModal: {exc}")
 
     def _on_report_modal_closed(self) -> None:
         """Callback when report modal is dismissed."""
@@ -785,7 +801,7 @@ class YTBotApp(tk.Tk):
             return
         mode_label = "browsing" if getattr(self, "current_mode", "automation") == "watching" else "automation"
         emit(self.log_queue, f"Stopping {mode_label} session... Please wait for workers to cleanup.")
-        self.show_report_modal("Generating report... Please do not close the app.")
+        self.show_report_modal("Generating report, do not close the app.", auto_hide_seconds=2.0)
         dashboard = self.views.get("dashboard")
         if dashboard is not None:
             dashboard.set_status("Stopping session... Cleaning up.", "warning")
