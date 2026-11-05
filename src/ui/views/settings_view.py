@@ -7,6 +7,7 @@ from tkinter import messagebox
 from typing import Any, Dict, List, Optional
 
 from ...automation.email_reporter import EmailReporter, SessionReport
+from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_SHORTS_MAX_RUNS
 from ..components import (
     Button,
     CheckBox,
@@ -245,6 +246,20 @@ class SettingsView(Frame):
         self.cooldown_entry.insert(0, str(int(cd_val)) if cd_val.is_integer() else str(cd_val))
         self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
+        Label(scroll_playback, text="Default Target Views per Video (Max Views Cap):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_playback,
+            text="Default views target / max runs cap for new long-form videos added to queue (0 = unlimited).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.default_video_views_entry = Entry(scroll_playback, width=100)
+        initial_video_views = self.config_mgr.get_int("DefaultVideoTargetViews", DEFAULT_MAX_RUNS) if self.config_mgr else DEFAULT_MAX_RUNS
+        self.default_video_views_entry.insert(0, str(initial_video_views))
+        self.default_video_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
         # ---------------------------------------------------------
         # Tab 3: Shorts
         # ---------------------------------------------------------
@@ -294,6 +309,20 @@ class SettingsView(Frame):
         self.total_non_target_shorts_limit_entry.pack(anchor="w", padx=15, pady=(0, 15))
         # Alias for backward compatibility
         self.non_target_shorts_limit_entry = self.total_non_target_shorts_limit_entry
+
+        Label(scroll_shorts, text="Default Max Views per Short:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_shorts,
+            text="Default max views cap assigned to new YouTube Shorts added to queue (0 = unlimited).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.default_shorts_views_entry = Entry(scroll_shorts, width=100)
+        initial_shorts_views = self.config_mgr.get_int("DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS) if self.config_mgr else DEFAULT_SHORTS_MAX_RUNS
+        self.default_shorts_views_entry.insert(0, str(initial_shorts_views))
+        self.default_shorts_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
         # Tab 4: Ads
@@ -591,6 +620,20 @@ class SettingsView(Frame):
             self._notify_result(False, "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
             return
 
+        # 8a. Default Video Target Views
+        if hasattr(self, "default_video_views_entry"):
+            raw_vid_views = self.default_video_views_entry.get().strip()
+            try:
+                if not raw_vid_views or "." in raw_vid_views:
+                    raise ValueError
+                v_views_val = int(raw_vid_views)
+                if v_views_val < 0 or v_views_val > 1000000:
+                    raise ValueError
+                validated["DefaultVideoTargetViews"] = v_views_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Target Views per Video must be a valid integer >= 0 (0 = unlimited).")
+                return
+
         # 8b. Shorts limits
         if hasattr(self, "target_shorts_cycle_entry"):
             raw_target = self.target_shorts_cycle_entry.get().strip()
@@ -642,6 +685,20 @@ class SettingsView(Frame):
                 validated["NonTargetShortsLimit"] = non_target_val
             except (ValueError, TypeError):
                 self._notify_result(False, "Max Non-Target Shorts Limit must be a valid integer between 1 and 500.")
+                return
+
+        # 8c. Default Shorts Max Views
+        if hasattr(self, "default_shorts_views_entry"):
+            raw_sh_views = self.default_shorts_views_entry.get().strip()
+            try:
+                if not raw_sh_views or "." in raw_sh_views:
+                    raise ValueError
+                s_views_val = int(raw_sh_views)
+                if s_views_val < 0 or s_views_val > 1000000:
+                    raise ValueError
+                validated["DefaultShortsMaxViews"] = s_views_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Max Views per Short must be a valid integer >= 0 (0 = unlimited).")
                 return
 
         # 9. Automation loops (if present)

@@ -83,6 +83,8 @@ class ConfigManager:
     DEFAULT_DATA: Dict[str, Any] = {
         "settings": {
             "SystemName": "",
+            "DefaultVideoTargetViews": 5,
+            "DefaultShortsMaxViews": 10,
             "AccountsFile": "accounts.txt",
             "DirectLinkFallback": False,
             "WatchtimeDuration": DEFAULT_WATCHTIME_DURATION,

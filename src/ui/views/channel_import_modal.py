@@ -1,7 +1,7 @@
 """Selection Preview Modal for importing videos fetched from a YouTube channel."""
 
 from tkinter import messagebox
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from .. import ttk_adapter as ctk
 from ..components import Toplevel
@@ -19,6 +19,16 @@ from ...utils.helpers import clean_youtube_url
 from ..tooltip import add_tooltip
 
 
+def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
+    if not mgr:
+        return default
+    try:
+        val = mgr.get_int(key, default)
+        return val if type(val) is int else default
+    except Exception:
+        return default
+
+
 class ChannelImportModal(Toplevel):
     """Modal dialog allowing users to review and selectively import fetched channel videos."""
 
@@ -31,6 +41,7 @@ class ChannelImportModal(Toplevel):
         existing_video_ids: Set[str],
         on_import: Callable[[List[VideoTask]], None],
         fetch_result: Optional[ChannelFetchResult] = None,
+        config_mgr: Optional[Any] = None,
     ):
         super().__init__(parent)
         self.channel_name = channel_name
@@ -39,10 +50,13 @@ class ChannelImportModal(Toplevel):
         self.existing_video_ids = existing_video_ids
         self.on_import = on_import
         self.fetch_result = fetch_result
+        self.config_mgr = config_mgr
+        self.default_video_views = _get_cfg_int(config_mgr, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+        self.default_shorts_views = _get_cfg_int(config_mgr, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
 
         self.title(f"Import Channel Videos — {channel_name}")
-        self.geometry("780x620")
-        self.minsize(650, 480)
+        self.geometry("860x620")
+        self.minsize(700, 480)
         self.grab_set()
 
         # Selection state: map video_id -> BooleanVar
@@ -209,6 +223,31 @@ class ChannelImportModal(Toplevel):
         # Default to "Full Video" per requirement
         self.duration_option.set("Full Video" if "Full Video" in WATCHTIME_OPTIONS else DEFAULT_WATCHTIME_DURATION)
         self.duration_option.pack(side="left")
+
+        has_regular = any(not (getattr(v, "is_short", False) or ("/shorts/" in (v.url or ""))) for v in self.fetched_videos)
+        has_shorts = any((getattr(v, "is_short", False) or ("/shorts/" in (v.url or ""))) for v in self.fetched_videos)
+
+        if has_regular:
+            ctk.CTkLabel(
+                left_footer,
+                text="Target Views:",
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(side="left", padx=(15, 5))
+            self.video_views_entry = ctk.CTkEntry(left_footer, width=50)
+            self.video_views_entry.insert(0, str(self.default_video_views))
+            self.video_views_entry.pack(side="left")
+            add_tooltip(self.video_views_entry, "Target views / max runs cap for imported long-form videos.")
+
+        if has_shorts:
+            ctk.CTkLabel(
+                left_footer,
+                text="Max Views (Shorts):",
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(side="left", padx=(15, 5))
+            self.shorts_views_entry = ctk.CTkEntry(left_footer, width=50)
+            self.shorts_views_entry.insert(0, str(self.default_shorts_views))
+            self.shorts_views_entry.pack(side="left")
+            add_tooltip(self.shorts_views_entry, "Max views cap for imported YouTube Shorts.")
 
         right_footer = ctk.CTkFrame(footer, fg_color="transparent")
         right_footer.pack(side="right")
@@ -377,6 +416,24 @@ class ChannelImportModal(Toplevel):
         selected_ids = {vid for vid, var in self.selected_vars.items() if var.get()}
         chosen_duration = self.duration_option.get()
 
+        custom_video_views = getattr(self, "default_video_views", DEFAULT_MAX_RUNS)
+        if hasattr(self, "video_views_entry"):
+            try:
+                v = int(self.video_views_entry.get().strip())
+                if v >= 0:
+                    custom_video_views = v
+            except (ValueError, TypeError):
+                pass
+
+        custom_shorts_views = getattr(self, "default_shorts_views", DEFAULT_SHORTS_MAX_RUNS)
+        if hasattr(self, "shorts_views_entry"):
+            try:
+                s = int(self.shorts_views_entry.get().strip())
+                if s >= 0:
+                    custom_shorts_views = s
+            except (ValueError, TypeError):
+                pass
+
         tasks_to_add: List[VideoTask] = []
         for video in self.fetched_videos:
             if video.video_id in selected_ids:
@@ -392,7 +449,7 @@ class ChannelImportModal(Toplevel):
                     duration_text=video.duration_text,
                     enabled=True,
                     target_multiplier=0.0 if is_s else DEFAULT_TARGET_MULTIPLIER,
-                    max_runs=DEFAULT_SHORTS_MAX_RUNS if is_s else DEFAULT_MAX_RUNS,
+                    max_runs=custom_shorts_views if is_s else custom_video_views,
                 )
                 tasks_to_add.append(task)
 

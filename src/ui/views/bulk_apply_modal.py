@@ -17,6 +17,16 @@ from ...models.video_task import (
 )
 
 
+def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
+    if not mgr:
+        return default
+    try:
+        val = mgr.get_int(key, default)
+        return val if type(val) is int else default
+    except Exception:
+        return default
+
+
 class BulkApplyModal(Toplevel):
     """Modal dialog for bulk configuring target multiplier and max views cap across all queued videos or shorts."""
 
@@ -161,7 +171,11 @@ class BulkApplyModal(Toplevel):
             anchor="w",
         ).pack(fill="x", padx=16, pady=(0, 6))
 
-        init_views = DEFAULT_SHORTS_MAX_RUNS if self.shorts_only else DEFAULT_MAX_RUNS
+        cfg = getattr(self.app_controller, "config_mgr", None)
+        if self.shorts_only:
+            init_views = _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+        else:
+            init_views = _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
         if self.tasks:
             for t in self.tasks:
                 if getattr(t, "max_runs", 0) > 0:

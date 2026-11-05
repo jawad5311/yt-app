@@ -2125,14 +2125,18 @@ class WatchingWorker:
         )
 
         inherited_mult = DEFAULT_TARGET_MULTIPLIER
-        inherited_max_runs = DEFAULT_MAX_RUNS
+        inherited_max_runs = (
+            self.config_mgr.get_int("DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+            if self.config_mgr
+            else DEFAULT_MAX_RUNS
+        )
+        if type(inherited_max_runs) is not int:
+            inherited_max_runs = DEFAULT_MAX_RUNS
         raw_q = self.config_mgr.get_video_queue()
         for q_item in raw_q:
             if (q_item.get("channel") or "").strip().lower() == channel_display.strip().lower():
                 if q_item.get("target_multiplier", 0.0) > 0:
                     inherited_mult = float(q_item["target_multiplier"])
-                if q_item.get("max_runs", 0) > 0:
-                    inherited_max_runs = int(q_item["max_runs"])
                 break
 
         video_task = VideoTask(
@@ -3240,12 +3244,19 @@ class WatchingWorker:
                         f"Short '{title}' ({full_url}) from targeted channel '{ch_display}' is not in Shorts queue. Adding to Shorts queue...",
                         logging.INFO,
                     )
+                    def_shorts_max = (
+                        self.config_mgr.get_int("DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+                        if self.config_mgr
+                        else DEFAULT_SHORTS_MAX_RUNS
+                    )
+                    if type(def_shorts_max) is not int:
+                        def_shorts_max = DEFAULT_SHORTS_MAX_RUNS
                     new_task = VideoTask(
                         url=full_url,
                         title=title,
                         channel=ch_display,
                         enabled=True,
-                        max_runs=DEFAULT_SHORTS_MAX_RUNS,
+                        max_runs=def_shorts_max,
                         target_multiplier=0.0,
                     )
                     registered_task = self._ensure_video_in_queue(new_task)

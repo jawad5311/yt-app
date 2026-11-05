@@ -26,8 +26,22 @@ from ...utils.scroll_helper import setup_smooth_scrolling
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 
 
+def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
+    if not mgr:
+        return default
+    try:
+        val = mgr.get_int(key, default)
+        return val if type(val) is int else default
+    except Exception:
+        return default
+
+
 class QueueView(Frame):
     shorts_only: bool = False
+
+    @property
+    def config_mgr(self) -> Any:
+        return getattr(self.app_controller, "config_mgr", None)
 
     def __init__(self, parent, app_controller, shorts_only: bool = False):
         super().__init__(parent, corner_radius=10)
@@ -300,11 +314,17 @@ class QueueView(Frame):
         if is_editing:
             target_task = self.video_tasks[index]
         else:
+            cfg = getattr(self.app_controller, "config_mgr", None)
+            init_runs = (
+                _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+                if getattr(self, "shorts_only", False)
+                else _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+            )
             target_task = VideoTask(
                 watchtime_duration=self._default_watch_duration(),
                 channel=preselected_channel or "",
                 target_multiplier=DEFAULT_TARGET_MULTIPLIER,
-                max_runs=DEFAULT_MAX_RUNS,
+                max_runs=init_runs,
             )
 
         modal = ctk.CTkToplevel(self)
@@ -413,20 +433,22 @@ class QueueView(Frame):
         else:
             target_multiplier_entry = None
 
+        cfg = getattr(self.app_controller, "config_mgr", None)
         if is_shorts_view:
-            views_label = "Max Views Cap (0 or blank = unlimited, default 10):"
-            views_placeholder = "e.g. 10 (0 or blank = unlimited)"
+            configured_default_runs = _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+            views_label = f"Max Views Cap (0 or blank = unlimited, default {configured_default_runs}):"
+            views_placeholder = f"e.g. {configured_default_runs} (0 or blank = unlimited)"
         else:
-            views_label = "Max Views Cap (Full Runs Limit, 0 or blank = unlimited, default 5):"
-            views_placeholder = "e.g. 5 (0 or blank = unlimited)"
+            configured_default_runs = _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+            views_label = f"Max Views Cap (Full Runs Limit, 0 or blank = unlimited, default {configured_default_runs}):"
+            views_placeholder = f"e.g. {configured_default_runs} (0 or blank = unlimited)"
 
         ctk.CTkLabel(modal, text=views_label, font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=20, pady=(5, 2))
         max_runs_entry = ctk.CTkEntry(modal, placeholder_text=views_placeholder, width=460)
         if target_task.max_runs > 0:
             max_runs_entry.insert(0, str(target_task.max_runs))
         elif not is_editing:
-            default_runs_val = DEFAULT_SHORTS_MAX_RUNS if is_shorts_view else DEFAULT_MAX_RUNS
-            max_runs_entry.insert(0, str(default_runs_val))
+            max_runs_entry.insert(0, str(configured_default_runs))
         max_runs_entry.pack(padx=20, pady=(0, 10))
 
         def on_submit():
@@ -449,7 +471,7 @@ class QueueView(Frame):
                     target_mult_val = DEFAULT_TARGET_MULTIPLIER if not is_editing else 0.0
 
             raw_limit = max_runs_entry.get().strip()
-            default_runs_cap = DEFAULT_SHORTS_MAX_RUNS if is_shorts_view else DEFAULT_MAX_RUNS
+            default_runs_cap = configured_default_runs
             try:
                 max_runs_val = max(0, int(raw_limit)) if raw_limit else (default_runs_cap if not is_editing else 0)
             except ValueError:

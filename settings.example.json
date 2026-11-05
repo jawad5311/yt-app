@@ -1,6 +1,8 @@
 {
   "settings": {
     "SystemName": "",
+    "DefaultVideoTargetViews": 5,
+    "DefaultShortsMaxViews": 10,
     "AccountsFile": "accounts.txt",
     "DirectLinkFallback": false,
     "WatchtimeDuration": "Full Video",

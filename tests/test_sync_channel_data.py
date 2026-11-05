@@ -259,7 +259,7 @@ def test_sync_single_channel_data_fetches_and_adds_to_queue(ctk_app):
         assert "cancel_event" in kwargs
         assert "progress_callback" in kwargs
 
-    # Added tasks should be saved with 3.0x multiplier and 5 max runs
+    # Added tasks should be saved with proper video and shorts defaults
     app.config_mgr.append_video_tasks.assert_called_once()
     appended = app.config_mgr.append_video_tasks.call_args[0][0]
     assert len(appended) == 2
@@ -267,8 +267,8 @@ def test_sync_single_channel_data_fetches_and_adds_to_queue(ctk_app):
     assert appended[0]["target_multiplier"] == 3.0
     assert appended[0]["max_runs"] == 5
     assert appended[1]["url"] == "https://youtube.com/shorts/newshort1"
-    assert appended[1]["target_multiplier"] == 3.0
-    assert appended[1]["max_runs"] == 5
+    assert appended[1]["target_multiplier"] == 0.0
+    assert appended[1]["max_runs"] == 10
 
     view.destroy()
 
@@ -352,7 +352,7 @@ def test_sync_data_all_syncs_all_channels(ctk_app):
 
     assert appended[1]["url"] == "https://youtube.com/shorts/c2s1"
     assert appended[1]["channel"] == "ChanTwo"
-    assert appended[1]["target_multiplier"] == 3.0
-    assert appended[1]["max_runs"] == 5
+    assert appended[1]["target_multiplier"] == 0.0
+    assert appended[1]["max_runs"] == 10
 
     view.destroy()

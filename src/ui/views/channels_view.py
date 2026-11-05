@@ -14,7 +14,7 @@ from ...models.channel import (
     canonical_channel_url,
     clean_channel_url,
 )
-from ...models.video_task import VideoTask, safe_float
+from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_SHORTS_MAX_RUNS, VideoTask, safe_float
 from ...models.watch_stats import (
     format_hours,
     format_totals_line,
@@ -31,6 +31,16 @@ from ...utils.helpers import extract_video_id
 from ...utils.scroll_helper import setup_smooth_scrolling
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 from .channel_import_modal import ChannelImportModal
+
+def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
+    if not mgr:
+        return default
+    try:
+        val = mgr.get_int(key, default)
+        return val if type(val) is int else default
+    except Exception:
+        return default
+
 
 # Called with the saved channel so callers (e.g. the queue modal) can react.
 OnChannelSaved = Callable[[Channel], None]
@@ -1051,6 +1061,7 @@ class ChannelsView(Frame):
                 existing_video_ids=existing_ids,
                 on_import=_handle_import,
                 fetch_result=res,
+                config_mgr=self.app_controller.config_mgr if self.app_controller else None,
             )
 
         name, url = channel.name, channel.url
@@ -1295,6 +1306,7 @@ class ChannelsView(Frame):
                 existing_video_ids=existing_ids,
                 on_import=_handle_import,
                 fetch_result=res,
+                config_mgr=self.app_controller.config_mgr if self.app_controller else None,
             )
 
         self._submit_channel_job(loading, prog, _bg_fetch, _on_fetch_done)
@@ -2228,6 +2240,10 @@ class ChannelsView(Frame):
                         if changed:
                             total_updated += 1
                     else:
+                        cfg = getattr(self.app_controller, "config_mgr", None)
+                        def_video_views = _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+                        def_shorts_views = _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+                        is_s = getattr(f_task, "is_short", False) or ("/shorts/" in (getattr(f_task, "url", "") or ""))
                         new_task = VideoTask(
                             url=f_task.url,
                             title=f_task.title,
@@ -2235,12 +2251,13 @@ class ChannelsView(Frame):
                             title_3=getattr(f_task, "title_3", "") or "",
                             keywords=getattr(f_task, "keywords", "") or f_task.title,
                             channel=ch.name,
-                            target_multiplier=3.0,
-                            max_runs=5,
+                            target_multiplier=0.0 if is_s else 3.0,
+                            max_runs=def_shorts_views if is_s else def_video_views,
                             watchtime_duration="Full Video",
                             enabled=True,
                             duration_seconds=getattr(f_task, "duration_seconds", 0.0),
                             duration_text=getattr(f_task, "duration_text", ""),
+                            is_short_override=is_s,
                         )
                         all_added_tasks.append(new_task)
                         if vid:
@@ -2410,6 +2427,11 @@ class ChannelsView(Frame):
                         if changed:
                             total_updated += 1
                     else:
+                        def_shorts_views = _get_cfg_int(
+                            getattr(self.app_controller, "config_mgr", None),
+                            "DefaultShortsMaxViews",
+                            DEFAULT_SHORTS_MAX_RUNS,
+                        )
                         new_task = VideoTask(
                             url=f_task.url,
                             title=f_task.title,
@@ -2417,8 +2439,8 @@ class ChannelsView(Frame):
                             title_3=getattr(f_task, "title_3", "") or "",
                             keywords=getattr(f_task, "keywords", "") or f_task.title,
                             channel=ch.name,
-                            target_multiplier=3.0,
-                            max_runs=5,
+                            target_multiplier=0.0,
+                            max_runs=def_shorts_views,
                             watchtime_duration="Full Video",
                             enabled=True,
                             duration_seconds=getattr(f_task, "duration_seconds", 0.0),
@@ -2619,6 +2641,10 @@ class ChannelsView(Frame):
                     if changed:
                         updated_count += 1
                 else:
+                    cfg = getattr(self.app_controller, "config_mgr", None)
+                    def_video_views = _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+                    def_shorts_views = _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+                    is_s = getattr(f_task, "is_short", False) or ("/shorts/" in (getattr(f_task, "url", "") or ""))
                     new_task = VideoTask(
                         url=f_task.url,
                         title=f_task.title,
@@ -2626,12 +2652,13 @@ class ChannelsView(Frame):
                         title_3=getattr(f_task, "title_3", "") or "",
                         keywords=getattr(f_task, "keywords", "") or f_task.title,
                         channel=channel.name,
-                        target_multiplier=3.0,
-                        max_runs=5,
+                        target_multiplier=0.0 if is_s else 3.0,
+                        max_runs=def_shorts_views if is_s else def_video_views,
                         watchtime_duration="Full Video",
                         enabled=True,
                         duration_seconds=getattr(f_task, "duration_seconds", 0.0),
                         duration_text=getattr(f_task, "duration_text", ""),
+                        is_short_override=is_s,
                     )
                     added_tasks.append(new_task)
                     if vid:
@@ -2868,6 +2895,10 @@ class ChannelsView(Frame):
                     if changed:
                         updated_count += 1
                 else:
+                    cfg = getattr(self.app_controller, "config_mgr", None)
+                    def_video_views = _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+                    def_shorts_views = _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+                    is_s = getattr(f_task, "is_short", False) or ("/shorts/" in (getattr(f_task, "url", "") or ""))
                     new_task = VideoTask(
                         url=f_task.url,
                         title=f_task.title,
@@ -2875,12 +2906,13 @@ class ChannelsView(Frame):
                         title_3=getattr(f_task, "title_3", "") or "",
                         keywords=getattr(f_task, "keywords", "") or f_task.title,
                         channel=channel.name,
-                        target_multiplier=3.0,
-                        max_runs=5,
+                        target_multiplier=0.0 if is_s else 3.0,
+                        max_runs=def_shorts_views if is_s else def_video_views,
                         watchtime_duration="Full Video",
                         enabled=True,
                         duration_seconds=getattr(f_task, "duration_seconds", 0.0),
                         duration_text=getattr(f_task, "duration_text", ""),
+                        is_short_override=is_s,
                     )
                     added_tasks.append(new_task)
                     if vid:
