@@ -2783,6 +2783,8 @@ class WatchingWorker:
 
     def scroll_to_next_short(self, prev_url: Optional[str] = None) -> bool:
         """Scroll down to the next Short in the YouTube Shorts reel and verify progression."""
+        if not getattr(self, "driver", None):
+            return False
         prev = prev_url or getattr(self.driver, "current_url", "")
         clicked = False
         try:
@@ -2839,7 +2841,7 @@ class WatchingWorker:
 
     def _skip_non_target_reel(self, prev_url: Optional[str] = None) -> bool:
         """Advance past the current Short in the YouTube Shorts reel to the next one."""
-        prev = prev_url or getattr(self.driver, "current_url", "")
+        prev = prev_url or getattr(getattr(self, "driver", None), "current_url", "")
         res = self.scroll_to_next_short(prev_url=prev)
         human_like_delay(1.0, 1.8)
         return res
@@ -3214,9 +3216,7 @@ class WatchingWorker:
                             f"Skipping Target Short '{title}' from channel '{ch_display}': within {cooldown_hours:g}h cooldown period ({rem_str} remaining).",
                             logging.INFO,
                         )
-                        prev_u = full_url or getattr(self.driver, "current_url", "")
-                        self.scroll_to_next_short(prev_url=prev_u)
-                        human_like_delay(1.0, 1.8)
+                        self._skip_non_target_reel()
                         continue
 
                 # Reset scrolling page non-target counter back to 0!
