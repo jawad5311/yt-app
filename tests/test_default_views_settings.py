@@ -270,3 +270,24 @@ def test_channels_view_sync_uses_configured_defaults(ctk_app, tmp_path):
     assert s_task["target_multiplier"] == 0.0
 
     view.destroy()
+
+
+def test_max_ad_watch_time_in_ads_tab(ctk_app, tmp_path):
+    config_path = tmp_path / "settings.json"
+    mgr = ConfigManager(config_file=config_path)
+    mgr.set_setting("MaxAdWatchSeconds", 35)
+    app_ctrl = MagicMock()
+    app_ctrl.config_mgr = mgr
+    view = SettingsView(ctk_app, app_ctrl)
+
+    assert view.max_ad_entry.get() == "35"
+    tab_ads = view.tabview._tab_dict["Ads"]
+    curr = view.max_ad_entry.master
+    is_descendant = False
+    while curr:
+        if curr == tab_ads:
+            is_descendant = True
+            break
+        curr = getattr(curr, "master", None)
+    assert is_descendant, "max_ad_entry must be placed inside the Ads tab"
+    view.destroy()

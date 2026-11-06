@@ -190,20 +190,6 @@ class SettingsView(Frame):
             self.browsing_unlimited_switch.deselect()
         self.browsing_unlimited_switch.pack(anchor="w", padx=15, pady=(5, 15))
 
-        Label(scroll_playback, text="Max Ad Watch Time (seconds; 0 = unlimited):", font=Font(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
-        )
-        Label(
-            scroll_playback,
-            text="Maximum duration to watch an ad before attempting to skip it. 0 = watch entire ad.",
-            font=Font(size=12),
-            style="Muted.TLabel",
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.max_ad_entry = Entry(scroll_playback, width=100)
-        initial_max_ad = self.config_mgr.get_int("MaxAdWatchSeconds", 0) if self.config_mgr else 0
-        self.max_ad_entry.insert(0, str(initial_max_ad))
-        self.max_ad_entry.pack(anchor="w", padx=15, pady=(0, 15))
-
         Label(scroll_playback, text="Full Video Timeout (minutes; 0 = unlimited):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
@@ -346,6 +332,20 @@ class SettingsView(Frame):
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 15))
+        Label(scroll_ads, text="Max Ad Watch Time (seconds; 0 = unlimited):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_ads,
+            text="Maximum duration to watch an ad before attempting to skip it. 0 = watch entire ad.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.max_ad_entry = Entry(scroll_ads, width=100)
+        initial_max_ad = self.config_mgr.get_int("MaxAdWatchSeconds", 0) if self.config_mgr else 0
+        self.max_ad_entry.insert(0, str(initial_max_ad))
+        self.max_ad_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
 
         # ---------------------------------------------------------
         # Tab 5: Interactivity
