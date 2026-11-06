@@ -570,6 +570,142 @@ return (function() {
 """
 
 
+
+SUGGESTED_SHORTS_JS = r"""
+return (function() {
+    var shelf = document.querySelector('ytd-reel-shelf-renderer');
+    if (!shelf) return [];
+
+    var itemsContainer = shelf.querySelector('#items-container') || shelf.querySelector('#items') || shelf;
+    var containerRect = itemsContainer.getBoundingClientRect();
+
+    function extractVideoId(href) {
+        if (!href) return '';
+        var m = href.match(/\/shorts\/([A-Za-z0-9_\-]{11})/);
+        return m ? m[1] : '';
+    }
+
+    var rawCards = shelf.querySelectorAll(
+        '#items > ytm-shorts-lockup-view-model-v2, ' +
+        '#items > ytd-reel-item-renderer, ' +
+        '#items > shorts-lockup-view-model, ' +
+        'ytm-shorts-lockup-view-model-v2, ' +
+        'ytd-reel-item-renderer, ' +
+        'shorts-lockup-view-model'
+    );
+
+    var results = [];
+    var seenIds = {};
+
+    for (var i = 0; i < rawCards.length; i++) {
+        var card = rawCards[i];
+        if (!card) continue;
+
+        if (card.parentElement && card.parentElement.closest &&
+            card.parentElement.closest('ytm-shorts-lockup-view-model-v2, ytd-reel-item-renderer, shorts-lockup-view-model')) {
+            continue;
+        }
+
+        var linkEl = card.querySelector('a.shortsLockupViewModelHostEndpoint, a.reel-item-endpoint, a[href*="/shorts/"]');
+        if (!linkEl && card.tagName === 'A' && (card.getAttribute('href') || '').indexOf('/shorts/') !== -1) {
+            linkEl = card;
+        }
+        if (!linkEl) continue;
+
+        var href = linkEl.getAttribute('href') || '';
+        var vidId = extractVideoId(href);
+        if (!vidId || seenIds[vidId]) continue;
+        seenIds[vidId] = true;
+
+        var titleEl = card.querySelector('h3 a, a[title], .shortsLockupViewModelHostMetadataTitle a, #video-title, h3, [class*="title"], [class*="Title"]');
+        var title = '';
+        if (titleEl) {
+            title = (titleEl.getAttribute('title') || titleEl.textContent || '').trim();
+        }
+        if (!title && linkEl) {
+            title = (linkEl.getAttribute('title') || linkEl.getAttribute('aria-label') || '').trim();
+        }
+        if (title && title.indexOf(' - play Short') !== -1) {
+            title = title.replace(' - play Short', '').trim();
+        }
+
+        var viewsEl = card.querySelector('.shortsLockupViewModelHostMetadataSubhead, .shortsLockupViewModelHostOutsideMetadataSubhead, #metadata-line, [class*="subhead"]');
+        var viewsText = viewsEl ? (viewsEl.textContent || '').trim() : '';
+
+        var channelText = '';
+        var channelEl = card.querySelector('a[href*="/@"], a[href*="/channel/"], [class*="channel"], [class*="Channel"], #channel-name');
+        if (channelEl) {
+            channelText = (channelEl.textContent || channelEl.getAttribute('title') || '').trim();
+        }
+        if (!channelText) {
+            var aria = (linkEl.getAttribute('aria-label') || '');
+            var byMatch = aria.match(/\sby\s([^0-9]+?)(?:\s[0-9]|\sago|\s-\splay|\.|$)/i);
+            if (byMatch && byMatch[1]) {
+                channelText = byMatch[1].trim();
+            }
+        }
+
+        var rect = card.getBoundingClientRect();
+        var isVisible = (
+            rect.width > 0 && rect.height > 0 &&
+            rect.right > (containerRect.left + 15) &&
+            rect.left < (containerRect.right - 15)
+        );
+
+        results.push({
+            index: results.length,
+            href: href,
+            video_id: vidId,
+            url: href.startsWith('http') ? href : ('https://www.youtube.com' + href),
+            title: title || ('Short ' + vidId),
+            channel: channelText,
+            views: viewsText,
+            is_visible: isVisible,
+            source: "Suggested section",
+            source_type: "suggested"
+        });
+    }
+
+    return results;
+})();
+"""
+
+CLICK_SUGGESTED_NEXT_ARROW_JS = r"""
+return (function() {
+    var shelf = document.querySelector('ytd-reel-shelf-renderer');
+    if (!shelf) return false;
+
+    var nextBtn = shelf.querySelector('#right-arrow button') ||
+                  shelf.querySelector('#right-arrow ytd-button-renderer button') ||
+                  shelf.querySelector('#right-arrow ytd-button-renderer') ||
+                  shelf.querySelector('button[aria-label="Next"]') ||
+                  shelf.querySelector('button[aria-label="Next page"]') ||
+                  shelf.querySelector('#right-arrow');
+
+    if (!nextBtn) return false;
+
+    var isDisabled = nextBtn.disabled ||
+                     nextBtn.getAttribute('aria-disabled') === 'true' ||
+                     nextBtn.classList.contains('yt-spec-button-shape-next--disabled') ||
+                     (nextBtn.hasAttribute && nextBtn.hasAttribute('hidden')) ||
+                     nextBtn.offsetParent === null;
+
+    if (isDisabled) return false;
+
+    try {
+        nextBtn.scrollIntoView({behavior: 'smooth', block: 'center'});
+    } catch(e) {}
+
+    try {
+        nextBtn.click();
+        return true;
+    } catch(e) {
+        return false;
+    }
+})();
+"""
+
+
 GET_ACTIVE_SHORT_INFO_JS = r"""
 return (function() {
     var renderers = document.querySelectorAll('ytd-reel-video-renderer');
@@ -2511,6 +2647,180 @@ class WatchingWorker:
 
         return None
 
+
+    def _has_suggested_shorts_shelf(self) -> bool:
+        """Check if a suggested Shorts shelf (ytd-reel-shelf-renderer) exists on current page."""
+        try:
+            return bool(self.driver.execute_script(
+                "return !!document.querySelector('ytd-reel-shelf-renderer');"
+            ))
+        except Exception:
+            return False
+
+    def fetch_suggested_shelf_shorts(self) -> List[Dict[str, Any]]:
+        """Fetch all shorts items from the suggested shorts shelf on watch page, including visibility flags."""
+        try:
+            items = self.driver.execute_script(SUGGESTED_SHORTS_JS)
+            if isinstance(items, list):
+                return items
+        except Exception as exc:
+            emit(self.log_queue, f"Error fetching suggested shelf shorts: {exc}", logging.DEBUG)
+        return []
+
+    def click_suggested_shelf_next_arrow(self) -> bool:
+        """Click the Next arrow button on the suggested shorts shelf carousel to reveal the next 3 shorts."""
+        try:
+            return bool(self.driver.execute_script(CLICK_SUGGESTED_NEXT_ARROW_JS))
+        except Exception as exc:
+            emit(self.log_queue, f"Error clicking suggested shorts next arrow: {exc}", logging.DEBUG)
+            return False
+
+    def click_suggested_short(self, short_info: Dict[str, Any]) -> bool:
+        """Click on the target short card in the suggested shorts shelf."""
+        return self.click_home_short(short_info)
+
+    def find_target_short_on_suggested_shelf(
+        self,
+        session_watched_keys: Optional[Set[str]] = None,
+        max_arrow_clicks: int = 5,
+    ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
+        """
+        Scan the suggested Shorts shelf (<ytd-reel-shelf-renderer>) on the current watch page.
+        Displays 3 shorts per view. Checks visible shorts against the Shorts Queue;
+        if none match, clicks the Next arrow button to reveal the next 3 shorts (up to max_arrow_clicks times).
+        Returns (cand_item, task_item) if a match is found, or None.
+        """
+        cooldown_hours = self._get_cooldown_hours()
+        target_shorts = self.get_target_shorts(filter_cooldown=False)
+        target_channels = self.get_target_channels() if hasattr(self, "get_target_channels") else []
+
+        if not target_shorts and not target_channels:
+            emit(self.log_queue, "No enabled Shorts or targeted Channels configured. Skipping suggested Shorts search.", logging.INFO)
+            return None
+
+        shelf_found = self._has_suggested_shorts_shelf()
+        if not shelf_found:
+            for _ in range(2):
+                if self.stop_event.is_set():
+                    return None
+                try:
+                    self.driver.execute_script(r"""
+                        var sec = document.querySelector('#secondary') || document.querySelector('#related');
+                        if (sec) sec.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        window.scrollBy({top: 600, behavior: 'smooth'});
+                    """)
+                except Exception:
+                    pass
+                human_like_delay(1.0, 1.5)
+                shelf_found = self._has_suggested_shorts_shelf()
+                if shelf_found:
+                    break
+
+        if not shelf_found:
+            emit(self.log_queue, "No suggested Shorts shelf (<ytd-reel-shelf-renderer>) found on this watch page.", logging.INFO)
+            return None
+
+        emit(self.log_queue, "Found Shorts shelf in suggested section. Inspecting visible Shorts...", logging.INFO)
+        try:
+            self.driver.execute_script(r"""
+                var shelf = document.querySelector('ytd-reel-shelf-renderer');
+                if (shelf) shelf.scrollIntoView({behavior: 'smooth', block: 'center'});
+            """)
+            human_like_delay(0.8, 1.2)
+        except Exception:
+            pass
+
+        seen_cand_ids: Set[str] = set()
+        total_candidates_checked = 0
+
+        for slide_idx in range(max_arrow_clicks + 1):
+            if self.stop_event.is_set():
+                return None
+            self.check_pause()
+            if self.stop_event.is_set():
+                return None
+
+            shelf_items = self.fetch_suggested_shelf_shorts()
+            visible_items = [item for item in shelf_items if item.get("is_visible")]
+            if not visible_items and shelf_items:
+                start_i = slide_idx * 3
+                visible_items = shelf_items[start_i : start_i + 3] if start_i < len(shelf_items) else shelf_items[:3]
+
+            for cand in visible_items:
+                cid = cand.get("video_id") or extract_video_id(cand.get("href", ""))
+                if cid and cid not in seen_cand_ids:
+                    seen_cand_ids.add(cid)
+                    total_candidates_checked += 1
+
+            for cand in visible_items:
+                cid = cand.get("video_id") or extract_video_id(cand.get("href", ""))
+                curl = cand.get("url") or cand.get("href", "")
+                if session_watched_keys and (cid in session_watched_keys or curl in session_watched_keys):
+                    continue
+
+                if cid and getattr(self, "stats_store", None) and cooldown_hours > 0:
+                    rec_stat = self.stats_store.get(cid)
+                    if rec_stat and hasattr(rec_stat, "is_on_cooldown"):
+                        try:
+                            res = rec_stat.is_on_cooldown(cooldown_hours)
+                            is_cool = res[0] if (isinstance(res, tuple) and len(res) == 2) else False
+                        except Exception:
+                            is_cool = False
+                        if is_cool:
+                            continue
+
+                m = self.match_home_short([cand], target_shorts, session_watched_keys, target_channels=target_channels)
+                if m:
+                    cand_item, task_item = m
+                    if getattr(self, "stats_store", None) and cooldown_hours > 0:
+                        task_rec = self.stats_store.find_for_task(task_item)
+                        if task_rec and hasattr(task_rec, "is_on_cooldown"):
+                            try:
+                                res = task_rec.is_on_cooldown(cooldown_hours)
+                                is_cool, rem_hours = res if (isinstance(res, tuple) and len(res) == 2) else (False, 0.0)
+                            except Exception:
+                                is_cool, rem_hours = False, 0.0
+                            if is_cool:
+                                rem_str = f"{rem_hours:.1f}h" if rem_hours >= 1.0 else f"{int(rem_hours * 60)}m"
+                                emit(
+                                    self.log_queue,
+                                    f"Skipping matched suggested Short '{cand_item.get('title')}' for task '{task_item.title}': cooldown ({rem_str} remaining).",
+                                    logging.INFO,
+                                )
+                                continue
+
+                    cand_item["source"] = "Suggested section"
+                    cand_item["source_type"] = "suggested"
+                    emit(
+                        self.log_queue,
+                        f"Found matching Short on suggested shelf (slide {slide_idx + 1}): '{cand_item.get('title')}' matching Shorts Queue task '{task_item.title or task_item.url}'.",
+                        logging.INFO,
+                    )
+                    return m
+
+            if slide_idx < max_arrow_clicks and not self.stop_event.is_set():
+                emit(
+                    self.log_queue,
+                    f"None of the visible Shorts on suggested shelf matched Shorts Queue (slide {slide_idx + 1}/{max_arrow_clicks + 1}). Clicking Next arrow to show next 3 Shorts...",
+                    logging.INFO,
+                )
+                clicked = self.click_suggested_shelf_next_arrow()
+                if not clicked:
+                    emit(
+                        self.log_queue,
+                        "Reached end of suggested Shorts carousel or Next arrow button is disabled/hidden.",
+                        logging.INFO,
+                    )
+                    break
+                human_like_delay(1.5, 2.2)
+
+        emit(
+            self.log_queue,
+            f"No matching Short found on suggested shelf ({total_candidates_checked} candidate(s) checked across {slide_idx + 1} slide(s)).",
+            logging.INFO,
+        )
+        return None
+
     def find_target_short_on_home(
         self,
         session_watched_keys: Optional[Set[str]] = None,
@@ -2688,6 +2998,7 @@ class WatchingWorker:
                 matched_el = self.driver.execute_script(r"""
                     var vidId = arguments[0];
                     var links = document.querySelectorAll(
+                        'ytd-reel-shelf-renderer a[href*="' + vidId + '"], ' +
                         'ytd-rich-shelf-renderer a[href*="' + vidId + '"], ' +
                         'grid-shelf-view-model a[href*="' + vidId + '"], ' +
                         'ytd-rich-section-renderer a[href*="' + vidId + '"], ' +
@@ -2741,13 +3052,15 @@ class WatchingWorker:
         task: VideoTask,
         session_watched_keys: Set[str],
         enter_reel: bool = True,
+        source: str = "home",
     ) -> bool:
         """Watch a matched short for 1-3 loops randomly in a single go and record stats."""
         title = short_info.get("title") or task.title or "Short"
         vid_id = short_info.get("video_id") or extract_video_id(task.url)
         full_url = short_info.get("url") or task.url or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
 
-        emit(self.log_queue, f"=== Opening Target Short from Home Feed: '{title}' ({full_url}) ===")
+        source_label = "Suggested Section" if source == "suggested" else "Home Feed"
+        emit(self.log_queue, f"=== Opening Target Short from {source_label}: '{title}' ({full_url}) ===")
         nav_ok = self.click_home_short(short_info)
         if not nav_ok:
             emit(self.log_queue, f"Failed to navigate to short '{title}'.", logging.WARNING)
@@ -3098,16 +3411,42 @@ class WatchingWorker:
                 )
                 break
 
-            # 1. Search YouTube Home feed for a matching Short from Shorts Queue
-            emit(
-                self.log_queue,
-                f"Searching YouTube Home feed for Shorts matching your Shorts Queue (progress: {total_target_shorts_watched}/{cycle_target_shorts} target Shorts, {total_non_target_shorts_seen}/{cycle_max_total_non_target} non-target Shorts)...",
-                logging.INFO,
-            )
-            matched_short = self.find_target_short_on_home(
-                session_watched_keys=session_watched_keys,
-                max_scrolls=3,
-            )
+            # 1. First, search suggested section on watch page if on a watch page or shelf exists
+            matched_short = None
+            cur_url = getattr(self.driver, "current_url", "") or ""
+            if "/watch" in cur_url or self._has_suggested_shorts_shelf():
+                emit(
+                    self.log_queue,
+                    "Checking suggested section on watch page for Shorts matching your Shorts Queue...",
+                    logging.INFO,
+                )
+                matched_short = self.find_target_short_on_suggested_shelf(
+                    session_watched_keys=session_watched_keys,
+                    max_arrow_clicks=5,
+                )
+
+            # 2. If no matching Short on suggested shelf (or not on a watch page), navigate to Home feed
+            if not matched_short:
+                cur_url = getattr(self.driver, "current_url", "") or ""
+                if "/watch" in cur_url or "/shorts" in cur_url:
+                    emit(
+                        self.log_queue,
+                        "No target Short found on suggested shelf. Navigating to YouTube Home feed to find Shorts...",
+                        logging.INFO,
+                    )
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(2.0, 3.5)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+
+                emit(
+                    self.log_queue,
+                    f"Searching YouTube Home feed for Shorts matching your Shorts Queue (progress: {total_target_shorts_watched}/{cycle_target_shorts} target Shorts, {total_non_target_shorts_seen}/{cycle_max_total_non_target} non-target Shorts)...",
+                    logging.INFO,
+                )
+                matched_short = self.find_target_short_on_home(
+                    session_watched_keys=session_watched_keys,
+                    max_scrolls=3,
+                )
 
             if not matched_short:
                 candidates = getattr(self, "_last_home_shorts", None) or self.fetch_home_shorts()
@@ -3225,9 +3564,10 @@ class WatchingWorker:
                 continue
 
             short_item, short_task = matched_short
+            source_desc = short_item.get("source", "Home feed")
             emit(
                 self.log_queue,
-                f"Selected matching Short from Home feed: '{short_task.title or short_item.get('title')}' ({short_item.get('url') or short_task.url}). Clicking to play full short...",
+                f"Selected matching Short from {source_desc}: '{short_task.title or short_item.get('title')}' ({short_item.get('url') or short_task.url}). Clicking to play full short...",
                 logging.INFO,
             )
             played_ok = self._play_target_short(
@@ -3235,6 +3575,7 @@ class WatchingWorker:
                 task=short_task,
                 session_watched_keys=session_watched_keys,
                 enter_reel=False,
+                source=short_item.get("source_type", "home"),
             )
             if not played_ok:
                 emit(self.log_queue, f"Target short '{short_task.title}' could not be navigated via click. Continuing Shorts cycle...", logging.WARNING)
@@ -4109,14 +4450,10 @@ class WatchingWorker:
                         if cycle_long_vids_watched >= target_long_vids_cycle:
                             emit(
                                 self.log_queue,
-                                f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Navigating to YouTube Home to switch to Shorts...",
+                                f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
                                 logging.INFO,
                             )
-                            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                            human_like_delay(2.0, 3.5)
-                            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-
-                        break
+                            break
 
                     if suggested_played:
                         continue
@@ -4169,12 +4506,10 @@ class WatchingWorker:
                             if cycle_long_vids_watched >= target_long_vids_cycle:
                                 emit(
                                     self.log_queue,
-                                    f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Navigating to YouTube Home to switch to Shorts...",
+                                    f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
                                     logging.INFO,
                                 )
-                                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                                human_like_delay(2.0, 3.5)
-                                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                                break
                         else:
                             emit(
                                 self.log_queue,
@@ -4267,14 +4602,22 @@ class WatchingWorker:
                     if cycle_long_vids_watched >= target_long_vids_cycle:
                         emit(
                             self.log_queue,
-                            f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Navigating to YouTube Home to switch to Shorts...",
+                            f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
+                            logging.INFO,
+                        )
+                        self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+                        cycle_long_vids_watched = 0
+                        target_long_vids_cycle = random.randint(3, 5)
+                        suggested_miss_count = 0
+                        emit(
+                            self.log_queue,
+                            f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
                             logging.INFO,
                         )
                         safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
                         human_like_delay(2.0, 3.5)
                         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-
-                    continue
+                        continue
                 else:
                     # Not found on Home feed after 3 attempts: fall back to YouTube search!
                     emit(
