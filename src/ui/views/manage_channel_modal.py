@@ -12,6 +12,7 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from .. import ttk_adapter as ctk
 from ..components import Toplevel
+from ..tooltip import add_tooltip
 
 from ...models.channel import Channel
 from ...models.video_task import VideoTask
@@ -89,12 +90,28 @@ class ManageChannelModal(Toplevel):
             card_mult.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
             current_row += 1
 
+            card_mult_hdr = ctk.CTkFrame(card_mult, fg_color="transparent")
+            card_mult_hdr.pack(fill="x", padx=16, pady=(10, 2))
+
             ctk.CTkLabel(
-                card_mult,
+                card_mult_hdr,
                 text="Target Watch Multiplier (per Video)",
                 font=ctk.CTkFont(size=14, weight="bold"),
                 anchor="w",
-            ).pack(fill="x", padx=16, pady=(10, 2))
+            ).pack(side="left")
+
+            self.multiplier_switch = ctk.CTkSwitch(
+                card_mult_hdr,
+                text="",
+                width=44,
+                command=self._on_multiplier_toggled,
+            )
+            self.multiplier_switch.pack(side="right")
+            self.multiplier_switch.select()
+            add_tooltip(
+                self.multiplier_switch,
+                "Turn ON to edit and apply Target Watch Multiplier.\nTurn OFF to keep current values without updating.",
+            )
 
             ctk.CTkLabel(
                 card_mult,
@@ -112,13 +129,13 @@ class ManageChannelModal(Toplevel):
                     if getattr(t, "target_multiplier", 0.0) > 0:
                         init_mult = t.target_multiplier
                         break
-            init_mult_str = str(int(init_mult)) if init_mult.is_integer() else f"{init_mult:.1f}"
+            self.init_mult_str = str(int(init_mult)) if init_mult.is_integer() else f"{init_mult:.1f}"
 
             mult_row = ctk.CTkFrame(card_mult, fg_color="transparent")
             mult_row.pack(fill="x", padx=16, pady=(0, 10))
 
             self.multiplier_entry = ctk.CTkEntry(mult_row, width=90, font=ctk.CTkFont(size=13))
-            self.multiplier_entry.insert(0, init_mult_str)
+            self.multiplier_entry.insert(0, self.init_mult_str)
             self.multiplier_entry.pack(side="left")
 
             ctk.CTkLabel(
@@ -133,13 +150,29 @@ class ManageChannelModal(Toplevel):
         card_views.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
         current_row += 1
 
+        card_views_hdr = ctk.CTkFrame(card_views, fg_color="transparent")
+        card_views_hdr.pack(fill="x", padx=16, pady=(10, 2))
+
         views_title = "Max Views Cap (per Short)" if self.shorts_only else "Max Views Cap (per Video)"
         ctk.CTkLabel(
-            card_views,
+            card_views_hdr,
             text=views_title,
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
-        ).pack(fill="x", padx=16, pady=(10, 2))
+        ).pack(side="left")
+
+        self.views_switch = ctk.CTkSwitch(
+            card_views_hdr,
+            text="",
+            width=44,
+            command=self._on_views_toggled,
+        )
+        self.views_switch.pack(side="right")
+        self.views_switch.select()
+        add_tooltip(
+            self.views_switch,
+            "Turn ON to edit and apply Max Views Cap.\nTurn OFF to keep current values without updating.",
+        )
 
         views_desc = (
             "Maximum number of views a short can have. Stops playing once reached to avoid YouTube algorithm flags. Set to 0 for unlimited."
@@ -162,12 +195,13 @@ class ManageChannelModal(Toplevel):
                 if t.max_runs > 0:
                     init_views = t.max_runs
                     break
+        self.init_views_str = str(init_views)
 
         views_row = ctk.CTkFrame(card_views, fg_color="transparent")
         views_row.pack(fill="x", padx=16, pady=(0, 10))
 
         self.max_views_entry = ctk.CTkEntry(views_row, width=90, font=ctk.CTkFont(size=13))
-        self.max_views_entry.insert(0, str(init_views))
+        self.max_views_entry.insert(0, self.init_views_str)
         self.max_views_entry.pack(side="left")
         self.run_entry = self.max_views_entry  # Backwards compatibility alias
 
@@ -184,12 +218,28 @@ class ManageChannelModal(Toplevel):
             card_target.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
             current_row += 1
 
+            card_target_hdr = ctk.CTkFrame(card_target, fg_color="transparent")
+            card_target_hdr.pack(fill="x", padx=16, pady=(10, 2))
+
             ctk.CTkLabel(
-                card_target,
+                card_target_hdr,
                 text="Target Channel Watch Time (Hours)",
                 font=ctk.CTkFont(size=14, weight="bold"),
                 anchor="w",
-            ).pack(fill="x", padx=16, pady=(10, 2))
+            ).pack(side="left")
+
+            self.target_switch = ctk.CTkSwitch(
+                card_target_hdr,
+                text="",
+                width=44,
+                command=self._on_target_toggled,
+            )
+            self.target_switch.pack(side="right")
+            self.target_switch.deselect()
+            add_tooltip(
+                self.target_switch,
+                "Turn ON to edit and apply Target Channel Watch Time.\nTurn OFF to keep current values without updating.",
+            )
 
             ctk.CTkLabel(
                 card_target,
@@ -208,10 +258,11 @@ class ManageChannelModal(Toplevel):
             if getattr(self.channel, "target_watch_seconds", 0.0) > 0:
                 init_target_hrs = round(self.channel.target_watch_seconds / 3600.0, 1)
 
-            init_target_str = str(int(init_target_hrs)) if init_target_hrs.is_integer() else f"{init_target_hrs:.1f}"
+            self.init_target_str = str(int(init_target_hrs)) if init_target_hrs.is_integer() else f"{init_target_hrs:.1f}"
 
             self.target_entry = ctk.CTkEntry(target_row, width=90, font=ctk.CTkFont(size=13))
-            self.target_entry.insert(0, init_target_str)
+            self.target_entry.insert(0, self.init_target_str)
+            self.target_entry.configure(state="disabled")
             self.target_entry.pack(side="left")
 
             ctk.CTkLabel(
@@ -228,9 +279,9 @@ class ManageChannelModal(Toplevel):
                 is_achieved = self.channel.target_achieved
                 color = "#10B981" if is_achieved else "#2563EB"
                 status_text = (
-                    f"✓ Target Achieved ({curr_hrs:.1f} / {init_target_hrs:.1f}h) — Channel playback stopped"
+                    f"✓ Target Achieved ({curr_hrs:.1f} / {self.init_target_str}h) — Channel playback stopped"
                     if is_achieved
-                    else f"Status: {curr_hrs:.1f} / {init_target_hrs:.1f} hours generated"
+                    else f"Status: {curr_hrs:.1f} / {self.init_target_str} hours generated"
                 )
                 ctk.CTkLabel(
                     status_row,
@@ -286,12 +337,53 @@ class ManageChannelModal(Toplevel):
             command=self._apply,
         ).pack(side="right")
 
+    def _on_multiplier_toggled(self):
+        is_on = bool(self.multiplier_switch.get()) if hasattr(self, "multiplier_switch") and self.multiplier_switch else False
+        init_str = getattr(self, "init_mult_str", "0")
+        if hasattr(self, "multiplier_entry") and self.multiplier_entry:
+            if is_on:
+                self.multiplier_entry.configure(state="normal")
+            else:
+                self.multiplier_entry.configure(state="normal")
+                self.multiplier_entry.delete(0, "end")
+                self.multiplier_entry.insert(0, init_str)
+                self.multiplier_entry.configure(state="disabled")
+
+    def _on_views_toggled(self):
+        is_on = bool(self.views_switch.get()) if hasattr(self, "views_switch") and self.views_switch else False
+        init_str = getattr(self, "init_views_str", "0")
+        entry = getattr(self, "max_views_entry", getattr(self, "run_entry", None))
+        if entry is not None:
+            if is_on:
+                entry.configure(state="normal")
+            else:
+                entry.configure(state="normal")
+                entry.delete(0, "end")
+                entry.insert(0, init_str)
+                entry.configure(state="disabled")
+
+    def _on_target_toggled(self):
+        is_on = bool(self.target_switch.get()) if hasattr(self, "target_switch") and self.target_switch else False
+        init_str = getattr(self, "init_target_str", "0.0")
+        if hasattr(self, "target_entry") and self.target_entry:
+            if is_on:
+                self.target_entry.configure(state="normal")
+            else:
+                self.target_entry.configure(state="normal")
+                self.target_entry.delete(0, "end")
+                self.target_entry.insert(0, init_str)
+                self.target_entry.configure(state="disabled")
+
     def _apply(self):
         shorts_only = getattr(self, "shorts_only", False)
 
+        is_mult_on = bool(self.multiplier_switch.get()) if getattr(self, "multiplier_switch", None) is not None else hasattr(self, "multiplier_entry")
+        is_views_on = bool(self.views_switch.get()) if getattr(self, "views_switch", None) is not None else (hasattr(self, "max_views_entry") or hasattr(self, "run_entry"))
+        is_target_on = bool(self.target_switch.get()) if getattr(self, "target_switch", None) is not None else hasattr(self, "target_entry")
+
         # 1. Validate target multiplier
         mult_val = 0.0
-        if not shorts_only and hasattr(self, "multiplier_entry"):
+        if not shorts_only and is_mult_on and hasattr(self, "multiplier_entry"):
             raw_mult = self.multiplier_entry.get().strip()
             if raw_mult:
                 try:
@@ -306,7 +398,7 @@ class ManageChannelModal(Toplevel):
         # 2. Validate max views cap
         views_entry = getattr(self, "max_views_entry", getattr(self, "run_entry", None))
         max_views_val = 0
-        if views_entry is not None:
+        if is_views_on and views_entry is not None:
             raw_views = views_entry.get().strip()
             if raw_views:
                 try:
@@ -320,7 +412,7 @@ class ManageChannelModal(Toplevel):
 
         # 3. Validate target watch hours
         target_hrs = 0.0
-        if not shorts_only and hasattr(self, "target_entry"):
+        if not shorts_only and is_target_on and hasattr(self, "target_entry"):
             raw_target = self.target_entry.get().strip()
             if raw_target:
                 try:
@@ -335,18 +427,23 @@ class ManageChannelModal(Toplevel):
         target_seconds = round(target_hrs * 3600.0, 3)
 
         # 4. Apply target multiplier and max views cap to all items in this channel group
+        changed_any = False
         for _, task in self.group_videos:
-            if not shorts_only:
+            if not shorts_only and is_mult_on:
                 task.target_multiplier = mult_val
-            task.max_runs = max_views_val
+                changed_any = True
+            if is_views_on:
+                task.max_runs = max_views_val
+                changed_any = True
 
-        if hasattr(self.parent_view, "save_queue"):
-            self.parent_view.save_queue()
-        if hasattr(self.parent_view, "refresh_list"):
-            self.parent_view.refresh_list()
+        if changed_any:
+            if hasattr(self.parent_view, "save_queue"):
+                self.parent_view.save_queue()
+            if hasattr(self.parent_view, "refresh_list"):
+                self.parent_view.refresh_list()
 
         # 5. Apply target watch seconds to channel (Video Queue only)
-        if not shorts_only:
+        if not shorts_only and is_target_on:
             ch_name_clean = (self.channel.name or "").strip().lower()
             if ch_name_clean:
                 channels = [Channel.from_dict(c) for c in self.app_controller.config_mgr.get_channels()]
@@ -360,7 +457,7 @@ class ManageChannelModal(Toplevel):
                 if ch_view is not None and hasattr(ch_view, "load_channels"):
                     ch_view.load_channels()
 
-        if callable(self.on_applied):
+        if callable(getattr(self, "on_applied", None)):
             self.on_applied()
 
         self.destroy()
@@ -422,7 +519,7 @@ class ManageChannelModal(Toplevel):
         if hasattr(self.parent_view, "refresh_list"):
             self.parent_view.refresh_list()
 
-        if callable(self.on_applied):
+        if callable(getattr(self, "on_applied", None)):
             self.on_applied()
 
         self.destroy()
