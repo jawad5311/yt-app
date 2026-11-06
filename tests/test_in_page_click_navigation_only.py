@@ -219,3 +219,86 @@ def test_suggested_section_clicks_back_button_when_all_candidates_fail(test_work
     assert suggested_played is False
     test_worker.driver.back.assert_called_once()
 
+
+
+def test_click_home_video_title_prioritization_and_successful_navigation(test_worker):
+    """click_home_video prioritizes title element and verifies navigation when url updates."""
+    target_vid = "tuow9IHoX-E"
+    card = {
+        "index": 0,
+        "href": f"https://www.youtube.com/watch?v={target_vid}",
+        "title": "Course Part 2",
+    }
+
+    title_elem = MagicMock()
+    thumb_elem = MagicMock()
+
+    def fake_execute_script(script, *args):
+        if "candidates" in script or "cleanLinks" in script:
+            return [title_elem, thumb_elem]
+        return None
+
+    test_worker.driver.execute_script.side_effect = fake_execute_script
+    test_worker.driver.current_url = "https://www.youtube.com/"
+
+    def on_title_click():
+        test_worker.driver.current_url = f"https://www.youtube.com/watch?v={target_vid}"
+
+    title_elem.click.side_effect = on_title_click
+
+    with patch("src.automation.watching_worker.safe_get") as mock_safe_get:
+        res = test_worker.click_home_video(card)
+        assert res is True
+        title_elem.click.assert_called_once()
+        thumb_elem.click.assert_not_called()
+        mock_safe_get.assert_not_called()
+
+
+def test_click_home_video_synthetic_js_click_fallback(test_worker):
+    """When native element.click() raises an exception, synthetic JS click succeeds and navigates."""
+    target_vid = "-Z0sDpgzf2A"
+    card = {
+        "index": 0,
+        "href": f"https://www.youtube.com/watch?v={target_vid}",
+        "title": "Real Profit",
+    }
+
+    title_elem = MagicMock()
+    title_elem.click.side_effect = Exception("ElementClickInterceptedException: overlay intercepted click")
+
+    def fake_execute_script(script, *args):
+        if "candidates" in script or "cleanLinks" in script:
+            return [title_elem]
+        if "pointerdown" in script or "dispatchEvent" in script:
+            test_worker.driver.current_url = f"https://www.youtube.com/watch?v={target_vid}"
+            return None
+        return None
+
+    test_worker.driver.execute_script.side_effect = fake_execute_script
+    test_worker.driver.current_url = "https://www.youtube.com/"
+
+    with patch("src.automation.watching_worker.safe_get") as mock_safe_get:
+        res = test_worker.click_home_video(card)
+        assert res is True
+        mock_safe_get.assert_not_called()
+
+
+def test_click_recommended_video_requires_target_vid_id_match(test_worker):
+    """click_recommended_video must verify that the target video ID specifically matches, not just '/watch'."""
+    prior_vid = "prior111111"
+    target_vid = "new22222222"
+    card = {
+        "index": 0,
+        "href": f"/watch?v={target_vid}",
+        "title": "Next Video",
+    }
+
+    test_worker.driver.current_url = f"https://www.youtube.com/watch?v={prior_vid}"
+
+    target_elem = MagicMock()
+    test_worker.driver.execute_script.side_effect = lambda script, *args: [target_elem] if "candidates" in script else None
+
+    with patch("src.automation.watching_worker.safe_get") as mock_safe_get:
+        res = test_worker.click_recommended_video(card)
+        assert res is False
+        mock_safe_get.assert_not_called()
