@@ -527,4 +527,181 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         background=[("active", colors["scrollbar_hover"]), ("pressed", colors["scrollbar_hover"])],
     )
 
+
+    # ---------------------------------------------------------
+    # Apple macOS Design System Styles (Sonoma / Sequoia HIG)
+    # ---------------------------------------------------------
+    is_dark = _current_mode.lower() == "dark"
+    apple = {
+        "card_bg": "#202024" if is_dark else "#ffffff",
+        "card_border": "#323238" if is_dark else "#e5e5ea",
+        "inset_bg": "#18181c" if is_dark else "#f2f2f7",
+        "inset_border": "#28282e" if is_dark else "#d1d1d6",
+        "title_fg": "#ffffff" if is_dark else "#1d1d1f",
+        "subtitle_fg": "#98989d" if is_dark else "#86868b",
+        "category_fg": "#86868b" if is_dark else "#8e8e93",
+        "blue": "#0a84ff" if is_dark else "#007aff",
+        "blue_hover": "#0071e3" if is_dark else "#0062cc",
+        "blue_active": "#005bb5" if is_dark else "#004eb5",
+        "red": "#ff453a" if is_dark else "#ff3b30",
+        "red_hover": "#d70015",
+        "orange": "#ff9f0a" if is_dark else "#ff9500",
+        "orange_hover": "#c97800",
+        "green": "#30d158" if is_dark else "#34c759",
+        "trough": "#161619" if is_dark else "#e5e5ea",
+    }
+
+    # Apple Frames
+    style.configure(
+        "AppleCard.TFrame",
+        background=apple["card_bg"],
+        bordercolor=apple["card_border"],
+        lightcolor=apple["card_border"],
+        darkcolor=apple["card_border"],
+        relief="solid",
+        borderwidth=1,
+    )
+    style.configure("AppleCardInner.TFrame", background=apple["card_bg"])
+    style.configure(
+        "AppleInset.TFrame",
+        background=apple["inset_bg"],
+        bordercolor=apple["inset_border"],
+        lightcolor=apple["inset_border"],
+        darkcolor=apple["inset_border"],
+        relief="solid",
+        borderwidth=1,
+    )
+    style.configure("AppleDivider.TFrame", background=apple["card_border"], relief="flat", borderwidth=0)
+
+    # Apple Status Pill Frame
+    style.configure(
+        "ApplePill.TFrame",
+        background=apple["inset_bg"],
+        bordercolor=apple["card_border"],
+        lightcolor=apple["card_border"],
+        darkcolor=apple["card_border"],
+        relief="solid",
+        borderwidth=1,
+    )
+
+    # Apple Labels
+    style.configure("AppleHeader.TLabel", background=colors["bg"], foreground=apple["title_fg"], font=(family, 20, "bold"))
+    style.configure("AppleSubtitle.TLabel", background=colors["bg"], foreground=apple["subtitle_fg"], font=(family, 9))
+    style.configure("AppleCategory.TLabel", background=apple["card_bg"], foreground=apple["category_fg"], font=(family, 8, "bold"))
+    style.configure("AppleMetric.TLabel", background=apple["card_bg"], foreground=apple["title_fg"], font=(family, 22, "bold"))
+    style.configure("AppleMetricFooter.TLabel", background=apple["card_bg"], foreground=apple["subtitle_fg"], font=(family, 8))
+    style.configure("AppleSectionTitle.TLabel", background=apple["card_bg"], foreground=apple["category_fg"], font=(family, 8, "bold"))
+    style.configure("AppleInset.TLabel", background=apple["inset_bg"], foreground=colors["fg"], font=(family, 9, "bold"))
+    style.configure("AppleInsetMuted.TLabel", background=apple["inset_bg"], foreground=apple["subtitle_fg"], font=(family, 8))
+    style.configure("AppleCard.TLabel", background=apple["card_bg"], foreground=colors["fg"], font=(family, 9))
+    style.configure("AppleCardMuted.TLabel", background=apple["card_bg"], foreground=apple["subtitle_fg"], font=(family, 8))
+    style.configure("ApplePill.TLabel", background=apple["inset_bg"], foreground=apple["title_fg"], font=(family, 8, "bold"))
+
+    # Apple Buttons
+    style.configure(
+        "ApplePrimary.TButton",
+        background=apple["blue"],
+        foreground="#ffffff",
+        bordercolor=apple["blue"],
+        lightcolor=apple["blue"],
+        darkcolor=apple["blue"],
+        borderwidth=1,
+        relief="solid",
+        padding=(16, 7),
+        font=(family, 10, "bold"),
+    )
+    style.map(
+        "ApplePrimary.TButton",
+        background=[("active", apple["blue_hover"]), ("pressed", apple["blue_active"])],
+        bordercolor=[("active", apple["blue_hover"]), ("pressed", apple["blue_active"])],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    style.configure(
+        "AppleDanger.TButton",
+        background=apple["red"],
+        foreground="#ffffff",
+        bordercolor=apple["red"],
+        lightcolor=apple["red"],
+        darkcolor=apple["red"],
+        borderwidth=1,
+        relief="solid",
+        padding=(16, 7),
+        font=(family, 10, "bold"),
+    )
+    style.map(
+        "AppleDanger.TButton",
+        background=[("active", apple["red_hover"]), ("pressed", "#b91c1c")],
+        bordercolor=[("active", apple["red_hover"]), ("pressed", "#b91c1c")],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    style.configure(
+        "AppleWarning.TButton",
+        background=apple["orange"],
+        foreground="#ffffff",
+        bordercolor=apple["orange"],
+        lightcolor=apple["orange"],
+        darkcolor=apple["orange"],
+        borderwidth=1,
+        relief="solid",
+        padding=(16, 7),
+        font=(family, 10, "bold"),
+    )
+    style.map(
+        "AppleWarning.TButton",
+        background=[("active", apple["orange_hover"]), ("pressed", "#b45309")],
+        bordercolor=[("active", apple["orange_hover"]), ("pressed", "#b45309")],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    # Apple Progressbar
+    style.configure(
+        "Apple.Horizontal.TProgressbar",
+        troughcolor=apple["trough"],
+        background=apple["blue"],
+        bordercolor=apple["card_border"],
+        lightcolor=apple["blue"],
+        darkcolor=apple["blue"],
+        borderwidth=0,
+        thickness=7,
+    )
+
+    # Apple Checkbutton
+    style.configure(
+        "AppleInset.TCheckbutton",
+        background=apple["inset_bg"],
+        foreground=colors["fg"],
+        font=(family, 9),
+        focuscolor="none",
+        indicatorsize=13,
+        indicatormargin=(1, 1, 6, 1),
+        indicatorbackground=apple["card_bg"],
+        indicatorforeground=apple["blue"],
+        upperbordercolor=apple["inset_border"],
+        lowerbordercolor=apple["inset_border"],
+    )
+    style.map(
+        "AppleInset.TCheckbutton",
+        background=[("active", apple["inset_bg"])],
+        foreground=[("active", colors["fg"])],
+        indicatorbackground=[("selected", apple["blue"]), ("active", apple["card_bg"])],
+        indicatorforeground=[("selected", "#ffffff"), ("active", apple["blue"])],
+    )
+
+    # Apple Entry
+    style.configure(
+        "Apple.TEntry",
+        fieldbackground=apple["inset_bg"],
+        foreground=colors["input_fg"],
+        insertcolor=apple["blue"],
+        bordercolor=apple["inset_border"],
+        lightcolor=apple["inset_border"],
+        darkcolor=apple["inset_border"],
+        borderwidth=1,
+        relief="solid",
+        padding=(6, 4),
+        font=(family, 9),
+    )
+
     return style

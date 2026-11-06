@@ -4686,7 +4686,7 @@ class WatchingWorker:
                                 f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
                                 logging.INFO,
                             )
-                            break
+                        break
 
                     if suggested_played:
                         continue

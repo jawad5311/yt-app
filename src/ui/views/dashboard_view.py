@@ -12,6 +12,8 @@ STATUS_ERROR_COLOR = ("#C62828", "#FF6B6B")
 
 
 class DashboardView(Frame):
+    """macOS / Apple Human Interface Guidelines styled Dashboard view."""
+
     def __init__(self, parent, app_controller):
         super().__init__(parent, style="TFrame")
         self.app_controller = app_controller
@@ -19,84 +21,180 @@ class DashboardView(Frame):
         self.grid_columnconfigure((0, 1, 2, 3), weight=1)
         self.grid_rowconfigure(2, weight=1)
 
-        # Title
+        # -------------------------------------------------------------
+        # 1. Header Bar (Apple Large Title & System Status Pill)
+        # -------------------------------------------------------------
+        self.header_frame = Frame(self, style="Transparent.TFrame")
+        self.header_frame.grid(row=0, column=0, columnspan=4, padx=16, pady=(16, 12), sticky="ew")
+        self.header_frame.grid_columnconfigure(0, weight=1)
+
+        self.header_left = Frame(self.header_frame, style="Transparent.TFrame")
+        self.header_left.pack(side="left", anchor="w")
+
+        # Large Apple Title
         self.title_label = Label(
-            self,
+            self.header_left,
             text="Dashboard Overview",
             font=Font(size=22, weight="bold"),
-            style="Header.TLabel",
+            style="AppleHeader.TLabel",
         )
-        self.title_label.grid(row=0, column=0, columnspan=4, padx=20, pady=(20, 10), sticky="w")
+        self.title_label.pack(anchor="w")
 
-        # Stats Cards
-        self.card_accounts = self._create_card("Loaded Accounts", "0", row=1, col=0)
-        self.card_videos = self._create_card("Queued Videos", "0", row=1, col=1)
-        self.card_status = self._create_card("Bot Status", "Idle", row=1, col=2)
-        self.card_watch_time = self._create_card("Total Watch Time", "0s", row=1, col=3)
+        self.subtitle_label = Label(
+            self.header_left,
+            text="Playback Automation & Performance Control Center",
+            font=Font(size=9, weight="normal"),
+            style="AppleSubtitle.TLabel",
+        )
+        self.subtitle_label.pack(anchor="w", pady=(2, 0))
 
-        # Action Frame
-        self.action_frame = Frame(self, style="Card.TFrame")
-        self.action_frame.grid(row=2, column=0, columnspan=4, padx=20, pady=20, sticky="nsew")
+        # macOS System Status Capsule / Pill
+        self.system_pill_frame = Frame(self.header_frame, style="ApplePill.TFrame")
+        self.system_pill_frame.pack(side="right", anchor="e", padx=(0, 4), pady=4)
+
+        self.system_pill_dot = Label(
+            self.system_pill_frame,
+            text="●",
+            font=Font(size=9, weight="bold"),
+            style="ApplePill.TLabel",
+        )
+        self.system_pill_dot.configure(text_color="#30D158")
+        self.system_pill_dot.pack(side="left", padx=(10, 4), pady=5)
+
+        self.system_pill_text = Label(
+            self.system_pill_frame,
+            text="System Ready",
+            font=Font(size=8, weight="bold"),
+            style="ApplePill.TLabel",
+        )
+        self.system_pill_text.pack(side="left", padx=(0, 10), pady=5)
+
+        # -------------------------------------------------------------
+        # 2. Stats Widget Grid (Apple macOS Widgets)
+        # -------------------------------------------------------------
+        self.card_accounts = self._create_card(
+            title="Loaded Accounts",
+            initial_value="0",
+            row=1,
+            col=0,
+            category_icon="👤",
+            footer_text="Active profiles loaded",
+        )
+        self.card_videos = self._create_card(
+            title="Queued Videos",
+            initial_value="0",
+            row=1,
+            col=1,
+            category_icon="🎬",
+            footer_text="Tasks ready to browse",
+        )
+        self.card_status = self._create_card(
+            title="Bot Status",
+            initial_value="Idle",
+            row=1,
+            col=2,
+            category_icon="⚡",
+            footer_text="Ready for automation",
+        )
+        self.card_watch_time = self._create_card(
+            title="Total Watch Time",
+            initial_value="0s",
+            row=1,
+            col=3,
+            category_icon="⏱",
+            footer_text="Lifetime delivered",
+        )
+
+        # -------------------------------------------------------------
+        # 3. Action Frame (Apple Control Center Card)
+        # -------------------------------------------------------------
+        self.action_frame = Frame(self, style="AppleCard.TFrame")
+        self.action_frame.grid(row=2, column=0, columnspan=4, padx=16, pady=(6, 16), sticky="nsew")
         self.action_frame.grid_columnconfigure(0, weight=1)
 
+        # Section Header: CONTROL CENTER
+        self.control_header_frame = Frame(self.action_frame, style="AppleCardInner.TFrame")
+        self.control_header_frame.pack(fill="x", padx=20, pady=(16, 6))
+
+        self.control_title = Label(
+            self.control_header_frame,
+            text="CONTROL CENTER",
+            font=Font(size=8, weight="bold"),
+            style="AppleSectionTitle.TLabel",
+        )
+        self.control_title.pack(side="left")
+
+        self.divider1 = Frame(self.action_frame, style="AppleDivider.TFrame", height=1)
+        self.divider1.pack(fill="x", padx=20, pady=(0, 14))
+
         # Queue Automation Passes Control (retained for backward test compatibility, not displayed)
-        self.loop_frame = Frame(self.action_frame, style="CardInner.TFrame")
+        self.loop_frame = Frame(self.action_frame, style="AppleCardInner.TFrame")
         self.loop_label = Label(
             self.loop_frame,
             text="Automation Passes:",
             font=Font(size=10, weight="bold"),
-            style="Card.TLabel",
+            style="AppleCard.TLabel",
         )
-        initial_loops = self.app_controller.config_mgr.get_int("AutomationLoops", 1) if hasattr(self.app_controller, "config_mgr") else 1
+        raw_loops = self.app_controller.config_mgr.get_int("AutomationLoops", 1) if hasattr(self.app_controller, "config_mgr") else 1
+        try:
+            initial_loops = int(raw_loops)
+        except (TypeError, ValueError):
+            initial_loops = 1
         self.loop_entry = Entry(self.loop_frame, width=80, font=Font(size=9))
         self.loop_entry.insert(0, str(max(1, initial_loops)))
         self.loop_hint = Label(
             self.loop_frame,
             text="(queue repetitions; e.g. 2 = run all queue tasks 2 times)",
             font=Font(size=9),
-            style="CardMuted.TLabel",
+            style="AppleCardMuted.TLabel",
         )
 
-        # Browsing Target Video Limit Control
-        self.browsing_limit_frame = Frame(self.action_frame, style="CardInner.TFrame")
-        self.browsing_limit_frame.pack(padx=30, pady=(15, 10), fill="x")
+        # Browsing Target Video Limit Control (Apple Inset Grouped Box)
+        self.browsing_limit_frame = Frame(self.action_frame, style="AppleInset.TFrame")
+        self.browsing_limit_frame.pack(padx=20, pady=(0, 14), fill="x")
 
         self.browsing_limit_label = Label(
             self.browsing_limit_frame,
-            text="Browsing Target Limit:",
-            font=Font(size=10, weight="bold"),
-            style="Card.TLabel",
+            text="🎯  Browsing Target Limit:",
+            font=Font(size=9, weight="bold"),
+            style="AppleInset.TLabel",
         )
-        self.browsing_limit_label.pack(side="left", padx=(0, 10))
+        self.browsing_limit_label.pack(side="left", padx=(14, 10), pady=10)
 
-        initial_browsing_limit = self.app_controller.config_mgr.get_int("BrowsingTargetLimit", 1) if hasattr(self.app_controller, "config_mgr") else 1
-        self.browsing_limit_entry = Entry(self.browsing_limit_frame, width=80, font=Font(size=9))
+        raw_browsing_limit = self.app_controller.config_mgr.get_int("BrowsingTargetLimit", 1) if hasattr(self.app_controller, "config_mgr") else 1
+        try:
+            initial_browsing_limit = int(raw_browsing_limit)
+        except (TypeError, ValueError):
+            initial_browsing_limit = 1
+        self.browsing_limit_entry = Entry(self.browsing_limit_frame, width=80, font=Font(size=9), style="Apple.TEntry")
         self.browsing_limit_entry.insert(0, str(max(1, initial_browsing_limit)))
-        self.browsing_limit_entry.pack(side="left")
+        self.browsing_limit_entry.pack(side="left", pady=10)
 
         # By default, keep Unlimited Browsing checked whenever the app is opened
         self.browsing_unlimited_cb = CheckBox(
             self.browsing_limit_frame,
             text="Unlimited browsing",
             command=self._on_browsing_unlimited_toggle,
-            style="Card.TCheckbutton",
+            style="AppleInset.TCheckbutton",
         )
         self.browsing_unlimited_cb.select()
         self.browsing_limit_entry.configure(state="disabled")
-        self.browsing_unlimited_cb.pack(side="left", padx=(15, 10))
+        self.browsing_unlimited_cb.pack(side="left", padx=(16, 10), pady=10)
 
         self.browsing_hint = Label(
             self.browsing_limit_frame,
             text="(target video attempts; 1 = max attempt)",
-            font=Font(size=9),
-            style="CardMuted.TLabel",
+            font=Font(size=8),
+            style="AppleInsetMuted.TLabel",
         )
-        self.browsing_hint.pack(side="left")
+        self.browsing_hint.pack(side="left", pady=10)
 
-        # Action buttons in one line:
+        # -------------------------------------------------------------
+        # Action buttons in one line (Apple macOS Pill Buttons)
         # Col 0: Start Browsing | Col 1: Stop | Col 2: Pause
-        self.btn_grid = Frame(self.action_frame, style="CardInner.TFrame")
-        self.btn_grid.pack(padx=30, pady=(10, 10), fill="x")
+        # -------------------------------------------------------------
+        self.btn_grid = Frame(self.action_frame, style="AppleCardInner.TFrame")
+        self.btn_grid.pack(padx=20, pady=(0, 16), fill="x")
         self.btn_grid.grid_columnconfigure((0, 1, 2), weight=1, uniform="btn_col")
 
         self.btn_row = self.btn_grid
@@ -126,10 +224,10 @@ class DashboardView(Frame):
             self.btn_grid,
             text="▶ Start Browsing",
             font=Font(size=10, weight="bold"),
-            style="Primary.TButton",
+            style="ApplePrimary.TButton",
             command=_on_start_watching,
         )
-        self.start_watching_btn.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="ew")
+        self.start_watching_btn.grid(row=0, column=0, padx=(0, 6), pady=0, sticky="ew")
         add_tooltip(
             self.start_watching_btn,
             "Start browsing and playing queued videos across configured accounts.",
@@ -139,11 +237,11 @@ class DashboardView(Frame):
             self.btn_grid,
             text="⏹ Stop",
             font=Font(size=10, weight="bold"),
-            style="Danger.TButton",
+            style="AppleDanger.TButton",
             state="disabled",
             command=_on_stop_automation,
         )
-        self.stop_btn.grid(row=0, column=1, padx=5, pady=0, sticky="ew")
+        self.stop_btn.grid(row=0, column=1, padx=6, pady=0, sticky="ew")
         add_tooltip(
             self.stop_btn,
             "Stop all ongoing browsing operations and browser sessions.",
@@ -153,39 +251,101 @@ class DashboardView(Frame):
             self.btn_grid,
             text="⏸ Pause",
             font=Font(size=10, weight="bold"),
-            style="Warning.TButton",
+            style="AppleWarning.TButton",
             state="disabled",
             command=_on_toggle_pause,
         )
-        self.pause_btn.grid(row=0, column=2, padx=(5, 0), pady=0, sticky="ew")
+        self.pause_btn.grid(row=0, column=2, padx=(6, 0), pady=0, sticky="ew")
         add_tooltip(
             self.pause_btn,
             "Pause or resume ongoing video playback across all browsers.",
         )
 
-        # Progress Bar
-        self.progress_label = Label(self.action_frame, text="Ready to launch tasks.", font=Font(size=9), style="Card.TLabel")
-        self.progress_label.pack(padx=30, pady=(20, 5), anchor="w")
+        # -------------------------------------------------------------
+        # Activity & Progress Monitor (Apple System Progress Bar)
+        # -------------------------------------------------------------
+        self.divider2 = Frame(self.action_frame, style="AppleDivider.TFrame", height=1)
+        self.divider2.pack(fill="x", padx=20, pady=(2, 14))
 
-        self.progress_bar = ProgressBar(self.action_frame)
-        self.progress_bar.pack(padx=30, pady=(0, 30), fill="x")
+        self.activity_header_frame = Frame(self.action_frame, style="AppleCardInner.TFrame")
+        self.activity_header_frame.pack(fill="x", padx=20, pady=(0, 4))
+
+        self.activity_title = Label(
+            self.activity_header_frame,
+            text="ACTIVITY & PROGRESS",
+            font=Font(size=8, weight="bold"),
+            style="AppleSectionTitle.TLabel",
+        )
+        self.activity_title.pack(side="left")
+
+        self.progress_label = Label(
+            self.action_frame,
+            text="Ready to launch tasks.",
+            font=Font(size=9),
+            style="AppleCard.TLabel",
+        )
+        self.progress_label.pack(padx=20, pady=(2, 8), anchor="w")
+
+        self.progress_bar = ProgressBar(self.action_frame, style="Apple.Horizontal.TProgressbar")
+        self.progress_bar.pack(padx=20, pady=(0, 22), fill="x")
         self.progress_bar.set(0)
 
-    def _create_card(self, title: str, initial_value: str, row: int, col: int):
-        card = Frame(self, style="Card.TFrame")
-        card.grid(row=row, column=col, padx=15, pady=10, sticky="nsew")
+    def _create_card(
+        self,
+        title: str,
+        initial_value: str,
+        row: int,
+        col: int,
+        category_icon: str = "",
+        footer_text: str = "",
+    ):
+        """Build an Apple macOS styled elevated Widget card."""
+        card = Frame(self, style="AppleCard.TFrame")
+        card.grid(row=row, column=col, padx=8, pady=(6, 12), sticky="nsew")
 
-        t_lbl = Label(card, text=title, font=Font(size=11, weight="normal"), style="CardTitle.TLabel")
-        t_lbl.pack(padx=15, pady=(15, 2))
+        # Category / Icon header
+        header_f = Frame(card, style="AppleCardInner.TFrame")
+        header_f.pack(fill="x", padx=16, pady=(14, 2))
 
-        v_lbl = Label(card, text=initial_value, font=Font(size=18, weight="bold"), style="CardValue.TLabel")
-        v_lbl.pack(padx=15, pady=(0, 15))
+        header_text = f"{category_icon}  {title.upper()}" if category_icon else title.upper()
+        t_lbl = Label(header_f, text=header_text, font=Font(size=8, weight="bold"), style="AppleCategory.TLabel")
+        t_lbl.pack(side="left", anchor="w")
+
+        # Large prominent metric value
+        val_f = Frame(card, style="AppleCardInner.TFrame")
+        val_f.pack(fill="x", padx=16, pady=(2, 2))
+
+        v_lbl = Label(val_f, text=initial_value, font=Font(size=20, weight="bold"), style="AppleMetric.TLabel")
+        v_lbl.pack(side="left", anchor="w")
+
+        # Contextual footer caption
+        footer_f = Frame(card, style="AppleCardInner.TFrame")
+        footer_f.pack(fill="x", padx=16, pady=(0, 14))
+
+        f_lbl = Label(footer_f, text=footer_text, font=Font(size=8, weight="normal"), style="AppleMetricFooter.TLabel")
+        f_lbl.pack(side="left", anchor="w")
+
+        if "Status" in title:
+            self._status_card_footer = f_lbl
+
         return v_lbl
 
     def update_stats(self, accounts_count: int, videos_count: int, status: str):
         self.card_accounts.configure(text=str(accounts_count))
         self.card_videos.configure(text=str(videos_count))
         self.card_status.configure(text=status)
+        if status.lower() == "idle":
+            if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
+                try:
+                    self.system_pill_dot.configure(text_color="#30D158")
+                    self.system_pill_text.configure(text="System Ready")
+                except Exception:
+                    pass
+            if hasattr(self, "_status_card_footer"):
+                try:
+                    self._status_card_footer.configure(text="Ready for automation")
+                except Exception:
+                    pass
 
     def update_watch_totals(self, formatted_duration: str):
         """Lifetime watch time delivered across every recorded video."""
@@ -281,6 +441,17 @@ class DashboardView(Frame):
             self.stop_btn.configure(text="⏹ Stop Browsing")
             self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
             self.card_status.configure(text="Browsing", text_color="#1F6AA5")
+            if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
+                try:
+                    self.system_pill_dot.configure(text_color="#0A84FF")
+                    self.system_pill_text.configure(text="Browsing Active")
+                except Exception:
+                    pass
+            if hasattr(self, "_status_card_footer"):
+                try:
+                    self._status_card_footer.configure(text="Active watch cycle")
+                except Exception:
+                    pass
         else:
             if hasattr(self, "start_btn"):
                 self.start_btn.configure(state="normal")
@@ -319,6 +490,17 @@ class DashboardView(Frame):
             elif hasattr(self, "browsing_limit_entry"):
                 self.browsing_limit_entry.configure(state="normal")
             self.card_status.configure(text="Idle")
+            if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
+                try:
+                    self.system_pill_dot.configure(text_color="#30D158")
+                    self.system_pill_text.configure(text="System Ready")
+                except Exception:
+                    pass
+            if hasattr(self, "_status_card_footer"):
+                try:
+                    self._status_card_footer.configure(text="Ready for automation")
+                except Exception:
+                    pass
 
     def set_paused_state(self, is_paused: bool):
         """Update pause button text/color and status indicator."""
@@ -326,6 +508,28 @@ class DashboardView(Frame):
             if is_paused:
                 self.pause_btn.configure(state="normal", text="▶ Resume", fg_color="#2563EB", hover_color="#1D4ED8")
                 self.card_status.configure(text="Paused", text_color="#D97706")
+                if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
+                    try:
+                        self.system_pill_dot.configure(text_color="#FF9F0A")
+                        self.system_pill_text.configure(text="Session Paused")
+                    except Exception:
+                        pass
+                if hasattr(self, "_status_card_footer"):
+                    try:
+                        self._status_card_footer.configure(text="Playback paused")
+                    except Exception:
+                        pass
             else:
                 self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
                 self.card_status.configure(text="Browsing", text_color="#1F6AA5")
+                if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
+                    try:
+                        self.system_pill_dot.configure(text_color="#0A84FF")
+                        self.system_pill_text.configure(text="Browsing Active")
+                    except Exception:
+                        pass
+                if hasattr(self, "_status_card_footer"):
+                    try:
+                        self._status_card_footer.configure(text="Active watch cycle")
+                    except Exception:
+                        pass

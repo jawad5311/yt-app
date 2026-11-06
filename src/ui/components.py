@@ -153,6 +153,7 @@ class Button(ttk.Button):
 
         self._command = command
         self._text = text
+        self._style = style
         super().__init__(master, text=text, command=command, style=style, **kwargs)
 
     def configure(self, **kwargs):
@@ -170,16 +171,20 @@ class Button(ttk.Button):
                 kwargs["width"] = -max(raw_len + 2, self._min_width)
         if "font" in kwargs:
             kwargs["font"] = _resolve_font(kwargs["font"])
+        if "style" in kwargs:
+            self._style = kwargs["style"]
         if "fg_color" in kwargs:
             color = kwargs.pop("fg_color")
+            cur_style = getattr(self, "_style", None) or (self.cget("style") if hasattr(self, "cget") else "")
+            is_apple = "Apple" in str(cur_style)
             if color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
-                kwargs["style"] = "Primary.TButton"
+                kwargs["style"] = "ApplePrimary.TButton" if is_apple else "Primary.TButton"
             elif color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
                 kwargs["style"] = "Success.TButton"
             elif color in ("#D32F2F", "#d32f2f", "#C62828", "#c62828"):
-                kwargs["style"] = "Danger.TButton"
+                kwargs["style"] = "AppleDanger.TButton" if is_apple else "Danger.TButton"
             elif color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706", "#B45309"):
-                kwargs["style"] = "Warning.TButton"
+                kwargs["style"] = "AppleWarning.TButton" if is_apple else "Warning.TButton"
             elif color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
                 kwargs["style"] = "Teal.TButton"
             elif color in ("#374151", "#4B5563", "#4b5563"):
