@@ -36,6 +36,16 @@ def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
         return default
 
 
+def _get_cfg_float(mgr: Any, key: str, default: float) -> float:
+    if not mgr:
+        return default
+    try:
+        val = mgr.get_float(key, default)
+        return float(val) if isinstance(val, (int, float)) else default
+    except Exception:
+        return default
+
+
 class QueueView(Frame):
     shorts_only: bool = False
 
@@ -318,12 +328,17 @@ class QueueView(Frame):
             init_runs = (
                 _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
                 if getattr(self, "shorts_only", False)
-                else _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+                else _get_cfg_int(cfg, "DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
+            )
+            init_mult = (
+                0.0
+                if getattr(self, "shorts_only", False)
+                else _get_cfg_float(cfg, "DefaultVideoTargetViews", DEFAULT_TARGET_MULTIPLIER)
             )
             target_task = VideoTask(
                 watchtime_duration=self._default_watch_duration(),
                 channel=preselected_channel or "",
-                target_multiplier=DEFAULT_TARGET_MULTIPLIER,
+                target_multiplier=init_mult,
                 max_runs=init_runs,
             )
 
@@ -439,7 +454,7 @@ class QueueView(Frame):
             views_label = f"Max Views Cap (0 or blank = unlimited, default {configured_default_runs}):"
             views_placeholder = f"e.g. {configured_default_runs} (0 or blank = unlimited)"
         else:
-            configured_default_runs = _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+            configured_default_runs = _get_cfg_int(cfg, "DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
             views_label = f"Max Views Cap (Full Runs Limit, 0 or blank = unlimited, default {configured_default_runs}):"
             views_placeholder = f"e.g. {configured_default_runs} (0 or blank = unlimited)"
 

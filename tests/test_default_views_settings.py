@@ -1,5 +1,6 @@
 """Tests for configurable default target views for regular videos and shorts."""
 
+import math
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +9,7 @@ from src.automation.watching_worker import WatchingWorker
 from src.config.manager import ConfigManager
 from src.models.account import Account
 from src.models.channel import Channel
-from src.models.video_task import VideoTask
+from src.models.video_task import VideoTask, DEFAULT_MAX_RUNS, DEFAULT_SHORTS_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER
 from src.ui.background_jobs import BackgroundJobs
 from src.ui.views.channel_import_modal import ChannelImportModal
 from src.ui.views.channels_view import ChannelsView
@@ -21,21 +22,25 @@ def test_config_manager_default_views_keys(tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
 
-    # Defaults in fresh config
-    assert mgr.get_int("DefaultVideoTargetViews") == 5
+    # Defaults in fresh config: Target Views = 3, Max Views = 5, Shorts Max Views = 5
+    assert mgr.get_int("DefaultVideoTargetViews") == 3
+    assert mgr.get_int("DefaultVideoMaxViews") == 5
     assert mgr.get_int("DefaultShortsMaxViews") == 5
 
     # Updating values
-    mgr.set_setting("DefaultVideoTargetViews", 15)
+    mgr.set_setting("DefaultVideoTargetViews", 4)
+    mgr.set_setting("DefaultVideoMaxViews", 15)
     mgr.set_setting("DefaultShortsMaxViews", 25)
-    assert mgr.get_int("DefaultVideoTargetViews") == 15
+    assert mgr.get_int("DefaultVideoTargetViews") == 4
+    assert mgr.get_int("DefaultVideoMaxViews") == 15
     assert mgr.get_int("DefaultShortsMaxViews") == 25
 
 
 def test_settings_view_load_and_save(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
-    mgr.set_setting("DefaultVideoTargetViews", 8)
+    mgr.set_setting("DefaultVideoTargetViews", 4)
+    mgr.set_setting("DefaultVideoMaxViews", 8)
     mgr.set_setting("DefaultShortsMaxViews", 18)
 
     app_ctrl = MagicMock()
@@ -43,12 +48,16 @@ def test_settings_view_load_and_save(ctk_app, tmp_path):
     view = SettingsView(ctk_app, app_ctrl)
 
     # Verify loaded in UI entries
-    assert view.default_video_views_entry.get() == "8"
+    assert view.default_video_views_entry.get() == "4"
+    assert view.default_video_max_views_entry.get() == "8"
     assert view.default_shorts_views_entry.get() == "18"
 
     # Modify entries and save
     view.default_video_views_entry.delete(0, "end")
-    view.default_video_views_entry.insert(0, "12")
+    view.default_video_views_entry.insert(0, "6")
+
+    view.default_video_max_views_entry.delete(0, "end")
+    view.default_video_max_views_entry.insert(0, "12")
 
     view.default_shorts_views_entry.delete(0, "end")
     view.default_shorts_views_entry.insert(0, "30")
@@ -57,7 +66,8 @@ def test_settings_view_load_and_save(ctk_app, tmp_path):
         view.save_settings()
         mock_notify.assert_called_once_with(True)
 
-    assert mgr.get_int("DefaultVideoTargetViews") == 12
+    assert mgr.get_float("DefaultVideoTargetViews") == 6.0
+    assert mgr.get_int("DefaultVideoMaxViews") == 12
     assert mgr.get_int("DefaultShortsMaxViews") == 30
     view.destroy()
 
@@ -69,17 +79,27 @@ def test_settings_view_validation(ctk_app, tmp_path):
     app_ctrl.config_mgr = mgr
     view = SettingsView(ctk_app, app_ctrl)
 
-    # Invalid video views
+    # Invalid video target views (negative)
     view.default_video_views_entry.delete(0, "end")
     view.default_video_views_entry.insert(0, "-5")
 
     with patch.object(view, "_notify_result") as mock_notify:
         view.save_settings()
-        mock_notify.assert_called_once_with(False, "Default Target Views per Video must be a valid integer >= 0 (0 = unlimited).")
+        mock_notify.assert_called_once_with(False, "Default Target Views per Video must be a valid number >= 0 (0 = unlimited).")
+
+    # Invalid video max views (negative or non-integer)
+    view.default_video_views_entry.delete(0, "end")
+    view.default_video_views_entry.insert(0, "3")
+    view.default_video_max_views_entry.delete(0, "end")
+    view.default_video_max_views_entry.insert(0, "abc")
+
+    with patch.object(view, "_notify_result") as mock_notify:
+        view.save_settings()
+        mock_notify.assert_called_once_with(False, "Default Max Views Cap per Video must be a valid integer >= 0 (0 = unlimited).")
 
     # Invalid shorts views
-    view.default_video_views_entry.delete(0, "end")
-    view.default_video_views_entry.insert(0, "5")
+    view.default_video_max_views_entry.delete(0, "end")
+    view.default_video_max_views_entry.insert(0, "5")
     view.default_shorts_views_entry.delete(0, "end")
     view.default_shorts_views_entry.insert(0, "abc")
 
@@ -94,6 +114,7 @@ def test_channel_import_modal_prefills_configured_defaults(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
     mgr.set_setting("DefaultVideoTargetViews", 7)
+    mgr.set_setting("DefaultVideoMaxViews", 9)
     mgr.set_setting("DefaultShortsMaxViews", 14)
 
     fetched = [
@@ -121,7 +142,8 @@ def test_channel_import_modal_prefills_configured_defaults(ctk_app, tmp_path):
     v_task = next(t for t in imported_tasks if not t.is_short)
     s_task = next(t for t in imported_tasks if t.is_short)
 
-    assert v_task.max_runs == 7
+    assert v_task.target_multiplier == 7.0
+    assert v_task.max_runs == 9
     assert s_task.max_runs == 14
     modal.destroy()
 
@@ -130,6 +152,7 @@ def test_channel_import_modal_override_values_during_fetch(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
     mgr.set_setting("DefaultVideoTargetViews", 7)
+    mgr.set_setting("DefaultVideoMaxViews", 9)
     mgr.set_setting("DefaultShortsMaxViews", 14)
 
     fetched = [
@@ -150,7 +173,7 @@ def test_channel_import_modal_override_values_during_fetch(ctk_app, tmp_path):
 
     # User modifies values in the dialog before clicking import
     modal.video_views_entry.delete(0, "end")
-    modal.video_views_entry.insert(0, "22")
+    modal.video_views_entry.insert(0, "4.5")
     modal.shorts_views_entry.delete(0, "end")
     modal.shorts_views_entry.insert(0, "44")
 
@@ -158,7 +181,8 @@ def test_channel_import_modal_override_values_during_fetch(ctk_app, tmp_path):
     v_task = next(t for t in imported_tasks if not t.is_short)
     s_task = next(t for t in imported_tasks if t.is_short)
 
-    assert v_task.max_runs == 22
+    assert v_task.target_multiplier == 4.5
+    assert v_task.max_runs == 9
     assert s_task.max_runs == 44
     modal.destroy()
 
@@ -166,7 +190,8 @@ def test_channel_import_modal_override_values_during_fetch(ctk_app, tmp_path):
 def test_queue_view_add_modal_uses_configured_defaults(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
-    mgr.set_setting("DefaultVideoTargetViews", 9)
+    mgr.set_setting("DefaultVideoTargetViews", 4)
+    mgr.set_setting("DefaultVideoMaxViews", 9)
     mgr.set_setting("DefaultShortsMaxViews", 19)
 
     app = ctk_app
@@ -175,7 +200,6 @@ def test_queue_view_add_modal_uses_configured_defaults(ctk_app, tmp_path):
 
     # Regular Video Queue
     vid_view = QueueView(app, app, shorts_only=False)
-    # Check that when opening modal for adding, it defaults to 9
     vid_view.open_video_modal()
 
     # Shorts Queue
@@ -189,7 +213,8 @@ def test_queue_view_add_modal_uses_configured_defaults(ctk_app, tmp_path):
 def test_watching_worker_browsing_discovery_uses_defaults(tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
-    mgr.set_setting("DefaultVideoTargetViews", 11)
+    mgr.set_setting("DefaultVideoTargetViews", 4.5)
+    mgr.set_setting("DefaultVideoMaxViews", 11)
     mgr.set_setting("DefaultShortsMaxViews", 22)
 
     account = Account(email="user1@gmail.com", password="pw1")
@@ -213,14 +238,14 @@ def test_watching_worker_browsing_discovery_uses_defaults(tmp_path):
         is_home=True,
     )
     assert len(added_tasks) == 1
+    assert added_tasks[0].target_multiplier == 4.5
     assert added_tasks[0].max_runs == 11
 
     # 2. Short discovered via reel loop
-    # Verify the code block in _run_shorts_reel_loop reads DefaultShortsMaxViews
     def_shorts = (
-        worker.config_mgr.get_int("DefaultShortsMaxViews", 5)
+        worker.config_mgr.get_int("DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
         if worker.config_mgr
-        else 5
+        else DEFAULT_SHORTS_MAX_RUNS
     )
     assert def_shorts == 22
 
@@ -228,7 +253,8 @@ def test_watching_worker_browsing_discovery_uses_defaults(tmp_path):
 def test_channels_view_sync_uses_configured_defaults(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
-    mgr.set_setting("DefaultVideoTargetViews", 13)
+    mgr.set_setting("DefaultVideoTargetViews", 4.0)
+    mgr.set_setting("DefaultVideoMaxViews", 13)
     mgr.set_setting("DefaultShortsMaxViews", 26)
 
     app = ctk_app
@@ -264,8 +290,8 @@ def test_channels_view_sync_uses_configured_defaults(ctk_app, tmp_path):
     v_task = next(t for t in queue if "/watch" in t["url"])
     s_task = next(t for t in queue if "/shorts" in t["url"])
 
+    assert v_task["target_multiplier"] == 4.0
     assert v_task["max_runs"] == 13
-    assert v_task["target_multiplier"] == 3.0
     assert s_task["max_runs"] == 26
     assert s_task["target_multiplier"] == 0.0
 

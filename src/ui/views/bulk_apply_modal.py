@@ -28,6 +28,16 @@ def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
         return default
 
 
+def _get_cfg_float(mgr: Any, key: str, default: float) -> float:
+    if not mgr:
+        return default
+    try:
+        val = mgr.get_float(key, default)
+        return float(val) if isinstance(val, (int, float)) else default
+    except Exception:
+        return default
+
+
 class BulkApplyModal(Toplevel):
     """Modal dialog for bulk configuring target multiplier and max views cap across all queued videos or shorts."""
 
@@ -138,7 +148,8 @@ class BulkApplyModal(Toplevel):
                 anchor="w",
             ).pack(fill="x", padx=16, pady=(0, 6))
 
-            init_mult = DEFAULT_TARGET_MULTIPLIER
+            cfg = getattr(self.app_controller, "config_mgr", None)
+            init_mult = _get_cfg_float(cfg, "DefaultVideoTargetViews", DEFAULT_TARGET_MULTIPLIER)
             if self.tasks:
                 for t in self.tasks:
                     if getattr(t, "target_multiplier", 0.0) > 0:
@@ -208,7 +219,7 @@ class BulkApplyModal(Toplevel):
         if self.shorts_only:
             init_views = _get_cfg_int(cfg, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
         else:
-            init_views = _get_cfg_int(cfg, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+            init_views = _get_cfg_int(cfg, "DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
         if self.tasks:
             for t in self.tasks:
                 if getattr(t, "max_runs", 0) > 0:

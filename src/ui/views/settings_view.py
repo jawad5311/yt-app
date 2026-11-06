@@ -232,19 +232,43 @@ class SettingsView(Frame):
         self.cooldown_entry.insert(0, str(int(cd_val)) if cd_val.is_integer() else str(cd_val))
         self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        Label(scroll_playback, text="Default Target Views per Video (Max Views Cap):", font=Font(weight="bold")).pack(
+        Label(scroll_playback, text="Default Target Views per Video:", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
         Label(
             scroll_playback,
-            text="Default views target / max runs cap for new long-form videos added to queue (0 = unlimited).",
+            text="Default target views / watch multiplier assigned to new long-form videos added to queue (0 = unlimited).",
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.default_video_views_entry = Entry(scroll_playback, width=100)
-        initial_video_views = self.config_mgr.get_int("DefaultVideoTargetViews", DEFAULT_MAX_RUNS) if self.config_mgr else DEFAULT_MAX_RUNS
-        self.default_video_views_entry.insert(0, str(initial_video_views))
+        initial_video_views = (
+            self.config_mgr.get_float("DefaultVideoTargetViews", 3.0)
+            if self.config_mgr
+            else 3.0
+        )
+        self.default_video_views_entry.insert(
+            0, str(int(initial_video_views)) if initial_video_views.is_integer() else str(initial_video_views)
+        )
         self.default_video_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_playback, text="Default Max Views Cap per Video:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_playback,
+            text="Default max views cap assigned to new long-form videos added to queue (0 = unlimited).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.default_video_max_views_entry = Entry(scroll_playback, width=100)
+        initial_video_max = (
+            self.config_mgr.get_int("DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
+            if self.config_mgr
+            else DEFAULT_MAX_RUNS
+        )
+        self.default_video_max_views_entry.insert(0, str(initial_video_max))
+        self.default_video_max_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
         # Tab 3: Shorts
@@ -620,18 +644,32 @@ class SettingsView(Frame):
             self._notify_result(False, "Video Rewatch Cooldown must be a valid finite number between 0 and 8760 hours.")
             return
 
-        # 8a. Default Video Target Views
+        # 8a. Default Video Target Views (Multiplier)
         if hasattr(self, "default_video_views_entry"):
             raw_vid_views = self.default_video_views_entry.get().strip()
             try:
-                if not raw_vid_views or "." in raw_vid_views:
+                if not raw_vid_views:
                     raise ValueError
-                v_views_val = int(raw_vid_views)
-                if v_views_val < 0 or v_views_val > 1000000:
+                v_views_val = float(raw_vid_views)
+                if not math.isfinite(v_views_val) or v_views_val < 0.0 or v_views_val > 1000000.0:
                     raise ValueError
-                validated["DefaultVideoTargetViews"] = v_views_val
+                validated["DefaultVideoTargetViews"] = int(v_views_val) if v_views_val.is_integer() else round(v_views_val, 2)
             except (ValueError, TypeError):
-                self._notify_result(False, "Default Target Views per Video must be a valid integer >= 0 (0 = unlimited).")
+                self._notify_result(False, "Default Target Views per Video must be a valid number >= 0 (0 = unlimited).")
+                return
+
+        # 8a-2. Default Video Max Views Cap
+        if hasattr(self, "default_video_max_views_entry"):
+            raw_vid_max = self.default_video_max_views_entry.get().strip()
+            try:
+                if not raw_vid_max or "." in raw_vid_max:
+                    raise ValueError
+                v_max_val = int(raw_vid_max)
+                if v_max_val < 0 or v_max_val > 1000000:
+                    raise ValueError
+                validated["DefaultVideoMaxViews"] = v_max_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Max Views Cap per Video must be a valid integer >= 0 (0 = unlimited).")
                 return
 
         # 8b. Shorts limits

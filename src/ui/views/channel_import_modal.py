@@ -29,6 +29,16 @@ def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
         return default
 
 
+def _get_cfg_float(mgr: Any, key: str, default: float) -> float:
+    if not mgr:
+        return default
+    try:
+        val = mgr.get_float(key, default)
+        return float(val) if isinstance(val, (int, float)) else default
+    except Exception:
+        return default
+
+
 class ChannelImportModal(Toplevel):
     """Modal dialog allowing users to review and selectively import fetched channel videos."""
 
@@ -51,7 +61,9 @@ class ChannelImportModal(Toplevel):
         self.on_import = on_import
         self.fetch_result = fetch_result
         self.config_mgr = config_mgr
-        self.default_video_views = _get_cfg_int(config_mgr, "DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+        def_mult = _get_cfg_float(config_mgr, "DefaultVideoTargetViews", DEFAULT_TARGET_MULTIPLIER)
+        self.default_video_views = int(def_mult) if def_mult.is_integer() else def_mult
+        self.default_video_max_views = _get_cfg_int(config_mgr, "DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
         self.default_shorts_views = _get_cfg_int(config_mgr, "DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
 
         self.title(f"Import Channel Videos — {channel_name}")
@@ -416,10 +428,10 @@ class ChannelImportModal(Toplevel):
         selected_ids = {vid for vid, var in self.selected_vars.items() if var.get()}
         chosen_duration = self.duration_option.get()
 
-        custom_video_views = getattr(self, "default_video_views", DEFAULT_MAX_RUNS)
+        custom_video_views = getattr(self, "default_video_views", DEFAULT_TARGET_MULTIPLIER)
         if hasattr(self, "video_views_entry"):
             try:
-                v = int(self.video_views_entry.get().strip())
+                v = float(self.video_views_entry.get().strip())
                 if v >= 0:
                     custom_video_views = v
             except (ValueError, TypeError):
@@ -448,8 +460,8 @@ class ChannelImportModal(Toplevel):
                     duration_seconds=video.duration_seconds,
                     duration_text=video.duration_text,
                     enabled=True,
-                    target_multiplier=0.0 if is_s else DEFAULT_TARGET_MULTIPLIER,
-                    max_runs=custom_shorts_views if is_s else custom_video_views,
+                    target_multiplier=0.0 if is_s else custom_video_views,
+                    max_runs=custom_shorts_views if is_s else getattr(self, "default_video_max_views", DEFAULT_MAX_RUNS),
                 )
                 tasks_to_add.append(task)
 

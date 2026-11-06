@@ -268,7 +268,7 @@ def test_sync_single_channel_data_fetches_and_adds_to_queue(ctk_app):
     assert appended[0]["max_runs"] == 5
     assert appended[1]["url"] == "https://youtube.com/shorts/newshort1"
     assert appended[1]["target_multiplier"] == 0.0
-    assert appended[1]["max_runs"] == 10
+    assert appended[1]["max_runs"] == 5
 
     view.destroy()
 
@@ -353,6 +353,6 @@ def test_sync_data_all_syncs_all_channels(ctk_app):
     assert appended[1]["url"] == "https://youtube.com/shorts/c2s1"
     assert appended[1]["channel"] == "ChanTwo"
     assert appended[1]["target_multiplier"] == 0.0
-    assert appended[1]["max_runs"] == 10
+    assert appended[1]["max_runs"] == 5
 
     view.destroy()

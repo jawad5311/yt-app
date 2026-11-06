@@ -2124,9 +2124,13 @@ class WatchingWorker:
             f"URL: {full_url}\nTitle: {title}\nChannel: {channel_display}",
         )
 
-        inherited_mult = DEFAULT_TARGET_MULTIPLIER
+        inherited_mult = (
+            self.config_mgr.get_float("DefaultVideoTargetViews", DEFAULT_TARGET_MULTIPLIER)
+            if self.config_mgr
+            else DEFAULT_TARGET_MULTIPLIER
+        )
         inherited_max_runs = (
-            self.config_mgr.get_int("DefaultVideoTargetViews", DEFAULT_MAX_RUNS)
+            self.config_mgr.get_int("DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
             if self.config_mgr
             else DEFAULT_MAX_RUNS
         )

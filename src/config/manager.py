@@ -83,7 +83,8 @@ class ConfigManager:
     DEFAULT_DATA: Dict[str, Any] = {
         "settings": {
             "SystemName": "",
-            "DefaultVideoTargetViews": 5,
+            "DefaultVideoTargetViews": 3,
+            "DefaultVideoMaxViews": 5,
             "DefaultShortsMaxViews": 5,
             "AccountsFile": "accounts.txt",
             "DirectLinkFallback": False,
@@ -297,7 +298,7 @@ class ConfigManager:
             if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0:
                     return default
-            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews"):
                 if res < 0:
                     return default
             return res
@@ -309,7 +310,7 @@ class ConfigManager:
             if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0.0:
                     return default
-            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews"):
                 if res < 0.0:
                     return default
             return res
