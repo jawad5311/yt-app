@@ -2747,7 +2747,7 @@ class WatchingWorker:
             self.scroll_to_next_short(prev_url=prev_url)
             human_like_delay(1.0, 1.8)
             # Continue into the Shorts reel loop:
-            self._run_shorts_reel_loop(session_watched_keys=session_watched_keys)
+            self._run_shorts_reel_loop(session_watched_keys=session_watched_keys, initial_prev_url=prev_url)
 
         return watch_res.completed or watch_res.playback_finished
 
@@ -2794,23 +2794,102 @@ class WatchingWorker:
         if not getattr(self, "driver", None):
             return False
         prev = prev_url or getattr(self.driver, "current_url", "")
+        prev_vid = extract_video_id(prev) if prev else ""
         clicked = False
         try:
-            clicked = self.driver.execute_script(r"""
-                var btn = document.querySelector(
-                    '#navigation-button-down button[aria-label="Next video"], ' +
-                    '#navigation-button-down button, ' +
-                    '.navigation-button#navigation-button-down button, ' +
-                    'ytd-shorts #navigation-button-down button, ' +
-                    'button[aria-label="Next video"], ' +
-                    'button.navigation-button-down'
-                );
-                if (btn && btn.offsetParent !== null) {
-                    btn.click();
-                    return true;
-                }
-                return false;
+            res = self.driver.execute_script(r"""
+                return (function() {
+                    function isVisible(el) {
+                        if (!el) return false;
+                        try {
+                            var rect = el.getBoundingClientRect();
+                            if (rect.width <= 0 || rect.height <= 0) return false;
+                            var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+                            if (style && (style.visibility === 'hidden' || style.display === 'none')) return false;
+                            return true;
+                        } catch(e) {
+                            return false;
+                        }
+                    }
+
+                    function triggerClick(el) {
+                        if (!el) return false;
+                        try { el.focus(); } catch(e) {}
+                        try {
+                            var mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
+                            var mouseup = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window });
+                            var click = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                            el.dispatchEvent(mousedown);
+                            el.dispatchEvent(mouseup);
+                            el.dispatchEvent(click);
+                            return true;
+                        } catch(e) {
+                            try {
+                                el.click();
+                                return true;
+                            } catch(e2) {
+                                return false;
+                            }
+                        }
+                    }
+
+                    var selectors = [
+                        '#navigation-button-down button[aria-label="Next video"]',
+                        '#navigation-button-down button[aria-label="Next"]',
+                        '#navigation-button-down button',
+                        'ytd-shorts #navigation-button-down button',
+                        'ytd-shorts [id="navigation-button-down"] button',
+                        '#navigation-button-down tp-yt-paper-icon-button',
+                        'button[aria-label="Next video"]',
+                        'button[aria-label="Next Short"]',
+                        'button[aria-label="Next"]',
+                        '.navigation-button#navigation-button-down button',
+                        'button.navigation-button-down',
+                        '[id="navigation-button-down"]'
+                    ];
+
+                    for (var i = 0; i < selectors.length; i++) {
+                        var btn = document.querySelector(selectors[i]);
+                        if (btn && isVisible(btn)) {
+                            if (triggerClick(btn)) {
+                                return true;
+                            }
+                        }
+                    }
+
+                    var active = document.querySelector('ytd-reel-video-renderer[is-active]');
+                    if (active && active.nextElementSibling) {
+                        try {
+                            active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            return true;
+                        } catch(e) {}
+                    }
+
+                    var container = document.querySelector('#shorts-container') ||
+                                    document.querySelector('ytd-shorts') ||
+                                    document.querySelector('#shorts-inner-container');
+                    if (container && container.scrollTop !== undefined) {
+                        container.scrollTop += (window.innerHeight || 800);
+                    }
+
+                    ['keydown', 'keyup'].forEach(function(evtType) {
+                        try {
+                            var e = new KeyboardEvent(evtType, {
+                                key: 'PageDown',
+                                code: 'PageDown',
+                                keyCode: 34,
+                                which: 34,
+                                bubbles: true,
+                                cancelable: true
+                            });
+                            (document.activeElement || document.body || document).dispatchEvent(e);
+                        } catch(e) {}
+                    });
+
+                    return false;
+                })();
             """)
+            clicked = bool(res)
         except Exception:
             clicked = False
 
@@ -2818,11 +2897,11 @@ class WatchingWorker:
             try:
                 nav_btns = self.driver.find_elements(
                     By.CSS_SELECTOR,
-                    "#navigation-button-down button, button[aria-label='Next video']"
+                    "#navigation-button-down button, button[aria-label='Next video'], button[aria-label='Next'], #navigation-button-down"
                 )
                 for nb in nav_btns:
                     if nb.is_displayed():
-                        ActionChains(self.driver).move_to_element(nb).pause(0.1).click().perform()
+                        ActionChains(self.driver).move_to_element(nb).pause(0.05).click().perform()
                         clicked = True
                         break
             except Exception:
@@ -2830,28 +2909,48 @@ class WatchingWorker:
 
         if not clicked:
             try:
-                ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
+                active_el = self.driver.switch_to.active_element
+                if active_el:
+                    active_el.send_keys(Keys.PAGE_DOWN)
             except Exception:
                 try:
-                    self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ARROW_DOWN)
+                    ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
                 except Exception:
                     try:
-                        self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
+                        self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.PAGE_DOWN)
                     except Exception:
                         pass
 
-        for _ in range(10):
+        scrolled = False
+        for attempt in range(12):
             time.sleep(0.2)
             curr = getattr(self.driver, "current_url", "")
-            if curr and curr != prev:
+            curr_vid = extract_video_id(curr) if curr else ""
+            if (curr_vid and prev_vid and curr_vid != prev_vid) or (curr and prev and curr != prev):
+                scrolled = True
                 break
-        return True
+
+            if attempt == 4:
+                try:
+                    ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
+                except Exception:
+                    try:
+                        self.driver.execute_script("var c = document.querySelector('#shorts-container') || document.querySelector('ytd-shorts'); if (c) c.scrollTop += 800;")
+                    except Exception:
+                        pass
+            elif attempt == 8:
+                try:
+                    ActionChains(self.driver).send_keys("j").perform()
+                except Exception:
+                    pass
+
+        return scrolled
 
     def _skip_non_target_reel(self, prev_url: Optional[str] = None) -> bool:
         """Advance past the current Short in the YouTube Shorts reel to the next one."""
         prev = prev_url or getattr(getattr(self, "driver", None), "current_url", "")
         res = self.scroll_to_next_short(prev_url=prev)
-        human_like_delay(1.0, 1.8)
+        human_like_delay(0.5, 1.0)
         return res
 
     def _run_shorts_cycle(
@@ -3009,6 +3108,7 @@ class WatchingWorker:
                     cycle_target_shorts=cycle_target_shorts,
                     current_total_non_target=total_non_target_shorts_seen,
                     cycle_max_total_non_target=cycle_max_total_non_target,
+                    initial_prev_url=prev_url,
                 )
                 total_target_shorts_watched = watched_in_reel
                 total_non_target_shorts_seen += non_targets_in_reel
@@ -3081,6 +3181,7 @@ class WatchingWorker:
                 cycle_target_shorts=cycle_target_shorts,
                 current_total_non_target=total_non_target_shorts_seen,
                 cycle_max_total_non_target=cycle_max_total_non_target,
+                initial_prev_url=prev_url,
             )
             total_target_shorts_watched = watched_in_reel
             total_non_target_shorts_seen += non_targets_in_reel
@@ -3120,6 +3221,7 @@ class WatchingWorker:
         cycle_target_shorts: Optional[int] = None,
         current_total_non_target: int = 0,
         cycle_max_total_non_target: Optional[int] = None,
+        initial_prev_url: Optional[str] = None,
     ) -> Tuple[int, int, str]:
         """
         Continuously navigate and watch Shorts on the Shorts reel:
@@ -3144,6 +3246,8 @@ class WatchingWorker:
         reel_non_target_count = 0
         non_targets_in_this_reel = 0
         target_shorts_watched = current_target_watched
+        last_seen_video_key: Optional[str] = extract_video_id(initial_prev_url) if initial_prev_url else None
+        consecutive_same_video_count = 0
 
         emit(
             self.log_queue,
@@ -3166,11 +3270,44 @@ class WatchingWorker:
             target_shorts_queue = self.get_target_shorts()
 
             short_info = self.get_active_short_info()
+            if self.stop_event.is_set():
+                break
+
             ch_name = short_info.get("channel_name", "")
             ch_url = short_info.get("channel_url", "")
             title = short_info.get("title", "") or "Short"
             vid_id = short_info.get("video_id") or extract_video_id(short_info.get("url", ""))
             full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
+
+            if not short_info.get("found") and not vid_id and not ch_name:
+                human_like_delay(0.5, 1.0)
+                continue
+
+            current_video_key = vid_id or full_url or (f"{ch_name}_{title}" if ch_name else None)
+
+            # Prevent double-counting or re-dwelling if the reel has not advanced yet
+            if current_video_key and current_video_key == last_seen_video_key:
+                consecutive_same_video_count += 1
+                if consecutive_same_video_count <= 3:
+                    emit(
+                        self.log_queue,
+                        f"Still on same Short '{title}' ({current_video_key}) from '{ch_name or 'Unknown'}'. Advancing immediately to next Short (attempt {consecutive_same_video_count})...",
+                        logging.INFO,
+                    )
+                    self.scroll_to_next_short(prev_url=full_url or getattr(self.driver, "current_url", ""))
+                    human_like_delay(0.5, 1.0)
+                    continue
+                else:
+                    emit(
+                        self.log_queue,
+                        f"Reel scrolling stuck on '{title}' ({current_video_key}) after {consecutive_same_video_count} attempts. Exiting reel loop...",
+                        logging.WARNING,
+                    )
+                    exit_reason = "reel_stuck"
+                    break
+
+            last_seen_video_key = current_video_key
+            consecutive_same_video_count = 0
 
             # Match against targeted channels
             ch_lookup_url = ch_url or (f"/{ch_name}" if ch_name.startswith("@") else "")

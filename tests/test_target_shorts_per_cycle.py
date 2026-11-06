@@ -83,13 +83,17 @@ def test_run_shorts_reel_loop_exits_when_target_achieved():
     worker.get_target_channels = MagicMock(return_value=[Channel(name="Target Channel", url="https://youtube.com/@target")])
     worker.get_target_shorts = MagicMock(return_value=[])
 
-    worker.get_active_short_info = MagicMock(return_value={
-        "title": "Target Short",
-        "channel_name": "Target Channel",
-        "channel_url": "https://youtube.com/@target",
-        "video_id": "testshort123",
-        "url": "https://youtube.com/shorts/testshort123",
-    })
+    target_counter = [0]
+    def _next_target():
+        target_counter[0] += 1
+        return {
+            "title": f"Target Short {target_counter[0]}",
+            "channel_name": "Target Channel",
+            "channel_url": "https://youtube.com/@target",
+            "video_id": f"testshort_{target_counter[0]}",
+            "url": f"https://youtube.com/shorts/testshort_{target_counter[0]}",
+        }
+    worker.get_active_short_info = MagicMock(side_effect=_next_target)
 
     mock_res = MagicMock(watched_seconds=15.0, ad_seconds=0.0, video_duration=20.0, completed=True, playback_finished=True, interrupted=False, views_counted=1)
     with patch("src.automation.watching_worker.watch_short", return_value=mock_res), \
@@ -120,13 +124,17 @@ def test_run_shorts_reel_loop_exits_when_reel_limit_reached():
     worker.get_target_channels = MagicMock(return_value=[Channel(name="Target Channel", url="https://youtube.com/@target")])
     worker.get_target_shorts = MagicMock(return_value=[])
 
-    worker.get_active_short_info = MagicMock(return_value={
-        "title": "Other Short",
-        "channel_name": "Unknown Channel",
-        "channel_url": "https://youtube.com/@unknown",
-        "video_id": "random123",
-        "url": "https://youtube.com/shorts/random123",
-    })
+    nontarget_counter = [0]
+    def _next_nontarget():
+        nontarget_counter[0] += 1
+        return {
+            "title": f"Other Short {nontarget_counter[0]}",
+            "channel_name": "Unknown Channel",
+            "channel_url": "https://youtube.com/@unknown",
+            "video_id": f"random_{nontarget_counter[0]}",
+            "url": f"https://youtube.com/shorts/random_{nontarget_counter[0]}",
+        }
+    worker.get_active_short_info = MagicMock(side_effect=_next_nontarget)
 
     with patch.object(worker, "scroll_to_next_short"), \
          patch("src.automation.watching_worker.human_like_delay"), \

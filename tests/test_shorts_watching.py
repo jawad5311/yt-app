@@ -243,7 +243,7 @@ def test_play_target_short_integration():
         # Check stats store recorded outcome
         worker.stats_store.record.assert_called_once()
         # Check that shorts reel loop was entered
-        worker._run_shorts_reel_loop.assert_called_once_with(session_watched_keys=watched_keys)
+        worker._run_shorts_reel_loop.assert_called_once_with(session_watched_keys=watched_keys, initial_prev_url="https://www.youtube.com/shorts/EmWlMjI_uXQ")
 
 
 def test_shorts_reel_loop_skips_non_target_until_limit():
@@ -891,3 +891,80 @@ def test_unknown_channel_short_scrolled_immediately_within_1_to_2_seconds():
             logged_messages.append(worker.log_queue.get_nowait())
         log_texts = [msg[1] if isinstance(msg, tuple) else str(msg) for msg in logged_messages]
         assert any("Short from unknown channel 'Random Creator XYZ' found. Scrolling immediately within 1.4s" in t for t in log_texts)
+
+
+def test_same_short_not_double_counted_when_scroll_delayed():
+    """Verify that if the same Short remains active across loop iterations, it is not double counted."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.driver.current_url = "https://www.youtube.com/shorts/bol123"
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.check_pause = MagicMock()
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+    worker.get_target_channels = MagicMock(return_value=[Channel(name="My Target Channel", enabled=True)])
+    worker.get_target_shorts = MagicMock(return_value=[])
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 5  # Max 5 non-target shorts before exit
+    worker.config_mgr = config_mgr
+
+    short_sequence = [
+        {"found": True, "channel_name": "@BOLNewsofficial", "channel_url": "/@BOLNewsofficial", "title": "BOL News", "video_id": "bol123", "url": "https://www.youtube.com/shorts/bol123"},
+        {"found": True, "channel_name": "@BOLNewsofficial", "channel_url": "/@BOLNewsofficial", "title": "BOL News", "video_id": "bol123", "url": "https://www.youtube.com/shorts/bol123"},
+        {"found": True, "channel_name": "@BOLNewsofficial", "channel_url": "/@BOLNewsofficial", "title": "BOL News", "video_id": "bol123", "url": "https://www.youtube.com/shorts/bol123"},
+        {"found": True, "channel_name": "@shewasmy", "channel_url": "/@shewasmy", "title": "She Was My", "video_id": "shew456", "url": "https://www.youtube.com/shorts/shew456"},
+    ]
+
+    def _get_short():
+        if short_sequence:
+            return short_sequence.pop(0)
+        worker.stop_event.set()
+        return {"found": False}
+
+    worker.get_active_short_info = MagicMock(side_effect=_get_short)
+
+    with patch("src.automation.watching_worker.random.uniform", return_value=1.5), \
+         patch("src.automation.watching_worker.time.sleep"), \
+         patch("src.automation.watching_worker.human_like_delay"), \
+         patch("random.randint", return_value=5):
+
+        res = worker._run_shorts_reel_loop(session_watched_keys=set())
+
+    # Count of non-target shorts should be 2 (bol123 counted once, shew456 counted once), NOT 4!
+    assert res[1] == 2
+
+    # Verify log queue contains deduplication messages
+    logged = []
+    while not worker.log_queue.empty():
+        logged.append(worker.log_queue.get_nowait())
+    log_texts = [msg[1] if isinstance(msg, tuple) else str(msg) for msg in logged]
+
+    assert any("Still on same Short 'BOL News' (bol123) from '@BOLNewsofficial'" in t for t in log_texts)
+    # Count how many times bol123 was watched/skipped in logs: only once!
+    assert sum(1 for t in log_texts if "Short from unknown channel '@BOLNewsofficial' found" in t) == 1
+    assert sum(1 for t in log_texts if "Short from unknown channel '@shewasmy' found" in t) == 1
+
+
+def test_scroll_to_next_short_does_not_rely_on_offset_parent():
+    """Verify that scroll_to_next_short uses getBoundingClientRect instead of offsetParent."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    executed_scripts = []
+
+    def _mock_execute_script(script, *args):
+        executed_scripts.append(script)
+        return True
+
+    worker.driver.execute_script = MagicMock(side_effect=_mock_execute_script)
+    worker.driver.current_url = "https://www.youtube.com/shorts/after123"
+
+    with patch("time.sleep"):
+        res = worker.scroll_to_next_short(prev_url="https://www.youtube.com/shorts/before123")
+
+    assert res is True
+    assert len(executed_scripts) >= 1
+    script = executed_scripts[0]
+    assert "offsetParent" not in script
+    assert "getBoundingClientRect" in script

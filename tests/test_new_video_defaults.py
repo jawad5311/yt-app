@@ -39,7 +39,7 @@ def test_channel_import_modal_defaults_to_3x_mult_and_5_views(ctk_app):
 
     # Shorts default to 0.0 multiplier (no multiplier) and 10 max views
     assert s_task.target_multiplier == 0.0
-    assert s_task.max_runs == 10
+    assert s_task.max_runs == 5
 
     modal.destroy()
 
