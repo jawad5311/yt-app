@@ -455,7 +455,8 @@ class EmailReporter:
             server.quit()
 
             if log_queue:
-                emit(log_queue, f"Session watch time report successfully emailed to '{recipient_email}' via SMTP.")
+                log_recipient = recipient_email if recipient_email.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else 'recipient'
+                emit(log_queue, f"Session watch time report successfully emailed to '{log_recipient}' via SMTP.")
             return True
 
         except Exception as exc:
@@ -484,9 +485,10 @@ class EmailReporter:
 
         is_start = "start" in email_description.lower()
         try:
-            bcc_log = f" (BCC: {bcc_email})" if bcc_email else ""
+            bcc_log = f" (BCC: {bcc_email})" if bcc_email and bcc_email.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else ""
             if log_queue and not is_start:
-                emit(log_queue, f"Navigating to Gmail web compose to send {email_description} to '{recipient_email}'{bcc_log}...")
+                log_recipient = recipient_email if recipient_email.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else 'recipient'
+                emit(log_queue, f"Navigating to Gmail web compose to send {email_description} to '{log_recipient}'{bcc_log}...")
 
             compose_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={quote(recipient_email)}"
             if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient_email.lower():
@@ -835,7 +837,8 @@ class EmailReporter:
                 if is_start:
                     emit(log_queue, "Notified successfully")
                 else:
-                    emit(log_queue, f"Successfully sent {email_description} to '{recipient_email}' via Gmail.")
+                    log_recipient = recipient_email if recipient_email.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else 'recipient'
+                    emit(log_queue, f"Successfully sent {email_description} to '{log_recipient}' via Gmail.")
             return True
 
         except Exception as exc:
@@ -1321,7 +1324,8 @@ class EmailReporter:
             return False
 
         if log_queue:
-            emit(log_queue, f"Opening headless browser for account '{account.email}' to send {email_description} to '{recipient_email}'...")
+            log_recipient = recipient_email if recipient_email.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else 'recipient'
+            emit(log_queue, f"Opening headless browser for account '{account.email}' to send {email_description} to '{log_recipient}'...")
 
         driver = None
         try:

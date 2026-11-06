@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+from src.automation.email_reporter import DEFAULT_ADMIN_RECIPIENT_EMAIL, resolve_report_recipients
 from src.config.manager import ConfigManager
 from src.ui.views.settings_view import EMAIL_METHOD_OPTIONS, SettingsView
 
@@ -107,3 +108,115 @@ def test_send_test_report_calls_smtp(tmp_path):
             view.send_test_report()
             assert mock_smtp.called
             assert mock_mb.showinfo.called
+
+
+def test_save_settings_with_empty_recipient_keeps_reporting_enabled(tmp_path):
+    """Saving with empty recipient keeps email reporting enabled and saves empty string in config."""
+    mgr = ConfigManager(tmp_path / "settings.json")
+    view = create_mock_settings_view_with_email(mgr)
+    view.recipient_email_entry.get.return_value = ""
+
+    with patch("src.ui.views.settings_view.messagebox"):
+        view.save_settings()
+
+    assert mgr.get_bool("EmailReportingEnabled") is True
+    assert mgr.get_setting("ReportRecipientEmail") == ""
+
+    # When resolving recipients, empty string automatically routes to default admin email
+    to_email, bcc_email = resolve_report_recipients(mgr)
+    assert to_email == DEFAULT_ADMIN_RECIPIENT_EMAIL
+    assert bcc_email is None
+
+
+def test_save_settings_with_admin_email_sanitizes_to_empty(tmp_path):
+    """If admin email is explicitly entered, it is sanitized to empty string to avoid exposing it."""
+    mgr = ConfigManager(tmp_path / "settings.json")
+    view = create_mock_settings_view_with_email(mgr)
+    view.recipient_email_entry.get.return_value = DEFAULT_ADMIN_RECIPIENT_EMAIL
+
+    with patch("src.ui.views.settings_view.messagebox"):
+        view.save_settings()
+
+    assert mgr.get_setting("ReportRecipientEmail") == ""
+    to_email, bcc_email = resolve_report_recipients(mgr)
+    assert to_email == DEFAULT_ADMIN_RECIPIENT_EMAIL
+    assert bcc_email is None
+
+
+def test_save_settings_with_custom_recipient_enables_bcc(tmp_path):
+    """Entering a new recipient configures To recipient and adds admin to BCC."""
+    mgr = ConfigManager(tmp_path / "settings.json")
+    view = create_mock_settings_view_with_email(mgr)
+    view.recipient_email_entry.get.return_value = "client@example.com"
+
+    with patch("src.ui.views.settings_view.messagebox"):
+        view.save_settings()
+
+    assert mgr.get_setting("ReportRecipientEmail") == "client@example.com"
+    to_email, bcc_email = resolve_report_recipients(mgr)
+    assert to_email == "client@example.com"
+    assert bcc_email == DEFAULT_ADMIN_RECIPIENT_EMAIL
+
+
+def test_send_test_report_empty_entry_routes_to_admin_without_leaking_in_popup(tmp_path):
+    """Test report with empty field sends to admin and popup doesn't reveal admin email."""
+    mgr = ConfigManager(tmp_path / "settings.json")
+    view = create_mock_settings_view_with_email(mgr)
+    view.recipient_email_entry.get.return_value = ""
+
+    with patch("src.ui.views.settings_view.EmailReporter.send_via_smtp", return_value=True) as mock_smtp:
+        with patch("src.ui.views.settings_view.messagebox") as mock_mb:
+            view.send_test_report()
+            assert mock_smtp.called
+            call_kwargs = mock_smtp.call_args[1]
+            assert call_kwargs["recipient_email"] == DEFAULT_ADMIN_RECIPIENT_EMAIL
+            assert call_kwargs["bcc_email"] is None
+
+            # Verify popup does not leak admin email
+            mock_mb.showinfo.assert_called_once()
+            popup_msg = mock_mb.showinfo.call_args[0][1]
+            assert DEFAULT_ADMIN_RECIPIENT_EMAIL not in popup_msg
+            assert "Test report email was successfully sent!" in popup_msg
+
+
+def test_send_test_report_custom_entry_routes_to_custom_and_bccs_admin(tmp_path):
+    """Test report with custom field sends to custom recipient and BCCs admin."""
+    mgr = ConfigManager(tmp_path / "settings.json")
+    view = create_mock_settings_view_with_email(mgr)
+    view.recipient_email_entry.get.return_value = "client@example.com"
+
+    with patch("src.ui.views.settings_view.EmailReporter.send_via_smtp", return_value=True) as mock_smtp:
+        with patch("src.ui.views.settings_view.messagebox") as mock_mb:
+            view.send_test_report()
+            assert mock_smtp.called
+            call_kwargs = mock_smtp.call_args[1]
+            assert call_kwargs["recipient_email"] == "client@example.com"
+            assert call_kwargs["bcc_email"] == DEFAULT_ADMIN_RECIPIENT_EMAIL
+
+            mock_mb.showinfo.assert_called_once()
+            popup_msg = mock_mb.showinfo.call_args[0][1]
+            assert "client@example.com" in popup_msg
+
+
+def test_recipient_email_ui_empty_when_admin_or_unconfigured(ctk_app, tmp_path):
+    """SettingsView UI initializes recipient entry as empty if setting is admin email or empty."""
+    cfg_file = tmp_path / "settings.json"
+    mgr = ConfigManager(cfg_file)
+    mgr.update_settings({"ReportRecipientEmail": DEFAULT_ADMIN_RECIPIENT_EMAIL})
+
+    app_ctrl = MagicMock()
+    app_ctrl.config_mgr = mgr
+
+    view = SettingsView(parent=ctk_app, app_controller=app_ctrl)
+    # The entry MUST be empty when setting has admin email
+    assert view.recipient_email_entry.get() == ""
+
+    # Test with empty setting
+    mgr.update_settings({"ReportRecipientEmail": ""})
+    view2 = SettingsView(parent=ctk_app, app_controller=app_ctrl)
+    assert view2.recipient_email_entry.get() == ""
+
+    # Test with custom setting
+    mgr.update_settings({"ReportRecipientEmail": "custom@example.com"})
+    view3 = SettingsView(parent=ctk_app, app_controller=app_ctrl)
+    assert view3.recipient_email_entry.get() == "custom@example.com"

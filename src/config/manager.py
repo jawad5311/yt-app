@@ -110,7 +110,7 @@ class ConfigManager:
             "QualityLevel": "360p",
             "RandomMicroPauses": True,
             "EmailReportingEnabled": True,
-            "ReportRecipientEmail": "jawad@ytgrowthexpert.com",
+            "ReportRecipientEmail": "",
             "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
             "SmtpHost": "smtp.gmail.com",
             "SmtpPort": 587,

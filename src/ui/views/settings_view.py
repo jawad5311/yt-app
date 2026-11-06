@@ -6,7 +6,7 @@ from datetime import datetime
 from tkinter import messagebox
 from typing import Any, Dict, List, Optional
 
-from ...automation.email_reporter import EmailReporter, SessionReport
+from ...automation.email_reporter import DEFAULT_ADMIN_RECIPIENT_EMAIL, EmailReporter, SessionReport
 from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_SHORTS_MAX_RUNS
 from ..components import (
     Button,
@@ -466,8 +466,8 @@ class SettingsView(Frame):
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.recipient_email_entry = Entry(scroll_email, width=280)
         recipient = self.config_mgr.get_setting("ReportRecipientEmail", "") if self.config_mgr else ""
-        if recipient:
-            self.recipient_email_entry.insert(0, recipient)
+        if recipient and recipient.strip().lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower():
+            self.recipient_email_entry.insert(0, recipient.strip())
         self.recipient_email_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         Label(scroll_email, text="Email Delivery Method:", font=Font(weight="bold")).pack(
@@ -757,8 +757,10 @@ class SettingsView(Frame):
             self._notify_result(False, "Please provide a valid Recipient Email address.")
             return
 
-        validated["EmailReportingEnabled"] = bool(recipient)
-        validated["ReportRecipientEmail"] = recipient
+        # Reports remain enabled even if empty; if empty or set to admin email, save empty string
+        # resolve_report_recipients() automatically routes to DEFAULT_ADMIN_RECIPIENT_EMAIL
+        validated["EmailReportingEnabled"] = True
+        validated["ReportRecipientEmail"] = "" if (not recipient or recipient.lower() == DEFAULT_ADMIN_RECIPIENT_EMAIL.lower()) else recipient
 
         method = self.email_method_menu.get() if hasattr(self, "email_method_menu") else EMAIL_METHOD_OPTIONS[0]
         if method not in EMAIL_METHOD_OPTIONS:
@@ -957,11 +959,12 @@ class SettingsView(Frame):
 
     def send_test_report(self):
         """Send an immediate sample report to verify recipient and SMTP connection."""
-        recipient = self.recipient_email_entry.get().strip() or "jawad@ytgrowthexpert.com"
+        raw_recipient = self.recipient_email_entry.get().strip() if hasattr(self, "recipient_email_entry") else ""
+        recipient = raw_recipient or DEFAULT_ADMIN_RECIPIENT_EMAIL
         if "@" not in recipient or "." not in recipient:
             messagebox.showerror("Error", "Please enter a valid Recipient Email address first.")
             return
-        bcc_email = "jawad@ytgrowthexpert.com" if recipient.lower() != "jawad@ytgrowthexpert.com" else None
+        bcc_email = DEFAULT_ADMIN_RECIPIENT_EMAIL if recipient.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else None
 
         now = datetime.now()
         sender = self.smtp_user_entry.get().strip() or "views-app@noreply.local"
@@ -1012,6 +1015,9 @@ class SettingsView(Frame):
             sender_email=sender,
         )
         if ok:
-            messagebox.showinfo("Success", f"Test report email was successfully sent to '{recipient}'!")
+            if raw_recipient and raw_recipient.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower():
+                messagebox.showinfo("Success", f"Test report email was successfully sent to '{raw_recipient}'!")
+            else:
+                messagebox.showinfo("Success", "Test report email was successfully sent!")
         else:
             messagebox.showerror("Delivery Error", "Failed to send test email. Please check your SMTP host, port, username, and App Password.")
