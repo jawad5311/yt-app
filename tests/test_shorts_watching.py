@@ -768,7 +768,7 @@ def test_find_target_short_on_home_diagnostic_logging():
         logs.append(worker.log_queue.get())
 
     # Ensure it logged that 3 Shorts were found on Home feed, but none matched
-    found_unmatched_msg = any("Found 3 Short(s) on Home feed, but none matched any enabled task in your Shorts Queue" in log for log in logs)
+    found_unmatched_msg = any("Found 3 untargeted Short(s) on Home feed" in log and "none matched any enabled task in your Shorts Queue" in log for log in logs)
     assert found_unmatched_msg is True
     # Ensure it did NOT falsely claim the shelf was missing
     falsely_missing = any("Shorts shelf/items not yet visible in Home feed" in log for log in logs)
@@ -968,3 +968,120 @@ def test_scroll_to_next_short_does_not_rely_on_offset_parent():
     script = executed_scripts[0]
     assert "offsetParent" not in script
     assert "getBoundingClientRect" in script
+
+
+def test_match_home_short_matches_handle_against_display_name():
+    """Verify channel handle (e.g. @summiajamshed) matches channel display name (e.g. Summia Jamshed)."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.log_queue = queue.Queue()
+    worker.config_mgr = None
+
+    task = VideoTask(
+        url="https://www.youtube.com/shorts/summia123",
+        title="Summia Short",
+        channel="Summia Jamshed",
+        enabled=True,
+    )
+    cand = [{
+        "video_id": "different123",
+        "href": "/shorts/different123",
+        "title": "New Upload",
+        "channel": "@summiajamshed",
+    }]
+
+    matched = worker.match_home_short(cand, [task])
+    assert matched is not None
+    assert matched[1] == task
+
+
+def test_match_home_short_matches_from_target_channels_when_not_in_shorts_queue():
+    """Verify that a Short on Home feed from a targeted Channel matches even if not yet in Shorts Queue."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.log_queue = queue.Queue()
+    worker.config_mgr = None
+    worker._ensure_video_in_queue = MagicMock(side_effect=lambda t: t)
+
+    target_ch = Channel(name="Summia Jamshed", enabled=True)
+    cand = [{
+        "video_id": "fresh12345",
+        "href": "/shorts/fresh12345",
+        "url": "https://www.youtube.com/shorts/fresh12345",
+        "title": "Fresh Uploaded Short",
+        "channel": "@summiajamshed",
+    }]
+
+    # Empty target shorts queue
+    matched = worker.match_home_short(cand, [], target_channels=[target_ch])
+    assert matched is not None
+    cand_info, task = matched
+    assert task.channel == "Summia Jamshed"
+    assert task.url == "https://www.youtube.com/shorts/fresh12345"
+
+
+def test_find_target_short_on_home_reports_candidate_details_in_log():
+    """Verify find_target_short_on_home includes candidate title & channel in diagnostic log."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.config_mgr = None
+    worker.channels = []
+
+    task = VideoTask(url="https://www.youtube.com/shorts/myvid11", title="My Short", channel="My Channel", enabled=True)
+    worker.get_target_shorts = MagicMock(return_value=[task])
+    worker.get_target_channels = MagicMock(return_value=[])
+
+    unrelated_candidate = [
+        {"video_id": "cat123", "href": "/shorts/cat123", "title": "Funny Cat Video", "channel": "@ViralPets"},
+    ]
+    worker.fetch_home_shorts = MagicMock(return_value=unrelated_candidate)
+
+    with patch("src.automation.watching_worker.human_like_delay"):
+        res = worker.find_target_short_on_home(max_scrolls=0)
+
+    assert res is None
+    logs = []
+    while not worker.log_queue.empty():
+        logs.append(worker.log_queue.get())
+    log_texts = [l[1] if isinstance(l, tuple) else str(l) for l in logs]
+
+    # Verify log mentions the candidate's actual title and channel
+    assert any("Funny Cat Video" in t and "@ViralPets" in t for t in log_texts)
+    assert any("untargeted recommendation(s)" in t or "untargeted Short(s)" in t for t in log_texts)
+
+
+def test_find_target_short_on_home_reports_cooldown_for_matching_short():
+    """Verify that if a matching Short on Home is in cooldown, it explicitly logs cooldown hours remaining."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.config_mgr = None
+    worker.channels = []
+
+    task = VideoTask(url="https://www.youtube.com/shorts/summia123", title="Summia Short", channel="Summia Jamshed", enabled=True)
+    worker.get_target_shorts = MagicMock(return_value=[task])
+    worker.get_target_channels = MagicMock(return_value=[Channel(name="Summia Jamshed", enabled=True)])
+
+    worker._get_cooldown_hours = MagicMock(return_value=12.0)
+    mock_store = MagicMock()
+    mock_rec = MagicMock()
+    mock_rec.is_on_cooldown.return_value = (True, 9.5)
+    mock_store.get.return_value = mock_rec
+    worker.stats_store = mock_store
+
+    cand = [{"video_id": "summia123", "href": "/shorts/summia123", "title": "Summia Short", "channel": "Summia Jamshed"}]
+    worker.fetch_home_shorts = MagicMock(return_value=cand)
+
+    with patch("src.automation.watching_worker.human_like_delay"):
+        res = worker.find_target_short_on_home(max_scrolls=0)
+
+    assert res is None
+    logs = []
+    while not worker.log_queue.empty():
+        logs.append(worker.log_queue.get())
+    log_texts = [l[1] if isinstance(l, tuple) else str(l) for l in logs]
+
+    assert any("within 12h cooldown period (9.5h remaining)" in t for t in log_texts)

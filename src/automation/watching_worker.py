@@ -493,11 +493,13 @@ return (function() {
         var viewsText = viewsEl ? (viewsEl.textContent || '').trim() : '';
 
         var channelText = '';
+        var channelUrl = '';
         var channelEl = card.querySelector(
             'a[href*="/@"], a[href*="/channel/"], [class*="channel"], [class*="Channel"], #channel-name, .yt-core-attributed-string'
         );
         if (channelEl) {
             channelText = (channelEl.textContent || channelEl.getAttribute('title') || '').trim();
+            channelUrl = channelEl.getAttribute('href') || '';
         }
         if (!channelText) {
             var aria = (linkEl.getAttribute('aria-label') || '');
@@ -514,6 +516,7 @@ return (function() {
             url: href.startsWith('http') ? href : ('https://www.youtube.com' + href),
             title: title || ('Short ' + vidId),
             channel: channelText,
+            channel_url: channelUrl,
             views: viewsText
         });
     }
@@ -541,9 +544,13 @@ return (function() {
         ) : null;
 
         var aChannel = '';
+        var aChannelUrl = '';
         if (aCard) {
             var chEl = aCard.querySelector('a[href*="/@"], a[href*="/channel/"], [class*="channel"], [class*="Channel"], #channel-name');
-            if (chEl) aChannel = (chEl.textContent || chEl.getAttribute('title') || '').trim();
+            if (chEl) {
+                aChannel = (chEl.textContent || chEl.getAttribute('title') || '').trim();
+                aChannelUrl = chEl.getAttribute('href') || '';
+            }
         }
 
         results.push({
@@ -553,6 +560,7 @@ return (function() {
             url: aHref.startsWith('http') ? aHref : ('https://www.youtube.com' + aHref),
             title: aTitle || ('Short ' + aVidId),
             channel: aChannel,
+            channel_url: aChannelUrl,
             views: ''
         });
     }
@@ -996,16 +1004,18 @@ class WatchingWorker:
                 return False
             return True
 
-        if self.config_mgr is not None:
+        cfg = getattr(self, "config_mgr", None)
+        if cfg is not None:
             try:
-                stored_dicts = self.config_mgr.get_channels()
+                stored_dicts = cfg.get_channels()
                 if stored_dicts is not None:
                     stored_objs = [Channel.from_dict(c) for c in stored_dicts]
                     return [c for c in stored_objs if _is_active(c)]
             except Exception as exc:
                 emit(self.log_queue, f"Failed to read channels from configuration: {exc}", logging.ERROR)
                 return []
-        return [c for c in self.channels if _is_active(c)]
+        raw_channels = getattr(self, "channels", []) or []
+        return [c for c in raw_channels if _is_active(c)]
 
     def _watchtime_duration_seconds(self) -> Optional[int]:
         """Read watch duration budget from settings. Returns None for Full Video."""
@@ -2391,56 +2401,113 @@ class WatchingWorker:
         candidate_shorts: List[Dict[str, Any]],
         target_shorts: List[VideoTask],
         session_watched_keys: Optional[Set[str]] = None,
+        target_channels: Optional[Sequence[Channel]] = None,
     ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
         """
         Match only one Short at a time by inspecting the first Short in the list of candidate shorts
-        and matching its URL / video ID / title against the Shorts in our Shorts queue.
+        and matching its URL / video ID / title / channel against our Shorts Queue and targeted channels.
         Returns (first_short, matched_task) if there is a match, otherwise None.
         """
-        if not candidate_shorts or not target_shorts:
+        if not candidate_shorts:
             return None
 
         first_short = candidate_shorts[0]
         cand_id = first_short.get("video_id") or extract_video_id(first_short.get("href", ""))
         cand_url = first_short.get("url") or first_short.get("href", "")
         cand_title = (first_short.get("title") or "").strip().lower()
-        cand_channel = (first_short.get("channel") or "").strip().lower()
+        cand_channel = (first_short.get("channel") or "").strip()
+        cand_ch_url = (first_short.get("channel_url") or "").strip()
 
-        if not cand_id and not cand_url and not cand_title:
+        if not cand_id and not cand_url and not cand_title and not cand_channel:
             return None
 
-        for t in target_shorts:
-            if not getattr(t, "enabled", True):
-                continue
+        # 1. Match against target shorts queue
+        if target_shorts:
+            for t in target_shorts:
+                if not getattr(t, "enabled", True):
+                    continue
 
-            # 1. Match by Video ID (e.g. /shorts/<id> or /watch?v=<id>)
-            task_id = extract_video_id(t.url)
-            if task_id and cand_id and task_id.lower() == cand_id.lower():
-                return (first_short, t)
-
-            # 2. Match by Clean URL
-            clean_cand_url = cand_url.split("?")[0].rstrip("/") if cand_url else ""
-            clean_task_url = t.url.split("?")[0].rstrip("/") if t.url else ""
-            if clean_cand_url and clean_task_url and clean_cand_url == clean_task_url:
-                return (first_short, t)
-
-            # 3. Match by Title / Search Queries
-            queries = t.get_title_queries() if hasattr(t, "get_title_queries") else [t.title]
-            if cand_title and queries:
-                for q in queries:
-                    q_clean = q.strip().lower()
-                    if not q_clean:
-                        continue
-                    if q_clean == cand_title:
-                        return (first_short, t)
-                    if len(q_clean) >= 4 and (q_clean in cand_title or cand_title in q_clean):
-                        return (first_short, t)
-
-            # 4. Match by Channel if task specifies a channel and candidate has detected channel
-            if cand_channel and getattr(t, "channel", ""):
-                task_ch = t.channel.strip().lower()
-                if task_ch and (task_ch == cand_channel or task_ch in cand_channel or cand_channel in task_ch):
+                # 1a. Match by Video ID
+                task_id = extract_video_id(t.url)
+                if task_id and cand_id and task_id.lower() == cand_id.lower():
                     return (first_short, t)
+
+                # 1b. Match by Clean URL
+                clean_cand_url = cand_url.split("?")[0].rstrip("/") if cand_url else ""
+                clean_task_url = t.url.split("?")[0].rstrip("/") if t.url else ""
+                if clean_cand_url and clean_task_url and clean_cand_url == clean_task_url:
+                    return (first_short, t)
+
+                # 1c. Match by Title / Search Queries
+                queries = t.get_title_queries() if hasattr(t, "get_title_queries") else [t.title]
+                if cand_title and queries:
+                    for q in queries:
+                        q_clean = q.strip().lower()
+                        if not q_clean:
+                            continue
+                        if q_clean == cand_title:
+                            return (first_short, t)
+                        if len(q_clean) >= 4 and (q_clean in cand_title or cand_title in q_clean):
+                            return (first_short, t)
+
+                # 1d. Match by Channel (normalized to handle @handle vs Display Name)
+                if cand_channel and getattr(t, "channel", ""):
+                    norm_task_ch = normalize_channel_text(t.channel)
+                    norm_cand_ch = normalize_channel_text(cand_channel)
+                    if norm_task_ch and norm_cand_ch:
+                        if norm_task_ch == norm_cand_ch or norm_task_ch in norm_cand_ch or norm_cand_ch in norm_task_ch:
+                            return (first_short, t)
+
+        # 2. Match against targeted channels
+        ch_list = target_channels if target_channels is not None else (self.get_target_channels() if hasattr(self, "get_target_channels") else [])
+        if ch_list and (cand_channel or cand_ch_url):
+            ch_lookup = cand_ch_url or (f"/{cand_channel}" if cand_channel.startswith("@") else "")
+            matched_ch = match_channel(cand_channel, ch_lookup, ch_list)
+            if not matched_ch and cand_channel:
+                norm_cand = normalize_channel_text(cand_channel)
+                for ch in ch_list:
+                    if ch.name and norm_cand:
+                        norm_ch = normalize_channel_text(ch.name)
+                        if norm_ch and (norm_ch == norm_cand or norm_ch in norm_cand or norm_cand in norm_ch):
+                            matched_ch = ch
+                            break
+
+            if matched_ch:
+                found_task = None
+                if cand_id and getattr(self, "config_mgr", None):
+                    try:
+                        for item in self.config_mgr.get_video_queue():
+                            if isinstance(item, dict):
+                                vt = VideoTask.from_dict(item)
+                                if cand_id in (vt.url or "") or extract_video_id(vt.url) == cand_id:
+                                    found_task = vt
+                                    break
+                    except Exception:
+                        pass
+                if not found_task and target_shorts:
+                    for t in target_shorts:
+                        if cand_id and (cand_id in (t.url or "") or extract_video_id(t.url) == cand_id):
+                            found_task = t
+                            break
+                if not found_task:
+                    def_shorts_max = (
+                        self.config_mgr.get_int("DefaultShortsMaxViews", DEFAULT_SHORTS_MAX_RUNS)
+                        if getattr(self, "config_mgr", None)
+                        else DEFAULT_SHORTS_MAX_RUNS
+                    )
+                    if type(def_shorts_max) is not int:
+                        def_shorts_max = DEFAULT_SHORTS_MAX_RUNS
+                    found_task = VideoTask(
+                        url=first_short.get("url") or (f"https://www.youtube.com/shorts/{cand_id}" if cand_id else ""),
+                        title=first_short.get("title") or "Short",
+                        channel=matched_ch.name,
+                        enabled=True,
+                        max_runs=def_shorts_max,
+                        target_multiplier=0.0,
+                    )
+                    if hasattr(self, "_ensure_video_in_queue"):
+                        found_task = self._ensure_video_in_queue(found_task)
+                return (first_short, found_task)
 
         return None
 
@@ -2451,9 +2518,11 @@ class WatchingWorker:
     ) -> Optional[Tuple[Dict[str, Any], VideoTask]]:
         """Scan YouTube Home page shelves for targeted shorts, scrolling down up to max_scrolls times if needed."""
         cooldown_hours = self._get_cooldown_hours()
-        target_shorts = self.get_target_shorts(filter_cooldown=True)
-        if not target_shorts:
-            emit(self.log_queue, "Shorts Queue has no enabled tasks available outside cooldown. Skipping Home Shorts search.", logging.INFO)
+        target_shorts = self.get_target_shorts(filter_cooldown=False)
+        target_channels = self.get_target_channels() if hasattr(self, "get_target_channels") else []
+
+        if not target_shorts and not target_channels:
+            emit(self.log_queue, "No enabled Shorts or targeted Channels configured. Skipping Home Shorts search.", logging.INFO)
             return None
 
         total_candidates_seen = 0
@@ -2481,52 +2550,59 @@ class WatchingWorker:
                 if session_watched_keys and (cid in session_watched_keys or curl in session_watched_keys):
                     continue
 
-                if cid and getattr(self, "stats_store", None) and cooldown_hours > 0:
-                    rec_stat = self.stats_store.get(cid)
-                    if rec_stat and hasattr(rec_stat, "is_on_cooldown"):
-                        try:
-                            res = rec_stat.is_on_cooldown(cooldown_hours)
-                            is_cool = res[0] if (isinstance(res, tuple) and len(res) == 2) else False
-                        except Exception:
-                            is_cool = False
-                        if is_cool:
-                            continue
-
-                m = self.match_home_short([cand], target_shorts, session_watched_keys)
+                m = self.match_home_short([cand], target_shorts, session_watched_keys, target_channels=target_channels)
                 if m:
                     cand_item, task_item = m
+                    # Check cooldown
+                    is_cool = False
+                    rem_hours = 0.0
                     if getattr(self, "stats_store", None) and cooldown_hours > 0:
-                        task_rec = self.stats_store.find_for_task(task_item)
-                        if task_rec and hasattr(task_rec, "is_on_cooldown"):
+                        rec = None
+                        if cid:
+                            rec = self.stats_store.get(cid)
+                        if not rec and task_item:
+                            rec = self.stats_store.find_for_task(task_item)
+                        if rec and hasattr(rec, "is_on_cooldown"):
                             try:
-                                res = task_rec.is_on_cooldown(cooldown_hours)
+                                res = rec.is_on_cooldown(cooldown_hours)
                                 if isinstance(res, tuple) and len(res) == 2:
                                     is_cool, rem_hours = res
                                 else:
                                     is_cool, rem_hours = False, 0.0
                             except Exception:
                                 is_cool, rem_hours = False, 0.0
-                            if is_cool:
-                                rem_str = f"{rem_hours:.1f}h" if rem_hours >= 1.0 else f"{int(rem_hours * 60)}m"
-                                emit(
-                                    self.log_queue,
-                                    f"Skipping matched Short '{cand_item.get('title')}' for task '{task_item.title}': within {cooldown_hours:g}h cooldown period ({rem_str} remaining).",
-                                    logging.INFO,
-                                )
-                                continue
 
+                    if is_cool:
+                        rem_str = f"{rem_hours:.1f}h" if rem_hours >= 1.0 else f"{int(rem_hours * 60)}m"
+                        ch_label = getattr(task_item, "channel", "") or cand_item.get("channel") or "Target Channel"
+                        emit(
+                            self.log_queue,
+                            f"Skipping matched Short '{cand_item.get('title')}' from channel '{ch_label}': within {cooldown_hours:g}h cooldown period ({rem_str} remaining).",
+                            logging.INFO,
+                        )
+                        continue
+
+                    ch_display = getattr(task_item, "channel", "") or cand_item.get("channel") or "Target Channel"
                     emit(
                         self.log_queue,
-                        f"Found matching Short on Home feed: '{cand_item.get('title')}' matching Shorts Queue task '{task_item.title or task_item.url}'.",
+                        f"Found matching Short on Home feed: '{cand_item.get('title')}' from targeted channel '{ch_display}'.",
                         logging.INFO,
                     )
                     return m
 
             if scroll_idx < max_scrolls and not self.stop_event.is_set():
                 if len(candidate_shorts) > 0:
+                    cand_details = []
+                    for c in candidate_shorts[:3]:
+                        c_title = c.get("title") or "Short"
+                        c_ch = c.get("channel") or ""
+                        cand_details.append(f"'{c_title}'" + (f" by {c_ch}" if c_ch else ""))
+                    detail_str = ", ".join(cand_details)
+                    if len(candidate_shorts) > 3:
+                        detail_str += f" (+{len(candidate_shorts) - 3} more)"
                     emit(
                         self.log_queue,
-                        f"Found {len(candidate_shorts)} Short(s) on Home feed, but none matched any enabled task in your Shorts Queue (attempt {scroll_idx + 1}/{max_scrolls + 1}). Scrolling feed down...",
+                        f"Found {len(candidate_shorts)} untargeted Short(s) on Home feed ({detail_str}), but none matched any enabled task in your Shorts Queue or targeted channels (attempt {scroll_idx + 1}/{max_scrolls + 1}). Scrolling feed down...",
                         logging.INFO,
                     )
                 else:
@@ -2536,18 +2612,27 @@ class WatchingWorker:
                         logging.INFO,
                     )
                 try:
-                    self.driver.execute_script("window.scrollBy({top: 800, behavior: 'smooth'});")
+                    self.driver.execute_script("window.scrollBy({top: 1200, behavior: 'smooth'});")
                 except Exception:
                     try:
-                        self.driver.execute_script("window.scrollBy(0, 800);")
+                        self.driver.execute_script("window.scrollBy(0, 1200);")
                     except Exception:
                         pass
                 human_like_delay(1.5, 2.5)
 
         if total_candidates_seen > 0:
+            cand_summary = ""
+            last_cands = getattr(self, "_last_home_shorts", None) or candidate_shorts
+            if last_cands:
+                details = []
+                for c in last_cands[:3]:
+                    c_title = c.get("title") or "Short"
+                    c_ch = c.get("channel") or ""
+                    details.append(f"'{c_title}'" + (f" by {c_ch}" if c_ch else ""))
+                cand_summary = f" (including {', '.join(details)})"
             emit(
                 self.log_queue,
-                f"No Short on Home feed matched your Shorts Queue ({total_candidates_seen} candidate(s) checked across {max_scrolls + 1} attempts).",
+                f"No targeted Short appeared on Home feed ({total_candidates_seen} untargeted recommendation(s) checked across {max_scrolls + 1} scroll attempts{cand_summary}).",
                 logging.INFO,
             )
         else:
