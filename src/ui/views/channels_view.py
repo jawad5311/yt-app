@@ -129,10 +129,44 @@ class ChannelsView(Frame):
             font=ctk.CTkFont(size=16, weight="bold"),
         ).pack(side="left")
 
+        self.clear_btn = ctk.CTkButton(
+            header_frame,
+            text="🗑 Clear All",
+            fg_color="#D32F2F",
+            hover_color="#9A0007",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        self.clear_btn.configure(
+            command=with_button_feedback(self.clear_btn, "Clearing...", self.clear_channels)
+        )
+        self.clear_btn.pack(side="right")
+        add_tooltip(
+            self.clear_btn,
+            "Permanently remove all channels from your list.\nAssociated queued videos will be unassigned.",
+        )
+
+        self.archive_all_btn = ctk.CTkButton(
+            header_frame,
+            text="📁 Archive All",
+            fg_color="#D97706",
+            hover_color="#B45309",
+            font=ctk.CTkFont(weight="bold"),
+        )
+        self.archive_all_btn.configure(
+            command=with_button_feedback(self.archive_all_btn, "Archiving...", self.archive_all_channels)
+        )
+        self.archive_all_btn.pack(side="right", padx=(0, 10))
+        add_tooltip(
+            self.archive_all_btn,
+            "Archive all active channels in your list and move them into the Archived tab.",
+        )
+
         # Action Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
+        btn_frame.grid_columnconfigure(2, weight=1)
 
+        # Row 0: Add Channel and Check New on left; Active / Archived on far right
         add_btn = ctk.CTkButton(
             btn_frame,
             text="+ Add Channel",
@@ -141,7 +175,7 @@ class ChannelsView(Frame):
         add_btn.configure(
             command=with_button_feedback(add_btn, "Adding Channel...", lambda: self.open_channel_modal())
         )
-        add_btn.pack(side="left", padx=(0, 10))
+        add_btn.grid(row=0, column=0, padx=(0, 10), pady=(0, 8), sticky="w")
         add_tooltip(
             add_btn,
             "Add a new channel to track and automate.\nOptionally configure target watch goals and fetch videos.",
@@ -158,12 +192,26 @@ class ChannelsView(Frame):
         check_btn.configure(
             command=with_button_feedback(check_btn, "Checking New", self.sync_all_channel_data)
         )
-        check_btn.pack(side="left", padx=(0, 10))
+        check_btn.grid(row=0, column=1, padx=(0, 10), pady=(0, 8), sticky="w")
         add_tooltip(
             check_btn,
             "Scan YouTube to check for newly published content\nacross all saved channels since the last check.",
         )
 
+        self.current_tab = "Active"
+        self.tab_selector = ctk.CTkSegmentedButton(
+            btn_frame,
+            values=["Active", "Archived"],
+            command=self._on_tab_change,
+        )
+        self.tab_selector.set("Active")
+        self.tab_selector.grid(row=0, column=3, pady=(0, 8), sticky="e")
+        add_tooltip(
+            self.tab_selector,
+            "Switch between Active tracked channels\nand Archived (paused) channels.",
+        )
+
+        # Row 1: Sync Data All and Sync All Channels Shorts below
         sync_data_btn = ctk.CTkButton(
             btn_frame,
             text="⚡ Sync Data All",
@@ -175,7 +223,7 @@ class ChannelsView(Frame):
         sync_data_btn.configure(
             command=with_button_feedback(sync_data_btn, "Syncing Data", self.sync_data_all)
         )
-        sync_data_btn.pack(side="left", padx=(0, 10))
+        sync_data_btn.grid(row=1, column=0, padx=(0, 10), sticky="w")
         add_tooltip(
             sync_data_btn,
             "Fetch and synchronize public videos and shorts\nacross all channels into your playback queue.",
@@ -192,38 +240,10 @@ class ChannelsView(Frame):
         self.sync_all_channels_shorts_btn.configure(
             command=with_button_feedback(self.sync_all_channels_shorts_btn, "Syncing all shorts...", self.sync_all_channels_shorts)
         )
-        self.sync_all_channels_shorts_btn.pack(side="left", padx=(0, 10))
+        self.sync_all_channels_shorts_btn.grid(row=1, column=1, padx=(0, 10), sticky="w")
         add_tooltip(
             self.sync_all_channels_shorts_btn,
             "Fetch and synchronize all public shorts\nacross all channels into your playback queue.",
-        )
-
-        self.current_tab = "Active"
-        self.tab_selector = ctk.CTkSegmentedButton(
-            btn_frame,
-            values=["Active", "Archived"],
-            command=self._on_tab_change,
-        )
-        self.tab_selector.set("Active")
-        self.tab_selector.pack(side="left", padx=(0, 10))
-        add_tooltip(
-            self.tab_selector,
-            "Switch between Active tracked channels\nand Archived (paused) channels.",
-        )
-
-        clear_btn = ctk.CTkButton(
-            btn_frame,
-            text="🗑 Clear All",
-            fg_color="#D32F2F",
-            hover_color="#9A0007",
-        )
-        clear_btn.configure(
-            command=with_button_feedback(clear_btn, "Clearing...", self.clear_channels)
-        )
-        clear_btn.pack(side="right")
-        add_tooltip(
-            clear_btn,
-            "Permanently remove all channels from your list.\nAssociated queued videos will be unassigned.",
         )
 
         # Channel list
@@ -2138,6 +2158,19 @@ class ChannelsView(Frame):
         if queue is not None:
             queue.unassign_all_channels()
 
+
+    def archive_all_channels(self) -> None:
+        """Archive all active channels in the list and switch to the Archived tab."""
+        active_channels = [ch for ch in self.channels if not ch.archived]
+        if not active_channels:
+            return
+        for ch in active_channels:
+            ch.archived = True
+        self.current_tab = "Archived"
+        self.save_channels()
+        queue = self._queue_view()
+        if queue is not None:
+            queue.refresh_list()
     def open_channel_url(self, url: str) -> None:
         if url and url.strip():
             webbrowser.open(url.strip())

@@ -151,3 +151,58 @@ def test_open_channel_button_in_modal(ctk_app):
         mock_open.assert_called_once_with("https://www.youtube.com/@fabiorodrigues3083")
 
     view.destroy()
+
+
+
+def test_channels_view_reordered_buttons_and_archive_all(ctk_app, tmp_path):
+    from src.ui.background_jobs import BackgroundJobs
+    from src.config.manager import ConfigManager
+    config_path = tmp_path / "settings.json"
+    mgr = ConfigManager(config_file=config_path)
+
+    app = ctk_app
+    app.config_mgr = mgr
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.background_jobs = BackgroundJobs()
+
+    view = ChannelsView(app, app)
+
+    # 1. Verify clear_btn and archive_all_btn exist and are in the header frame
+    assert hasattr(view, "clear_btn")
+    assert hasattr(view, "archive_all_btn")
+    assert "Clear All" in view.clear_btn.cget("text")
+    assert "Archive All" in view.archive_all_btn.cget("text")
+    # Verify their master is the header frame (row 0)
+    assert view.clear_btn.master.grid_info()["row"] == 0
+    assert view.archive_all_btn.master.grid_info()["row"] == 0
+
+    # 2. Verify tab_selector is present
+    assert hasattr(view, "tab_selector")
+    assert view.tab_selector.master.grid_info()["row"] == 1
+
+    # 3. Verify sync_all_channels_shorts_btn is in row 1 action container
+    assert hasattr(view, "sync_all_channels_shorts_btn")
+    assert view.sync_all_channels_shorts_btn.master.grid_info()["row"] == 1
+
+    # 4. Verify archive_all_channels functionality
+    ch1 = Channel(name="Channel A", url="https://youtube.com/@chA", archived=False)
+    ch2 = Channel(name="Channel B", url="https://youtube.com/@chB", archived=False)
+    ch3 = Channel(name="Channel C", url="https://youtube.com/@chC", archived=True)
+    view.channels = [ch1, ch2, ch3]
+    view.refresh_list()
+
+    assert view.current_tab == "Active"
+    view.archive_all_channels()
+
+    # All channels should now be marked archived
+    assert all(c.archived for c in view.channels)
+    # View should switch to Archived tab
+    assert view.current_tab == "Archived"
+
+    # Persisted to config manager as archived
+    saved_channels = mgr.get_channels()
+    assert len(saved_channels) == 3
+    assert all(c.get("archived") is True for c in saved_channels)
+
+    view.destroy()

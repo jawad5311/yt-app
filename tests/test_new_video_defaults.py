@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from src.models.video_task import DEFAULT_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER
+from src.models.video_task import DEFAULT_MAX_RUNS, DEFAULT_SHORTS_MAX_RUNS, DEFAULT_TARGET_MULTIPLIER
 from src.ui.views.channel_import_modal import ChannelImportModal
 from src.ui.views.queue_view import QueueView
 from src.utils.channel_fetcher import FetchedVideo
@@ -37,7 +37,7 @@ def test_channel_import_modal_defaults_to_3x_mult_and_5_views(ctk_app):
     assert v_task.target_multiplier == DEFAULT_TARGET_MULTIPLIER == 3.0
     assert v_task.max_runs == DEFAULT_MAX_RUNS == 5
 
-    # Shorts default to 0.0 multiplier (no multiplier) and 10 max views
+    # Shorts default to 0.0 multiplier (no multiplier) and 5 max views
     assert s_task.target_multiplier == 0.0
     assert s_task.max_runs == 5
 
