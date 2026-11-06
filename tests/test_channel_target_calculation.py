@@ -45,11 +45,11 @@ def test_calculate_channel_target_mixed_videos_and_shorts():
 
 
 def test_calculate_channel_target_defaults():
-    """When multiplier or views are <= 0, default constants (3.0x and 10 views) apply."""
+    """When multiplier or views are <= 0, default constants (3.0x and 5 views) apply."""
     ch = Channel(name="Default Chan", url="https://youtube.com/@defaultchan")
     # Regular video with 0.0 multiplier: uses DEFAULT_TARGET_MULTIPLIER (3.0) -> 200s * 3.0 = 600s
     v = VideoTask(channel="Default Chan", duration_seconds=200, target_multiplier=0.0)
-    # Short with 0 max_runs: uses DEFAULT_SHORTS_MAX_RUNS (10) -> 40s * 10 = 400s
+    # Short with 0 max_runs: uses DEFAULT_SHORTS_MAX_RUNS (5) -> 40s * 5 = 200s
     s = VideoTask(channel="Default Chan", url="https://youtube.com/shorts/def1", duration_seconds=40, max_runs=0)
     target = calculate_channel_target_seconds(ch, [v, s])
     assert target == (200.0 * DEFAULT_TARGET_MULTIPLIER) + (40.0 * DEFAULT_SHORTS_MAX_RUNS)

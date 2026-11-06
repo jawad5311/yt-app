@@ -84,7 +84,7 @@ class ConfigManager:
         "settings": {
             "SystemName": "",
             "DefaultVideoTargetViews": 5,
-            "DefaultShortsMaxViews": 10,
+            "DefaultShortsMaxViews": 5,
             "AccountsFile": "accounts.txt",
             "DirectLinkFallback": False,
             "WatchtimeDuration": DEFAULT_WATCHTIME_DURATION,

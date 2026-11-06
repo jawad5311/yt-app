@@ -23,7 +23,7 @@ def test_config_manager_default_views_keys(tmp_path):
 
     # Defaults in fresh config
     assert mgr.get_int("DefaultVideoTargetViews") == 5
-    assert mgr.get_int("DefaultShortsMaxViews") == 10
+    assert mgr.get_int("DefaultShortsMaxViews") == 5
 
     # Updating values
     mgr.set_setting("DefaultVideoTargetViews", 15)
@@ -218,9 +218,9 @@ def test_watching_worker_browsing_discovery_uses_defaults(tmp_path):
     # 2. Short discovered via reel loop
     # Verify the code block in _run_shorts_reel_loop reads DefaultShortsMaxViews
     def_shorts = (
-        worker.config_mgr.get_int("DefaultShortsMaxViews", 10)
+        worker.config_mgr.get_int("DefaultShortsMaxViews", 5)
         if worker.config_mgr
-        else 10
+        else 5
     )
     assert def_shorts == 22
 

@@ -19,7 +19,7 @@ from src.models.watch_stats import StatRecord, TaskOutcome, WatchResult, format_
 
 
 def test_default_shorts_max_runs():
-    assert DEFAULT_SHORTS_MAX_RUNS == 10
+    assert DEFAULT_SHORTS_MAX_RUNS == 5
     assert DEFAULT_MAX_RUNS == 5
 
 
