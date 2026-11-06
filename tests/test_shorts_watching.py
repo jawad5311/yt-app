@@ -341,7 +341,7 @@ def test_non_target_short_watches_random_seconds_before_skipping():
 
         worker._run_shorts_reel_loop(session_watched_keys=set())
 
-        mock_uniform.assert_any_call(1.0, 2.0)
+        mock_uniform.assert_any_call(2.0, 6.0)
         mock_evp.assert_not_called()
         assert mock_sleep.call_count >= 1
 
@@ -861,9 +861,9 @@ def test_unknown_channel_short_scrolled_immediately_within_1_to_2_seconds():
 
     unknown_short = {
         "found": True,
-        "channel_name": "Random Creator XYZ",
-        "channel_url": "/@randomxyz",
-        "title": "Random Viral Short",
+        "channel_name": "",
+        "channel_url": "",
+        "title": "Short",
         "video_id": "unknown123",
     }
     worker.get_active_short_info = MagicMock(return_value=unknown_short)
@@ -890,7 +890,7 @@ def test_unknown_channel_short_scrolled_immediately_within_1_to_2_seconds():
         while not worker.log_queue.empty():
             logged_messages.append(worker.log_queue.get_nowait())
         log_texts = [msg[1] if isinstance(msg, tuple) else str(msg) for msg in logged_messages]
-        assert any("Short from unknown channel 'Random Creator XYZ' found. Scrolling immediately within 1.4s" in t for t in log_texts)
+        assert any("Short from unknown channel 'Unknown Channel' found. Scrolling immediately within 1.4s" in t for t in log_texts)
 
 
 def test_same_short_not_double_counted_when_scroll_delayed():
@@ -943,8 +943,8 @@ def test_same_short_not_double_counted_when_scroll_delayed():
 
     assert any("Still on same Short 'BOL News' (bol123) from '@BOLNewsofficial'" in t for t in log_texts)
     # Count how many times bol123 was watched/skipped in logs: only once!
-    assert sum(1 for t in log_texts if "Short from unknown channel '@BOLNewsofficial' found" in t) == 1
-    assert sum(1 for t in log_texts if "Short from unknown channel '@shewasmy' found" in t) == 1
+    assert sum(1 for t in log_texts if "Short from '@BOLNewsofficial' is not in targeted channels list" in t) == 1
+    assert sum(1 for t in log_texts if "Short from '@shewasmy' is not in targeted channels list" in t) == 1
 
 
 def test_scroll_to_next_short_does_not_rely_on_offset_parent():

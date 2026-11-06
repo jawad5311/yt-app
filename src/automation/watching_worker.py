@@ -3152,6 +3152,17 @@ class WatchingWorker:
         return watch_res.completed or watch_res.playback_finished
 
 
+    @staticmethod
+    def _is_unknown_channel_short(ch_name: Optional[str], title: Optional[str]) -> bool:
+        """Return True if channel name or video title is unknown/unresolved."""
+        clean_ch = (ch_name or "").strip().lower()
+        clean_title = (title or "").strip().lower()
+        if not clean_ch or clean_ch in ("unknown", "unknown channel", "none"):
+            return True
+        if not clean_title or clean_title in ("short", "untargeted short", "unknown"):
+            return True
+        return False
+
     def get_active_short_info(self) -> Dict[str, Any]:
         """Extract metadata of the currently active Short in the reel."""
         for attempt in range(4):
@@ -3462,6 +3473,8 @@ class WatchingWorker:
 
                 r_title = "Untargeted Short"
                 r_url = ""
+                random_short = None
+                first_info = None
                 nav_ok = False
 
                 if candidates:
@@ -3499,12 +3512,26 @@ class WatchingWorker:
                 human_like_delay(0.5, 1.0)
                 dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-                untargeted_watch_time = random.uniform(1.0, 2.0)
-                emit(
-                    self.log_queue,
-                    f"Short from unknown channel '{r_title}' found. Scrolling immediately within {untargeted_watch_time:.1f}s before entering Shorts reel...",
-                    logging.INFO,
-                )
+                first_ch = ""
+                if first_info and isinstance(first_info, dict):
+                    first_ch = first_info.get("channel_name", "") or ""
+                elif random_short and isinstance(random_short, dict):
+                    first_ch = random_short.get("channel") or random_short.get("channel_name") or ""
+
+                if self._is_unknown_channel_short(first_ch, r_title):
+                    untargeted_watch_time = random.uniform(1.0, 2.0)
+                    emit(
+                        self.log_queue,
+                        f"Short from unknown channel '{r_title}' found. Scrolling immediately within {untargeted_watch_time:.1f}s before entering Shorts reel...",
+                        logging.INFO,
+                    )
+                else:
+                    untargeted_watch_time = random.uniform(2.0, 6.0)
+                    emit(
+                        self.log_queue,
+                        f"Short from '{first_ch}' is not in targeted channels list. Watching for {untargeted_watch_time:.1f}s randomly before entering Shorts reel...",
+                        logging.INFO,
+                    )
                 elapsed = 0.0
                 step = 0.2
                 while elapsed < untargeted_watch_time and not self.stop_event.is_set():
@@ -3920,12 +3947,21 @@ class WatchingWorker:
                 reel_non_target_count += 1
                 non_targets_in_this_reel += 1
                 ch_label = ch_name or "Unknown Channel"
-                non_target_watch_time = random.uniform(1.0, 2.0)
-                emit(
-                    self.log_queue,
-                    f"Short from unknown channel '{ch_label}' found. Scrolling immediately within {non_target_watch_time:.1f}s ({reel_non_target_count}/{cycle_reel_max_non_target})...",
-                    logging.INFO,
-                )
+
+                if self._is_unknown_channel_short(ch_name, title):
+                    non_target_watch_time = random.uniform(1.0, 2.0)
+                    emit(
+                        self.log_queue,
+                        f"Short from unknown channel '{ch_label}' found. Scrolling immediately within {non_target_watch_time:.1f}s ({reel_non_target_count}/{cycle_reel_max_non_target})...",
+                        logging.INFO,
+                    )
+                else:
+                    non_target_watch_time = random.uniform(2.0, 6.0)
+                    emit(
+                        self.log_queue,
+                        f"Short from '{ch_label}' is not in targeted channels list. Watching for {non_target_watch_time:.1f}s randomly before skipping ({reel_non_target_count}/{cycle_reel_max_non_target})...",
+                        logging.INFO,
+                    )
                 elapsed = 0.0
                 step = 0.2
                 while elapsed < non_target_watch_time and not self.stop_event.is_set():
