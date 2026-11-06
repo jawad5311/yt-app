@@ -8,6 +8,7 @@ from typing import Any, Callable, List, Optional
 
 from .. import ttk_adapter as ctk
 from ..components import Toplevel
+from ..tooltip import add_tooltip
 
 from ...models.video_task import (
     DEFAULT_MAX_RUNS,
@@ -63,8 +64,8 @@ class BulkApplyModal(Toplevel):
             self.minsize(480, 310)
         else:
             self.title("Bulk Apply — Video Queue Settings")
-            self.geometry("540x480")
-            self.minsize(480, 440)
+            self.geometry("540x510")
+            self.minsize(480, 450)
         self.grab_set()
 
         self._build_ui()
@@ -104,12 +105,28 @@ class BulkApplyModal(Toplevel):
             card_mult.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
             current_row += 1
 
+            card_mult_hdr = ctk.CTkFrame(card_mult, fg_color="transparent")
+            card_mult_hdr.pack(fill="x", padx=16, pady=(10, 2))
+
             ctk.CTkLabel(
-                card_mult,
+                card_mult_hdr,
                 text="Target Watch Multiplier (per Video)",
                 font=ctk.CTkFont(size=14, weight="bold"),
                 anchor="w",
-            ).pack(fill="x", padx=16, pady=(10, 2))
+            ).pack(side="left")
+
+            self.multiplier_switch = ctk.CTkSwitch(
+                card_mult_hdr,
+                text="",
+                width=44,
+                command=self._on_multiplier_toggled,
+            )
+            self.multiplier_switch.pack(side="right")
+            self.multiplier_switch.select()
+            add_tooltip(
+                self.multiplier_switch,
+                "Turn ON to edit and apply Target Watch Multiplier.\nTurn OFF to keep current values without updating.",
+            )
 
             ctk.CTkLabel(
                 card_mult,
@@ -127,13 +144,13 @@ class BulkApplyModal(Toplevel):
                     if getattr(t, "target_multiplier", 0.0) > 0:
                         init_mult = t.target_multiplier
                         break
-            init_mult_str = str(int(init_mult)) if init_mult.is_integer() else f"{init_mult:.1f}"
+            self.init_mult_str = str(int(init_mult)) if init_mult.is_integer() else f"{init_mult:.1f}"
 
             mult_row = ctk.CTkFrame(card_mult, fg_color="transparent")
             mult_row.pack(fill="x", padx=16, pady=(0, 10))
 
             self.multiplier_entry = ctk.CTkEntry(mult_row, width=90, font=ctk.CTkFont(size=13))
-            self.multiplier_entry.insert(0, init_mult_str)
+            self.multiplier_entry.insert(0, self.init_mult_str)
             self.multiplier_entry.pack(side="left")
 
             ctk.CTkLabel(
@@ -148,13 +165,29 @@ class BulkApplyModal(Toplevel):
         card_views.grid(row=current_row, column=0, padx=24, pady=(6, 6), sticky="ew")
         current_row += 1
 
+        card_views_hdr = ctk.CTkFrame(card_views, fg_color="transparent")
+        card_views_hdr.pack(fill="x", padx=16, pady=(10, 2))
+
         views_title = "Max Views Cap (per Short)" if self.shorts_only else "Max Views Cap (per Video)"
         ctk.CTkLabel(
-            card_views,
+            card_views_hdr,
             text=views_title,
             font=ctk.CTkFont(size=14, weight="bold"),
             anchor="w",
-        ).pack(fill="x", padx=16, pady=(10, 2))
+        ).pack(side="left")
+
+        self.views_switch = ctk.CTkSwitch(
+            card_views_hdr,
+            text="",
+            width=44,
+            command=self._on_views_toggled,
+        )
+        self.views_switch.pack(side="right")
+        self.views_switch.select()
+        add_tooltip(
+            self.views_switch,
+            "Turn ON to edit and apply Max Views Cap.\nTurn OFF to keep current values without updating.",
+        )
 
         views_desc = (
             "Maximum number of views a short can have. Stops playing once reached to avoid YouTube algorithm flags. Set to 0 for unlimited."
@@ -181,12 +214,13 @@ class BulkApplyModal(Toplevel):
                 if getattr(t, "max_runs", 0) > 0:
                     init_views = t.max_runs
                     break
+        self.init_views_str = str(init_views)
 
         views_row = ctk.CTkFrame(card_views, fg_color="transparent")
         views_row.pack(fill="x", padx=16, pady=(0, 10))
 
         self.max_views_entry = ctk.CTkEntry(views_row, width=90, font=ctk.CTkFont(size=13))
-        self.max_views_entry.insert(0, str(init_views))
+        self.max_views_entry.insert(0, self.init_views_str)
         self.max_views_entry.pack(side="left")
         self.run_entry = self.max_views_entry  # Backwards compatibility alias
 
@@ -231,11 +265,40 @@ class BulkApplyModal(Toplevel):
             command=self._apply,
         ).pack(side="right")
 
+    def _on_multiplier_toggled(self):
+        is_on = bool(self.multiplier_switch.get()) if hasattr(self, "multiplier_switch") and self.multiplier_switch else False
+        init_str = getattr(self, "init_mult_str", "0")
+        if hasattr(self, "multiplier_entry") and self.multiplier_entry:
+            if is_on:
+                self.multiplier_entry.configure(state="normal")
+            else:
+                self.multiplier_entry.configure(state="normal")
+                self.multiplier_entry.delete(0, "end")
+                self.multiplier_entry.insert(0, init_str)
+                self.multiplier_entry.configure(state="disabled")
+
+    def _on_views_toggled(self):
+        is_on = bool(self.views_switch.get()) if hasattr(self, "views_switch") and self.views_switch else False
+        init_str = getattr(self, "init_views_str", "0")
+        entry = getattr(self, "max_views_entry", getattr(self, "run_entry", None))
+        if entry is not None:
+            if is_on:
+                entry.configure(state="normal")
+            else:
+                entry.configure(state="normal")
+                entry.delete(0, "end")
+                entry.insert(0, init_str)
+                entry.configure(state="disabled")
+
     def _apply(self):
         shorts_only = getattr(self, "shorts_only", False)
-        # 1. Validate target multiplier (only for video queue)
+
+        is_mult_on = bool(self.multiplier_switch.get()) if getattr(self, "multiplier_switch", None) is not None else hasattr(self, "multiplier_entry")
+        is_views_on = bool(self.views_switch.get()) if getattr(self, "views_switch", None) is not None else (hasattr(self, "max_views_entry") or hasattr(self, "run_entry"))
+
+        # 1. Validate target multiplier (only for video queue and if switch is ON)
         mult_val = 0.0
-        if not shorts_only and hasattr(self, "multiplier_entry"):
+        if not shorts_only and is_mult_on and hasattr(self, "multiplier_entry"):
             raw_mult = self.multiplier_entry.get().strip()
             if raw_mult:
                 try:
@@ -247,10 +310,10 @@ class BulkApplyModal(Toplevel):
                     self.err_lbl.configure(text="Please enter a valid number for target multiplier.")
                     return
 
-        # 2. Validate max views cap
+        # 2. Validate max views cap (only if switch is ON)
         views_entry = getattr(self, "max_views_entry", getattr(self, "run_entry", None))
         max_views_val = 0
-        if views_entry is not None:
+        if is_views_on and views_entry is not None:
             raw_views = views_entry.get().strip()
             if raw_views:
                 try:
@@ -262,11 +325,12 @@ class BulkApplyModal(Toplevel):
                     self.err_lbl.configure(text="Please enter a valid whole number for max views.")
                     return
 
-        # 3. Apply settings to all tasks
+        # 3. Apply settings to all tasks selectively based on active switches
         for task in self.tasks:
-            if not shorts_only:
+            if not shorts_only and is_mult_on:
                 task.target_multiplier = mult_val
-            task.max_runs = max_views_val
+            if is_views_on:
+                task.max_runs = max_views_val
 
         if hasattr(self.parent_view, "save_queue"):
             self.parent_view.save_queue()
@@ -277,7 +341,7 @@ class BulkApplyModal(Toplevel):
         if ch_view is not None and hasattr(ch_view, "load_channels"):
             ch_view.load_channels()
 
-        if callable(self.on_applied):
+        if callable(getattr(self, "on_applied", None)):
             self.on_applied()
 
         self.destroy()
