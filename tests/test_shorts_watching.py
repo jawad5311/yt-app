@@ -334,14 +334,14 @@ def test_non_target_short_watches_random_seconds_before_skipping():
     }
     worker.get_active_short_info = MagicMock(return_value=non_target_short)
 
-    with patch("src.automation.watching_worker.random.uniform", return_value=3.5) as mock_uniform, \
+    with patch("src.automation.watching_worker.random.uniform", return_value=1.5) as mock_uniform, \
          patch("src.automation.watching_worker.ensure_video_playing") as mock_evp, \
          patch("src.automation.watching_worker.time.sleep") as mock_sleep, \
          patch("random.randint", return_value=1):
 
         worker._run_shorts_reel_loop(session_watched_keys=set())
 
-        mock_uniform.assert_called_with(2.0, 5.0)
+        mock_uniform.assert_any_call(1.0, 2.0)
         mock_evp.assert_not_called()
         assert mock_sleep.call_count >= 1
 
@@ -841,3 +841,53 @@ def test_shorts_cycle_watches_random_untargeted_short_when_no_target_found(tmp_p
     assert worker._run_shorts_reel_loop.called
     assert watched == 5
 
+
+def test_unknown_channel_short_scrolled_immediately_within_1_to_2_seconds():
+    """When a short from an unknown channel is encountered in the reel, it must be scrolled within 1-2 seconds."""
+    worker = WatchingWorker.__new__(WatchingWorker)
+    worker.driver = MagicMock()
+    worker.driver.current_url = "https://www.youtube.com/shorts/unknown123"
+    worker.log_queue = queue.Queue()
+    worker.stop_event = threading.Event()
+    worker.pause_event = threading.Event()
+    worker.check_pause = MagicMock()
+    worker.scroll_to_next_short = MagicMock(return_value=True)
+    worker.get_target_channels = MagicMock(return_value=[Channel(name="My Target Channel", enabled=True)])
+    worker.get_target_shorts = MagicMock(return_value=[])
+
+    config_mgr = MagicMock()
+    config_mgr.get_int.return_value = 1  # 1 non-target short before exiting reel
+    worker.config_mgr = config_mgr
+
+    unknown_short = {
+        "found": True,
+        "channel_name": "Random Creator XYZ",
+        "channel_url": "/@randomxyz",
+        "title": "Random Viral Short",
+        "video_id": "unknown123",
+    }
+    worker.get_active_short_info = MagicMock(return_value=unknown_short)
+
+    def _mock_scroll(prev_url=None):
+        worker.stop_event.set()
+        return True
+
+    worker.scroll_to_next_short = MagicMock(side_effect=_mock_scroll)
+
+    with patch("src.automation.watching_worker.random.uniform", return_value=1.4) as mock_uniform, \
+         patch("src.automation.watching_worker.time.sleep") as mock_sleep, \
+         patch("random.randint", return_value=5):
+
+        worker._run_shorts_reel_loop(session_watched_keys=set())
+
+        # Verify it specifically sampled within 1 to 2 seconds
+        mock_uniform.assert_any_call(1.0, 2.0)
+        # Verify it called scroll_to_next_short
+        assert worker.scroll_to_next_short.called
+
+        # Verify log output reflects immediate scrolling within 1 to 2 seconds
+        logged_messages = []
+        while not worker.log_queue.empty():
+            logged_messages.append(worker.log_queue.get_nowait())
+        log_texts = [msg[1] if isinstance(msg, tuple) else str(msg) for msg in logged_messages]
+        assert any("Short from unknown channel 'Random Creator XYZ' found. Scrolling immediately within 1.4s" in t for t in log_texts)

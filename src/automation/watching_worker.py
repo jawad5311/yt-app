@@ -2967,13 +2967,13 @@ class WatchingWorker:
                     )
                     break
 
-                human_like_delay(1.5, 2.5)
+                human_like_delay(0.5, 1.0)
                 dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
-                untargeted_watch_time = random.uniform(3.0, 7.0)
+                untargeted_watch_time = random.uniform(1.0, 2.0)
                 emit(
                     self.log_queue,
-                    f"Watching untargeted Short '{r_title}' for {untargeted_watch_time:.1f}s before entering Shorts reel...",
+                    f"Short from unknown channel '{r_title}' found. Scrolling immediately within {untargeted_watch_time:.1f}s before entering Shorts reel...",
                     logging.INFO,
                 )
                 elapsed = 0.0
@@ -3350,10 +3350,10 @@ class WatchingWorker:
                 reel_non_target_count += 1
                 non_targets_in_this_reel += 1
                 ch_label = ch_name or "Unknown Channel"
-                non_target_watch_time = random.uniform(2.0, 5.0)
+                non_target_watch_time = random.uniform(1.0, 2.0)
                 emit(
                     self.log_queue,
-                    f"Short from '{ch_label}' is not in targeted channels list. Watching for {non_target_watch_time:.1f}s randomly before skipping ({reel_non_target_count}/{cycle_reel_max_non_target})...",
+                    f"Short from unknown channel '{ch_label}' found. Scrolling immediately within {non_target_watch_time:.1f}s ({reel_non_target_count}/{cycle_reel_max_non_target})...",
                     logging.INFO,
                 )
                 elapsed = 0.0
