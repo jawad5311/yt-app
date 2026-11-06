@@ -87,6 +87,7 @@ class VideoTask:
     duration_text: str = ""
     # Explicit short flag override (if URL is omitted or watch?v= format)
     is_short_override: Optional[bool] = None
+    published_at: str = ""
 
     def __post_init__(self):
         # Synchronize titles and keywords so both properties remain interchangeable
@@ -124,6 +125,8 @@ class VideoTask:
         }
         if self.is_short_override is not None:
             data["is_short"] = self.is_short_override
+        if self.published_at:
+            data["published_at"] = self.published_at
         return data
 
     @classmethod
@@ -178,6 +181,8 @@ class VideoTask:
         raw_is_short = data.get("is_short")
         is_short_val = bool(raw_is_short) if raw_is_short is not None else None
 
+        raw_published_at = str(data.get("published_at", "") or data.get("publish_date", "") or "").strip()
+
         return cls(
             url=data.get("url", ""),
             title=raw_t1,
@@ -194,6 +199,7 @@ class VideoTask:
             duration_seconds=duration_seconds_val,
             duration_text=duration_text_val,
             is_short_override=is_short_val,
+            published_at=raw_published_at,
         )
 
     @property

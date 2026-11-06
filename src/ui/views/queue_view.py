@@ -1,6 +1,8 @@
 import webbrowser
+from datetime import datetime
+import tkinter as tk
 from tkinter import TclError, messagebox
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .. import ttk_adapter as ctk
 from ..components import Frame
@@ -24,6 +26,77 @@ from ...models.watch_stats import (
 from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
+
+
+def format_last_played(timestamp_str: Optional[str], now: Optional[datetime] = None) -> str:
+    """Format an ISO timestamp into a user-friendly relative or calendar string."""
+    if not timestamp_str or not str(timestamp_str).strip():
+        return "Never"
+    try:
+        clean = str(timestamp_str).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean)
+        ref_now = now or (datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now())
+        if dt.tzinfo is not None and ref_now.tzinfo is None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        elif dt.tzinfo is None and ref_now.tzinfo is not None:
+            ref_now = ref_now.astimezone().replace(tzinfo=None)
+
+        diff = ref_now - dt
+        seconds = diff.total_seconds()
+        if seconds < 0:
+            return "Just now"
+        if seconds < 60:
+            return "Just now"
+        minutes = int(seconds // 60)
+        if minutes < 60:
+            return f"{minutes}m ago"
+        hours = int(minutes // 60)
+        if hours < 24:
+            return f"{hours}h ago"
+        days = int(hours // 24)
+        if days < 7:
+            return f"{days}d ago"
+        return dt.strftime("%b %d, %Y")
+    except Exception:
+        return "Never"
+
+
+def _get_task_sort_val(task: VideoTask, key: str, stats_store: Optional[Any], reverse: bool = True) -> float:
+    """Extract numeric sort value for a task based on sort key and reverse direction."""
+    record = stats_store.find_for_task(task) if stats_store is not None else None
+
+    if key == "published_date":
+        pub_str = getattr(task, "published_at", "") or ""
+        if pub_str:
+            try:
+                clean_pub = pub_str.strip().replace("Z", "+00:00")
+                return datetime.fromisoformat(clean_pub).timestamp()
+            except Exception:
+                try:
+                    return datetime.strptime(pub_str[:10], "%Y-%m-%d").timestamp()
+                except Exception:
+                    pass
+        # Unparsed/empty published dates stay at bottom regardless of sort direction
+        return float("-inf") if reverse else float("inf")
+
+    elif key == "watch_time":
+        if record is not None:
+            return float(record.watch_seconds or 0.0)
+        return 0.0
+
+    elif key == "last_played":
+        ts_str = ""
+        if record is not None:
+            ts_str = record.last_run or record.last_completed or ""
+        if ts_str:
+            try:
+                clean_ts = ts_str.strip().replace("Z", "+00:00")
+                return datetime.fromisoformat(clean_ts).timestamp()
+            except Exception:
+                pass
+        return float("-inf") if reverse else 0.0
+
+    return 0.0
 
 
 def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
@@ -62,6 +135,9 @@ class QueueView(Frame):
         self._pending_card_queue: List[Any] = []
         self._render_job: Optional[str] = None
         self._loading_indicator: Optional[Any] = None
+        self.current_sort_key: Optional[str] = None
+        self.current_sort_reverse: bool = True
+        self._original_task_order: List[str] = []
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -110,6 +186,34 @@ class QueueView(Frame):
         add_tooltip(
             bulk_btn,
             "Apply max views cap to multiple shorts at once." if is_shorts else "Apply target multipliers and view caps to multiple videos at once.",
+        )
+
+        self.sort_btn = ctk.CTkButton(
+            btn_frame,
+            text="↕ Sort ▾",
+            width=135,
+            fg_color="#374151",
+            hover_color="#4B5563",
+            command=self.open_sort_menu,
+        )
+        self.sort_btn.pack(side="left", padx=(0, 4))
+        add_tooltip(
+            self.sort_btn,
+            "Sort queue by published date, watch time, or recently played.",
+        )
+
+        self.sort_dir_btn = ctk.CTkButton(
+            btn_frame,
+            text="↓",
+            width=32,
+            fg_color="#374151",
+            hover_color="#4B5563",
+            command=self.toggle_sort_direction,
+        )
+        self.sort_dir_btn.pack(side="left", padx=(0, 10))
+        add_tooltip(
+            self.sort_dir_btn,
+            "Reverse sort direction (Ascending / Descending).",
         )
 
         reset_btn = ctk.CTkButton(
@@ -185,17 +289,151 @@ class QueueView(Frame):
 
         return restore
 
+    def _update_sort_buttons(self):
+        dir_sym = "↓" if self.current_sort_reverse else "↑"
+        if hasattr(self, "sort_dir_btn") and hasattr(self.sort_dir_btn, "configure"):
+            try:
+                self.sort_dir_btn.configure(text=dir_sym)
+            except Exception:
+                pass
+
+        name_map = {
+            "published_date": "Date",
+            "watch_time": "Watch Time",
+            "last_played": "Recently Played",
+        }
+        if hasattr(self, "sort_btn") and hasattr(self.sort_btn, "configure"):
+            try:
+                if self.current_sort_key in name_map:
+                    label = f"Sort: {name_map[self.current_sort_key]} {dir_sym} ▾"
+                    self.sort_btn.configure(text=label, fg_color="#1F6AA5")
+                else:
+                    self.sort_btn.configure(text="↕ Sort ▾", fg_color="#374151")
+            except Exception:
+                pass
+
+    def open_sort_menu(self):
+        """Open popup dropdown menu to select sort criteria."""
+        menu = tk.Menu(self, tearoff=0)
+
+        def _label(key_id, name):
+            if self.current_sort_key == key_id:
+                dir_str = "↓ Desc" if self.current_sort_reverse else "↑ Asc"
+                return f"✓ {name} ({dir_str})"
+            return f"   {name}"
+
+        menu.add_command(
+            label=_label("published_date", "Published Date"),
+            command=lambda: self.apply_sort("published_date"),
+        )
+        menu.add_command(
+            label=_label("watch_time", "Watch Time"),
+            command=lambda: self.apply_sort("watch_time"),
+        )
+        menu.add_command(
+            label=_label("last_played", "Recently Played"),
+            command=lambda: self.apply_sort("last_played"),
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="   Reset Sort Order",
+            command=self.reset_sort_order,
+        )
+
+        try:
+            x = self.sort_btn.winfo_rootx()
+            y = self.sort_btn.winfo_rooty() + self.sort_btn.winfo_height()
+            menu.tk_popup(x, y)
+        except Exception:
+            pass
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
+    def apply_sort(self, key_id: str):
+        """Apply sort criterion or reverse order if clicked again."""
+        if self.current_sort_key == key_id:
+            self.current_sort_reverse = not self.current_sort_reverse
+        else:
+            self.current_sort_key = key_id
+            self.current_sort_reverse = True
+        self._apply_current_sort(save=True)
+
+    def toggle_sort_direction(self):
+        """Toggle ascending / descending direction for active sort."""
+        if not self.current_sort_key:
+            self.current_sort_key = "published_date"
+            self.current_sort_reverse = True
+        else:
+            self.current_sort_reverse = not self.current_sort_reverse
+        self._apply_current_sort(save=True)
+
+    def reset_sort_order(self):
+        """Reset sort order to initial unsorted state."""
+        self.current_sort_key = None
+        self.current_sort_reverse = True
+        if getattr(self, "_original_task_order", None):
+            order_map = {url: i for i, url in enumerate(self._original_task_order)}
+            self.video_tasks.sort(key=lambda t: order_map.get(t.url or t.title, 999999))
+            self.save_queue()
+        self._update_sort_buttons()
+        self.refresh_list()
+
+    def _apply_current_sort(self, save: bool = True):
+        if not self.current_sort_key or not self.video_tasks:
+            self._update_sort_buttons()
+            return
+
+        store = self._stats()
+        key = self.current_sort_key
+        rev = self.current_sort_reverse
+
+        channels = self._channels()
+        by_channel: Dict[str, List[VideoTask]] = {}
+        for t in self.video_tasks:
+            ch_name = t.channel or ""
+            by_channel.setdefault(ch_name, []).append(t)
+
+        sorted_tasks: List[VideoTask] = []
+        is_shorts = getattr(self, "shorts_only", False)
+
+        def _sort_group(tasks: List[VideoTask]) -> List[VideoTask]:
+            matching = [t for t in tasks if (t.is_short if is_shorts else not t.is_short)]
+            non_matching = [t for t in tasks if not (t.is_short if is_shorts else not t.is_short)]
+            matching.sort(key=lambda t: _get_task_sort_val(t, key, store, reverse=rev), reverse=rev)
+            return matching + non_matching
+
+        for ch in channels:
+            if ch.name in by_channel:
+                sorted_tasks.extend(_sort_group(by_channel[ch.name]))
+                del by_channel[ch.name]
+
+        for ch_name, group_tasks in by_channel.items():
+            sorted_tasks.extend(_sort_group(group_tasks))
+
+        self.video_tasks = sorted_tasks
+        if save:
+            self.save_queue()
+        self._update_sort_buttons()
+        self.refresh_list()
+
     def load_initial_queue(self):
         cur_view = getattr(self.app_controller, "current_view_name", "")
         should_render = (cur_view == "shorts_queue" if getattr(self, "shorts_only", False) else cur_view == "queue")
 
         if hasattr(self, "app_controller") and getattr(self.app_controller, "queued_video_tasks", None):
             self.video_tasks = self.app_controller.queued_video_tasks
+            if not getattr(self, "_original_task_order", None):
+                self._original_task_order = [t.url or t.title for t in self.video_tasks]
             if should_render:
                 self.refresh_list()
             return
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
+        if not getattr(self, "_original_task_order", None):
+            self._original_task_order = [t.url or t.title for t in self.video_tasks]
         if should_render:
             self.refresh_list()
         self.app_controller.on_queue_changed(self.video_tasks)
@@ -508,6 +746,7 @@ class QueueView(Frame):
                 duration_seconds=target_task.duration_seconds,
                 duration_text=target_task.duration_text,
                 is_short_override=True if is_shorts_view else (getattr(target_task, "is_short_override", None) if is_editing else None),
+                published_at=getattr(target_task, "published_at", ""),
             )
 
             if is_editing:
@@ -1127,10 +1366,19 @@ class QueueView(Frame):
             length_part = ""
 
         ratio_part = format_video_watch_ratio(watch_sec, 0.0 if is_short_item else target_sec)
+        last_played_val = (record.last_run or record.last_completed) if record else ""
+        last_played_text = format_last_played(last_played_val)
+
+        second_line_parts = []
         if length_part:
-            stats_second_line = f"{length_part} | Watch Time: {ratio_part}"
-        else:
-            stats_second_line = f"Watch Time: {ratio_part}"
+            second_line_parts.append(length_part)
+        second_line_parts.append(f"Watch Time: {ratio_part}")
+        second_line_parts.append(f"Last Played: {last_played_text}")
+        if getattr(task, "published_at", ""):
+            pub_short = str(task.published_at)[:10]
+            second_line_parts.append(f"Published: {pub_short}")
+
+        stats_second_line = " | ".join(second_line_parts)
 
         info_text = f"#{position}. {status_prefix}{title_text}\n{stats_second_line}"
         lbl = ctk.CTkLabel(

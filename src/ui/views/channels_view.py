@@ -2280,6 +2280,9 @@ class ChannelsView(Frame):
                             exist.duration_seconds = f_task.duration_seconds
                             exist.duration_text = f_task.duration_text
                             changed = True
+                        if not getattr(exist, "published_at", "") and getattr(f_task, "published_at", ""):
+                            exist.published_at = f_task.published_at
+                            changed = True
                         if changed:
                             total_updated += 1
                     else:
@@ -2302,6 +2305,7 @@ class ChannelsView(Frame):
                             duration_seconds=getattr(f_task, "duration_seconds", 0.0),
                             duration_text=getattr(f_task, "duration_text", ""),
                             is_short_override=is_s,
+                            published_at=getattr(f_task, "published_at", ""),
                         )
                         all_added_tasks.append(new_task)
                         if vid:
@@ -2490,6 +2494,7 @@ class ChannelsView(Frame):
                             duration_seconds=getattr(f_task, "duration_seconds", 0.0),
                             duration_text=getattr(f_task, "duration_text", ""),
                             is_short_override=True,
+                            published_at=getattr(f_task, "published_at", ""),
                         )
                         all_added_tasks.append(new_task)
                         if vid:
@@ -2682,6 +2687,12 @@ class ChannelsView(Frame):
                         existing_task.duration_seconds = f_task.duration_seconds
                         existing_task.duration_text = f_task.duration_text
                         changed = True
+                    if not getattr(existing_task, "published_at", "") and getattr(f_task, "published_at", ""):
+                        existing_task.published_at = f_task.published_at
+                        changed = True
+                    if not getattr(existing_task, "published_at", "") and getattr(f_task, "published_at", ""):
+                        existing_task.published_at = f_task.published_at
+                        changed = True
                     if changed:
                         updated_count += 1
                 else:
@@ -2704,6 +2715,7 @@ class ChannelsView(Frame):
                         duration_seconds=getattr(f_task, "duration_seconds", 0.0),
                         duration_text=getattr(f_task, "duration_text", ""),
                         is_short_override=is_s,
+                        published_at=getattr(f_task, "published_at", ""),
                     )
                     added_tasks.append(new_task)
                     if vid:
@@ -2959,6 +2971,7 @@ class ChannelsView(Frame):
                         duration_seconds=getattr(f_task, "duration_seconds", 0.0),
                         duration_text=getattr(f_task, "duration_text", ""),
                         is_short_override=is_s,
+                        published_at=getattr(f_task, "published_at", ""),
                     )
                     added_tasks.append(new_task)
                     if vid:

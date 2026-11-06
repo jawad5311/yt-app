@@ -1587,6 +1587,7 @@ class WatchingWorker:
                 runs=runs,
             )
             self.stats_store.record(outcome)
+            self._emit_event(("channel_watch_time_updated",))
         except Exception as exc:
             emit(self.log_queue, f"Could not record watching stats: {exc}", logging.WARNING)
 
@@ -3085,6 +3086,7 @@ class WatchingWorker:
         def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
             if registered_task and self.stats_store:
                 self.stats_store.record_view(registered_task, views=1)
+                self._emit_event(("channel_watch_time_updated",))
                 emit(
                     self.log_queue,
                     f"Credited 1 view to Target Short '{registered_task.title}' (Loop {loop_num}, reached {cur_t:.1f}s / {dur:.1f}s).",
@@ -3841,6 +3843,7 @@ class WatchingWorker:
                 def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
                     if registered_task and self.stats_store:
                         self.stats_store.record_view(registered_task, views=1)
+                        self._emit_event(("channel_watch_time_updated",))
                         emit(
                             self.log_queue,
                             f"Credited 1 view to Target Short '{registered_task.title}' (Loop {loop_num}, reached {cur_t:.1f}s / {dur:.1f}s).",

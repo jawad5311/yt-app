@@ -240,4 +240,4 @@ def test_queue_card_displays_video_watch_time_ratio():
         lines = text_arg.split("\n")
         assert len(lines) == 2
         assert lines[0] == "#1. Stop Wasting Money on Meta Ads! Try This Strategy"
-        assert lines[1] == "Length: 8 min | Watch Time: 7 / 24 min (29%)"
+        assert lines[1] == "Length: 8 min | Watch Time: 7 / 24 min (29%) | Last Played: Never"

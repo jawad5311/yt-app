@@ -26,6 +26,7 @@ class FetchedVideo:
     duration_text: str = ""
     duration_seconds: int = 0
     is_short: bool = False
+    published_at: str = ""
 
 
 @dataclass
@@ -771,6 +772,11 @@ def fetch_playlist_items_api(
                 or item.get("snippet", {}).get("resourceId", {}).get("videoId")
             )
             title = item.get("snippet", {}).get("title", "")
+            pub_at = (
+                item.get("snippet", {}).get("publishedAt", "")
+                or item.get("contentDetails", {}).get("videoPublishedAt", "")
+                or ""
+            )
             if vid and title and vid not in seen_ids:
                 seen_ids.add(vid)
                 url = f"https://www.youtube.com/shorts/{vid}" if is_short else f"https://www.youtube.com/watch?v={vid}"
@@ -780,6 +786,7 @@ def fetch_playlist_items_api(
                         url=url,
                         title=str(title).strip(),
                         is_short=is_short,
+                        published_at=str(pub_at).strip(),
                     )
                 )
                 if limit > 0 and len(videos) >= limit:
