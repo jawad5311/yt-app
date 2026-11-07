@@ -5,7 +5,7 @@ from tkinter import TclError, messagebox
 from typing import Any, Callable, Dict, List, Optional
 
 from .. import ttk_adapter as ctk
-from ..components import Frame
+from ..components import Frame, AppleDropdownMenu
 
 from ...models.channel import NO_CHANNEL_VALUE, Channel, VideoGroup, group_videos_by_channel
 from ...models.video_task import (
@@ -317,15 +317,34 @@ class QueueView(Frame):
             try:
                 if self.current_sort_key in name_map:
                     label = f"Sort: {name_map[self.current_sort_key]} {dir_sym} ▾"
-                    self.sort_btn.configure(text=label, fg_color="#1F6AA5")
+                    self.sort_btn.configure(text=label, fg_color="#2563EB")
                 else:
                     self.sort_btn.configure(text="↕ Sort ▾", fg_color="#374151")
             except Exception:
                 pass
 
+    def destroy(self):
+        if hasattr(self, "_active_sort_menu") and self._active_sort_menu:
+            try:
+                self._active_sort_menu.destroy()
+            except Exception:
+                pass
+            self._active_sort_menu = None
+        super().destroy()
+
     def open_sort_menu(self):
-        """Open popup dropdown menu to select sort criteria."""
-        menu = tk.Menu(self, tearoff=0)
+        """Open popup dropdown menu to select sort criteria with Apple HIG styling."""
+        if hasattr(self, "_active_sort_menu") and self._active_sort_menu:
+            try:
+                if self._active_sort_menu.is_open():
+                    self._active_sort_menu.destroy()
+                    self._active_sort_menu = None
+                    return
+            except Exception:
+                pass
+
+        menu = AppleDropdownMenu(self)
+        self._active_sort_menu = menu
 
         def _label(key_id, name):
             if self.current_sort_key == key_id:
@@ -353,7 +372,7 @@ class QueueView(Frame):
 
         try:
             x = self.sort_btn.winfo_rootx()
-            y = self.sort_btn.winfo_rooty() + self.sort_btn.winfo_height()
+            y = self.sort_btn.winfo_rooty() + self.sort_btn.winfo_height() + 4
             menu.tk_popup(x, y)
         except Exception:
             pass

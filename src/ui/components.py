@@ -11,6 +11,7 @@ from tkinter import simpledialog, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .theme import DARK_THEME, get_font, get_theme_colors
+from .dropdown_menu import AppleDropdownMenu
 
 
 def _resolve_font(font: Any) -> Any:
@@ -895,3 +896,6 @@ class Font:
     def __str__(self):
         t = self._to_tuple()
         return f"{t[0]} {t[1]} {t[2]}"
+
+
+DropdownMenu = AppleDropdownMenu
