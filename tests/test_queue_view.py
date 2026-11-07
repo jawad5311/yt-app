@@ -259,3 +259,57 @@ def test_format_published_date():
     assert format_published_date("2026-11-07") == "07 Nov 2026"
     assert format_published_date("") == ""
     assert format_published_date(None) == ""
+
+
+def test_queue_channel_buttons_rearranged_order(ctk_app):
+    """Verify channel buttons in Video Queue and Shorts Queue are in order: Manage, Open Channel, Archive."""
+    from unittest.mock import MagicMock
+    import customtkinter as ctk
+    from src.models.channel import Channel
+    from src.models.video_task import VideoTask
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.stats_store.find_for_task.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.on_queue_changed = MagicMock()
+    app.current_state = "IDLE"
+    app.queue_service = MagicMock()
+
+    channel = Channel(name="OrderTestChannel", url="https://youtube.com/@ordertest", archived=False)
+
+    for is_shorts in (False, True):
+        view = QueueView(app, app, shorts_only=is_shorts)
+        view.video_tasks = [
+            VideoTask(title="Item 1", url="https://youtube.com/watch?v=1", channel="OrderTestChannel", is_short_override=is_shorts),
+        ]
+        view._channels = MagicMock(return_value=[channel])
+        view.refresh_list()
+        app.update_idletasks()
+
+        # Find channel header container
+        containers = [w for w in view.scroll_frame.winfo_children() if isinstance(w, ctk.CTkFrame)]
+        assert len(containers) >= 1
+
+        # The header is row 0 in container
+        header = containers[0].grid_slaves(row=0, column=0)[0]
+        # header_btns is column 2 (or 1) with sticky="e"
+        btn_frames = [w for w in header.winfo_children() if isinstance(w, ctk.CTkFrame)]
+        assert len(btn_frames) >= 1
+        header_btns = btn_frames[0]
+
+        # Inspect button children in header_btns
+        buttons = [w for w in header_btns.winfo_children() if isinstance(w, ctk.CTkButton)]
+        assert len(buttons) == 3, f"Expected 3 buttons in channel header, got {len(buttons)}"
+
+        btn_texts = [b.cget("text") for b in buttons]
+        # 1. Manage
+        assert "Manage" in btn_texts[0], f"First button should be Manage, got {btn_texts[0]}"
+        # 2. Open Channel
+        assert "Open Channel" in btn_texts[1], f"Second button should be Open Channel, got {btn_texts[1]}"
+        # 3. Archive
+        assert "Archive" in btn_texts[2], f"Third button should be Archive, got {btn_texts[2]}"
+
+        view.destroy()

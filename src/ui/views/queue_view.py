@@ -1146,7 +1146,45 @@ class QueueView(Frame):
         header_btns = ctk.CTkFrame(header, fg_color="transparent")
         header_btns.grid(row=0, column=col_offset + 1, rowspan=2, padx=8, pady=6, sticky="e")
 
-        if not group.is_uncategorized:
+        # 1. Manage Button
+        manage_btn = ctk.CTkButton(
+            header_btns,
+            text="⚙ Manage",
+            width=85,
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
+        )
+        manage_btn.configure(
+            command=with_button_feedback(manage_btn, "Opening...", lambda g=group: self.open_manage_channel_modal(g))
+        )
+        has_more_btns = bool(group.url or (not group.is_uncategorized and group.channel and not getattr(group.channel, "archived", False)))
+        manage_btn.pack(side="left", padx=(0, 4) if has_more_btns else 0)
+        add_tooltip(
+            manage_btn,
+            "Configure target multipliers, max views caps, and watch goals for this channel.",
+        )
+
+        # 2. Open Channel Button
+        if group.url:
+            open_btn = ctk.CTkButton(
+                header_btns,
+                text="🔗 Open Channel",
+                width=110,
+                fg_color="#2E7D32",
+                hover_color="#1B5E20",
+            )
+            open_btn.configure(
+                command=with_button_feedback(open_btn, "Opening...", lambda u=group.url: webbrowser.open(u))
+            )
+            has_archive = not group.is_uncategorized and group.channel and not getattr(group.channel, "archived", False)
+            open_btn.pack(side="left", padx=(0, 4) if has_archive else 0)
+            add_tooltip(
+                open_btn,
+                "Open this channel's YouTube page in your web browser.",
+            )
+
+        # 3. Archive Button
+        if not group.is_uncategorized and group.channel and not getattr(group.channel, "archived", False):
             def _archive_channel(ch_name=group.channel.name):
                 channels = self._channels()
                 for ch in channels:
@@ -1171,44 +1209,11 @@ class QueueView(Frame):
             arch_btn.configure(
                 command=with_button_feedback(arch_btn, "Archived", _archive_channel)
             )
-            arch_btn.pack(side="left", padx=(0, 4))
+            arch_btn.pack(side="left")
             add_tooltip(
                 arch_btn,
                 "Archive this channel and pause its automation.",
             )
-
-        if group.url:
-            open_btn = ctk.CTkButton(
-                header_btns,
-                text="🔗 Open Channel",
-                width=110,
-                fg_color="#2E7D32",
-                hover_color="#1B5E20",
-            )
-            open_btn.configure(
-                command=with_button_feedback(open_btn, "Opening...", lambda u=group.url: webbrowser.open(u))
-            )
-            open_btn.pack(side="left", padx=(0, 4))
-            add_tooltip(
-                open_btn,
-                "Open this channel's YouTube page in your web browser.",
-            )
-
-        manage_btn = ctk.CTkButton(
-            header_btns,
-            text="⚙ Manage",
-            width=85,
-            fg_color="#1F6AA5",
-            hover_color="#144870",
-        )
-        manage_btn.configure(
-            command=with_button_feedback(manage_btn, "Opening...", lambda g=group: self.open_manage_channel_modal(g))
-        )
-        manage_btn.pack(side="left")
-        add_tooltip(
-            manage_btn,
-            "Configure target multipliers, max views caps, and watch goals for this channel.",
-        )
 
         if is_collapsed:
             return
