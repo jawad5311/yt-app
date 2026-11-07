@@ -120,7 +120,12 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         appearance = self.config_mgr.get_setting("AppearanceMode", "Dark") if self.config_mgr else "Dark"
-        self.appearance_menu = OptionMenu(scroll_general, values=APPEARANCE_OPTIONS, width=200)
+        self.appearance_menu = OptionMenu(
+            scroll_general,
+            values=APPEARANCE_OPTIONS,
+            width=200,
+            command=self._on_appearance_change,
+        )
         self.appearance_menu.set(appearance if appearance in APPEARANCE_OPTIONS else "Dark")
         self.appearance_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
@@ -563,6 +568,10 @@ class SettingsView(Frame):
             "Save and apply all configuration settings.",
         )
 
+    def _on_appearance_change(self, mode: str) -> None:
+        if hasattr(self.app_controller, 'apply_appearance_mode'):
+            self.app_controller.apply_appearance_mode(mode, persist=False)
+
     def save_settings(self):
         validated: Dict[str, Any] = {}
 
@@ -907,10 +916,12 @@ class SettingsView(Frame):
 
         try:
             border_color = "#10b981" if success else "#ef4444"
+            colors = get_theme_colors()
             icon = "✓" if success else "✕"
             icon_color = "#10b981" if success else "#ef4444"
-            bg_color = "#1e293b"  # Deep slate matching dark theme
-            fg_color = "#f8fafc"
+            bg_color = colors.get("card_bg", "#1e293b")
+            fg_color = colors.get("fg", "#f8fafc")
+            border_color = colors.get("card_border", "#334155")
 
             # Create floating in-app notification bubble
             bubble = tk.Frame(
@@ -955,12 +966,13 @@ class SettingsView(Frame):
 
             # Also provide feedback in the footer action bar beside Save Settings
             if hasattr(self, "action_bar") and self.action_bar is not None:
+                colors = get_theme_colors()
                 status_lbl = tk.Label(
                     self.action_bar,
                     text=f"{icon} {message}",
                     font=("Segoe UI", 11, "bold"),
                     foreground=icon_color,
-                    background="#131316",
+                    background=colors.get("bg", "#131316"),
                 )
                 status_lbl.pack(side="left", padx=(15, 0))
                 self._save_status_lbl = status_lbl

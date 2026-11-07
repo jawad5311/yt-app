@@ -7,6 +7,7 @@ matching the application's clean desktop look while remaining 100% native.
 from __future__ import annotations
 
 import tkinter as tk
+import weakref
 from tkinter import simpledialog, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -80,7 +81,8 @@ class Label(ttk.Label):
 
         if text_color is not None:
             if isinstance(text_color, (tuple, list)):
-                text_color = text_color[1] if len(text_color) > 1 else text_color[0]
+                is_dark = get_theme_colors().get("bg") != "#f5f5f7"
+                text_color = text_color[1] if is_dark and len(text_color) > 1 else text_color[0]
             kwargs["foreground"] = text_color
 
         super().__init__(master, text=text, font=font, style=style, **kwargs)
@@ -91,7 +93,8 @@ class Label(ttk.Label):
         if "text_color" in kwargs:
             tc = kwargs.pop("text_color")
             if isinstance(tc, (tuple, list)):
-                tc = tc[1] if len(tc) > 1 else tc[0]
+                is_dark = get_theme_colors().get("bg") != "#f5f5f7"
+                tc = tc[1] if is_dark and len(tc) > 1 else tc[0]
             kwargs["foreground"] = tc
         if "font" in kwargs:
             f = kwargs["font"]
@@ -306,6 +309,9 @@ class Entry(ttk.Entry):
         super().delete(first, last)
 
 
+_ALL_SWITCHES: weakref.WeakSet[AppleToggleSwitch] = weakref.WeakSet()
+
+
 class AppleToggleSwitch(ttk.Frame):
     """Native Apple macOS / iOS Human Interface Guidelines Toggle Switch."""
 
@@ -330,6 +336,7 @@ class AppleToggleSwitch(ttk.Frame):
             kwargs.pop(k, None)
 
         super().__init__(master, style="Transparent.TFrame", **kwargs)
+        _ALL_SWITCHES.add(self)
 
         self._command = command
         self._state = state
@@ -375,17 +382,24 @@ class AppleToggleSwitch(ttk.Frame):
         self._draw()
 
     def _resolve_bg(self) -> str:
+        colors = get_theme_colors()
         try:
             m = self.master
             while m:
+                style_name = getattr(m, "_style", None) or (m.cget("style") if hasattr(m, "cget") else "")
+                if style_name and "Card" in str(style_name):
+                    return colors.get("card_bg", "#ffffff" if colors["bg"] == "#f5f5f7" else "#202024")
                 if hasattr(m, "cget"):
-                    bg = m.cget("background")
-                    if bg and isinstance(bg, str) and (bg.startswith("#") or bg in ("white", "black")):
-                        return bg
+                    try:
+                        bg = m.cget("background")
+                        if bg and isinstance(bg, str) and (bg.startswith("#") or bg in ("white", "black")):
+                            return bg
+                    except Exception:
+                        pass
                 m = getattr(m, "master", None)
         except Exception:
             pass
-        return get_theme_colors().get("card_bg", "#202024")
+        return colors.get("bg", "#f5f5f7" if colors["bg"] == "#f5f5f7" else "#161619")
 
     def _draw(self):
         self._canvas.delete("all")
@@ -396,6 +410,9 @@ class AppleToggleSwitch(ttk.Frame):
 
         colors = get_theme_colors()
         is_dark = colors.get("bg", "#161619") != "#f5f5f7"
+        bg_col = self._resolve_bg()
+        if hasattr(self, "_canvas") and self._canvas.winfo_exists():
+            self._canvas.configure(background=bg_col)
 
         if is_on:
             bg_track = self._on_track
@@ -628,6 +645,9 @@ class ProgressBar(ttk.Progressbar):
             return 0.0
 
 
+_ALL_SCROLLABLE_FRAMES: weakref.WeakSet[ScrollableFrame] = weakref.WeakSet()
+
+
 class ScrollableFrame(ttk.Frame):
     """High-performance TTK scrollable container wrapping tk.Canvas and ttk.Scrollbar."""
 
@@ -638,7 +658,7 @@ class ScrollableFrame(ttk.Frame):
         kwargs.pop("border_color", None)
 
         # Parent wrapper frame
-        self._parent_frame = ttk.Frame(master)
+        self._parent_frame = ttk.Frame(master, style="TFrame")
         self._parent_frame.grid_columnconfigure(0, weight=1)
         self._parent_frame.grid_rowconfigure(1 if label_text else 0, weight=1)
 
@@ -680,14 +700,30 @@ class ScrollableFrame(ttk.Frame):
 
         from ..utils.scroll_helper import setup_smooth_scrolling
         setup_smooth_scrolling(self, notch_pixels=65.0, damping=0.28)
+        _ALL_SCROLLABLE_FRAMES.add(self)
 
     def _on_frame_configure(self, event=None):
         if self._parent_canvas.winfo_exists():
+            canvas_h = self._parent_canvas.winfo_height()
+            req_h = self.winfo_reqheight()
+            h = max(canvas_h, req_h)
+            self._parent_canvas.itemconfig(self._window_id, height=h)
             self._parent_canvas.configure(scrollregion=self._parent_canvas.bbox("all"))
 
     def _on_canvas_configure(self, event):
         if self._parent_canvas.winfo_exists():
-            self._parent_canvas.itemconfig(self._window_id, width=event.width)
+            req_h = self.winfo_reqheight()
+            h = max(event.height, req_h)
+            self._parent_canvas.itemconfig(self._window_id, width=event.width, height=h)
+
+    def apply_theme(self, mode: Optional[str] = None):
+        colors = get_theme_colors(mode)
+        if hasattr(self, "_parent_canvas") and self._parent_canvas.winfo_exists():
+            self._parent_canvas.configure(background=colors["bg"])
+        if hasattr(self, "_label") and self._label and self._label.winfo_exists():
+            self._label.configure(style="Subheader.TLabel")
+        if hasattr(self, "_scrollbar") and self._scrollbar and self._scrollbar.winfo_exists():
+            self._scrollbar.configure(style="Vertical.TScrollbar")
 
     # Delegate grid, pack, place to parent container
     def grid(self, **kwargs):
@@ -858,7 +894,7 @@ class Toplevel(tk.Toplevel):
 
     def __init__(self, master=None, **kwargs):
         super().__init__(master, **kwargs)
-        colors = DARK_THEME
+        colors = get_theme_colors()
         self.configure(background=colors["bg"])
 
 
@@ -904,3 +940,20 @@ from .confirm_dialog import ThemedConfirmDialog, show_themed_confirm_dialog
 ThemedConfirmDialog = ThemedConfirmDialog
 ConfirmDialog = ThemedConfirmDialog
 show_themed_confirm_dialog = show_themed_confirm_dialog
+
+def update_all_scrollable_frames(mode: Optional[str] = None):
+    """Update background and styles for all active ScrollableFrame containers."""
+    for frame in list(_ALL_SCROLLABLE_FRAMES):
+        try:
+            frame.apply_theme(mode)
+        except Exception:
+            pass
+
+
+def update_all_switches():
+    """Redraw all active switches matching current light/dark theme."""
+    for sw in list(_ALL_SWITCHES):
+        try:
+            sw._draw()
+        except Exception:
+            pass

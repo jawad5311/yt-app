@@ -287,12 +287,67 @@ class YTBotApp(tk.Tk):
         valid = ("Dark", "Light", "System")
         selected_mode = mode if mode in valid else "Dark"
         effective_mode = selected_mode if selected_mode != "System" else "Dark"
+        self.appearance_mode = effective_mode
+        try:
+            from .ttk_adapter import set_appearance_mode
+            set_appearance_mode(effective_mode)
+        except Exception:
+            pass
+
         setup_ttk_styles(self, mode=effective_mode)
         colors = get_theme_colors(effective_mode)
         try:
             self.configure(background=colors["bg"])
         except Exception:
             pass
+
+        # Update all active ScrollableFrames and Switches
+        try:
+            from .components import update_all_scrollable_frames, update_all_switches
+            update_all_scrollable_frames(effective_mode)
+            update_all_switches()
+        except Exception:
+            pass
+
+        # Update views if built
+        if hasattr(self, "views") and isinstance(self.views, dict):
+            logs_view = self.views.get("logs")
+            if logs_view and hasattr(logs_view, "apply_theme"):
+                try:
+                    logs_view.apply_theme(effective_mode)
+                except Exception:
+                    pass
+
+            cur_view = getattr(self, "current_view_name", None)
+            if hasattr(self, "nav_buttons"):
+                for name, btn in self.nav_buttons.items():
+                    try:
+                        if name == cur_view:
+                            btn.configure(style="NavActive.TButton")
+                        else:
+                            btn.configure(style="Nav.TButton")
+                    except Exception:
+                        pass
+
+            for v_name, view in self.views.items():
+                if hasattr(view, "apply_theme"):
+                    try:
+                        view.apply_theme(effective_mode)
+                    except Exception:
+                        pass
+                if v_name in ("accounts", "channels", "queue", "shorts_queue"):
+                    if hasattr(view, "refresh_list"):
+                        try:
+                            view.refresh_list()
+                        except Exception:
+                            pass
+                elif v_name == "dashboard":
+                    if hasattr(view, "update_dashboard_stats"):
+                        try:
+                            view.update_dashboard_stats()
+                        except Exception:
+                            pass
+
         if persist and hasattr(self, "config_mgr") and self.config_mgr is not None:
             self.config_mgr.set_setting("AppearanceMode", selected_mode)
 

@@ -127,6 +127,7 @@ class LogsView(Frame):
         self.is_scroll_btn_visible = False
         self._anim_job = None
         self._scroll_job = None
+        self.apply_theme()
 
     def _on_text_scroll(self, first, last):
         try:
@@ -390,3 +391,89 @@ class LogsView(Frame):
                 )
         except Exception:
             pass
+
+    def apply_theme(self, mode: Optional[str] = None) -> None:
+        """Apply theme (Dark or Light) to log textbox background, cursor, and syntax tags."""
+        app = getattr(self, "app_controller", None)
+        active_mode = mode if isinstance(mode, str) else None
+        if not active_mode and app is not None:
+            try:
+                raw_mode = app.__dict__.get("appearance_mode") if hasattr(app, "__dict__") else getattr(app, "appearance_mode", None)
+                if isinstance(raw_mode, str) and raw_mode.lower() in ("dark", "light"):
+                    active_mode = raw_mode
+            except Exception:
+                pass
+
+        if not active_mode:
+            try:
+                from ..ttk_adapter import get_appearance_mode
+                active_mode = get_appearance_mode()
+            except Exception:
+                active_mode = "Dark"
+        is_dark = str(active_mode).lower() != "light"
+
+        bg = "#18181c" if is_dark else "#ffffff"
+        fg = "#e2e8f0" if is_dark else "#1d1d1f"
+        insert_bg = "#0a84ff" if is_dark else "#007aff"
+        select_bg = "#0a84ff" if is_dark else "#b3d7ff"
+        select_fg = "#ffffff" if is_dark else "#000000"
+
+        if hasattr(self, "log_textbox") and self.log_textbox.winfo_exists():
+            self.log_textbox.configure(
+                background=bg,
+                foreground=fg,
+                insertbackground=insert_bg,
+                selectbackground=select_bg,
+                selectforeground=select_fg,
+            )
+
+            if is_dark:
+                tags = {
+                    "session_header": "#38BDF8",
+                    "watching_banner": "#C084FC",
+                    "label_channel": "#94A3B8",
+                    "val_channel": "#FBBF24",
+                    "label_url": "#94A3B8",
+                    "val_url": "#60A5FA",
+                    "label_title": "#94A3B8",
+                    "val_title": "#4ADE80",
+                    "action_success": "#34D399",
+                    "skip": "#FB923C",
+                    "error": "#EF4444",
+                    "fallback_direct": "#DC2626",
+                    "warning_orange": "#F97316",
+                    "ad": "#FB923C",
+                    "pause": "#F59E0B",
+                    "resume": "#22C55E",
+                    "progress": "#94A3B8",
+                    "timeline": "#818CF8",
+                    "default": "#E2E8F0",
+                }
+            else:
+                tags = {
+                    "session_header": "#0284C7",
+                    "watching_banner": "#7C3AED",
+                    "label_channel": "#64748B",
+                    "val_channel": "#B45309",
+                    "label_url": "#64748B",
+                    "val_url": "#2563EB",
+                    "label_title": "#64748B",
+                    "val_title": "#15803D",
+                    "action_success": "#16A34A",
+                    "skip": "#EA580C",
+                    "error": "#DC2626",
+                    "fallback_direct": "#B91C1C",
+                    "warning_orange": "#C2410C",
+                    "ad": "#EA580C",
+                    "pause": "#D97706",
+                    "resume": "#16A34A",
+                    "progress": "#64748B",
+                    "timeline": "#4F46E5",
+                    "default": "#1D1D1F",
+                }
+
+            for tag_name, color in tags.items():
+                if tag_name == "val_url":
+                    self.log_textbox.tag_config(tag_name, foreground=color, underline=True)
+                else:
+                    self.log_textbox.tag_config(tag_name, foreground=color)

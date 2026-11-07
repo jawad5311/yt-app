@@ -22,10 +22,18 @@ NORMAL = tk.NORMAL
 DISABLED = tk.DISABLED
 
 def set_appearance_mode(mode_string: str):
-    pass
+    try:
+        from .theme import set_current_mode
+        set_current_mode(mode_string)
+    except Exception:
+        pass
 
 def get_appearance_mode() -> str:
-    return "Dark"
+    try:
+        from .theme import get_current_mode
+        return get_current_mode()
+    except Exception:
+        return "Dark"
 
 try:
     import customtkinter as _ctk

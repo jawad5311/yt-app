@@ -86,8 +86,23 @@ LIGHT_THEME: Dict[str, str] = {
 _current_mode: str = "Dark"
 
 
-def get_theme_colors(mode: str = "Dark") -> Dict[str, str]:
-    return DARK_THEME if mode.lower() == "dark" else LIGHT_THEME
+def get_current_mode() -> str:
+    return _current_mode
+
+
+def set_current_mode(mode: str) -> None:
+    global _current_mode
+    if str(mode).lower() in ("dark", "light"):
+        _current_mode = str(mode).capitalize()
+
+
+get_appearance_mode = get_current_mode
+set_appearance_mode = set_current_mode
+
+
+def get_theme_colors(mode: Any = None) -> Dict[str, str]:
+    effective = (mode or _current_mode or "Dark")
+    return DARK_THEME if str(effective).lower() == "dark" else LIGHT_THEME
 
 
 def get_default_font_family() -> str:
@@ -113,19 +128,24 @@ def get_font(size: Any = 9, weight: str = "normal", slant: str = "roman") -> Tup
 def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     """Configures the global TTK styles on root matching the mode (Dark or Light)."""
     global _current_mode
-    _current_mode = mode if mode.lower() in ("dark", "light") else "Dark"
+    set_current_mode(mode)
     colors = get_theme_colors(_current_mode)
     family = get_default_font_family()
 
-    style = ttk.Style(root)
+    has_tk = ("_w" in getattr(root, "__dict__", {}) or "tk" in getattr(root, "__dict__", {}))
+    target_root = root if has_tk else None
+    try:
+        style = ttk.Style(target_root)
+    except Exception:
+        style = ttk.Style()
     try:
         style.theme_use("clam")
     except Exception:
         pass
 
-    if hasattr(root, "configure"):
+    if target_root and hasattr(target_root, "configure"):
         try:
-            root.configure(background=colors["bg"])
+            target_root.configure(background=colors["bg"])
         except Exception:
             pass
 
@@ -486,6 +506,15 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         tabmargins=[2, 4, 2, 0],
         borderwidth=0,
     )
+    style.configure("TNotebook.client", background=colors["bg"])
+    try:
+        if hasattr(root, "option_add"):
+            root.option_add("*TCombobox*Listbox.background", colors["input_bg"])
+            root.option_add("*TCombobox*Listbox.foreground", colors["input_fg"])
+            root.option_add("*TCombobox*Listbox.selectBackground", colors["select_bg"])
+            root.option_add("*TCombobox*Listbox.selectForeground", colors["select_fg"])
+    except Exception:
+        pass
     style.configure(
         "TNotebook.Tab",
         background=colors["tab_bg"],
