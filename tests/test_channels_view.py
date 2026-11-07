@@ -206,3 +206,35 @@ def test_channels_view_reordered_buttons_and_archive_all(ctk_app, tmp_path):
     assert all(c.get("archived") is True for c in saved_channels)
 
     view.destroy()
+
+
+def test_check_new_button_color(ctk_app):
+    from unittest.mock import MagicMock
+    import customtkinter as ctk
+    from src.ui.background_jobs import BackgroundJobs
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.background_jobs = BackgroundJobs()
+
+    view = ChannelsView(app, app)
+
+    def find_check_btn(w):
+        if isinstance(w, ctk.CTkButton) and "Check New" in w.cget("text"):
+            return w
+        for child in w.winfo_children():
+            found = find_check_btn(child)
+            if found:
+                return found
+        return None
+
+    btn = find_check_btn(view)
+    assert btn is not None, "Check New button must be present in ChannelsView"
+    assert btn.cget("fg_color").lower() == "#0f766e"
+    assert btn.cget("hover_color").lower() == "#115e59"
+
+    view.destroy()

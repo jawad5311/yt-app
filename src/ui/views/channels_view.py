@@ -195,8 +195,8 @@ class ChannelsView(Frame):
             btn_frame,
             text="🔍 Check New",
             width=95,
-            fg_color="#0D9488",
-            hover_color="#0F766E",
+            fg_color="#0F766E",
+            hover_color="#115E59",
             font=ctk.CTkFont(weight="bold"),
         )
         check_btn.configure(

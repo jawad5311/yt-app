@@ -45,6 +45,7 @@ class Frame(ttk.Frame):
             kwargs.pop(k, None)
         if "fg_color" in kwargs:
             color = kwargs.pop("fg_color")
+            self._fg_color = color
             if color == "transparent":
                 super().configure(style="Transparent.TFrame")
             else:
@@ -154,10 +155,14 @@ class Button(ttk.Button):
         self._command = command
         self._text = text
         self._style = style
+        self._fg_color = fg_color
+        self._hover_color = hover_color
         super().__init__(master, text=text, command=command, style=style, **kwargs)
 
     def configure(self, **kwargs):
-        for k in ("corner_radius", "text_color", "hover_color", "border_width", "border_color", "bg_color", "height"):
+        if "hover_color" in kwargs:
+            self._hover_color = kwargs.pop("hover_color")
+        for k in ("corner_radius", "text_color", "border_width", "border_color", "bg_color", "height"):
             kwargs.pop(k, None)
         if "command" in kwargs:
             self._command = kwargs["command"]
@@ -207,6 +212,10 @@ class Button(ttk.Button):
     def cget(self, prop: str) -> Any:
         if prop == "text" and hasattr(self, "_text") and self._text:
             return self._text
+        if prop == "fg_color" and hasattr(self, "_fg_color"):
+            return self._fg_color
+        if prop == "hover_color" and hasattr(self, "_hover_color"):
+            return self._hover_color
         val = super().cget(prop)
         if not isinstance(val, (str, int, float, bool, list, tuple, dict)):
             return str(val)

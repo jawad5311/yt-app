@@ -35,6 +35,7 @@ def test_apple_design_tokens_and_colors():
     assert dark["warning"] == "#ff9f0a"
     assert dark["card_bg"] == "#202024"
     assert dark["card_border"] == "#323238"
+    assert dark["teal"] == "#0f766e"
 
     light = get_theme_colors("Light")
     assert light["accent"] == "#007aff"
@@ -58,6 +59,7 @@ def test_apple_ttk_styles_registration(tk_root):
     assert style.lookup("Danger.TButton", "background") == "#ff453a"
     assert style.lookup("Success.TButton", "background") == "#30d158"
     assert style.lookup("Warning.TButton", "background") == "#ff9f0a"
+    assert style.lookup("Teal.TButton", "background") == "#0f766e"
 
     # Sidebar Nav
     assert style.lookup("NavActive.TButton", "background") == "#0a84ff"

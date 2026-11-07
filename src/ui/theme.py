@@ -30,8 +30,8 @@ DARK_THEME: Dict[str, str] = {
     "danger_hover": "#d70015",
     "warning": "#ff9f0a",
     "warning_hover": "#c97800",
-    "teal": "#64d2ff",
-    "teal_hover": "#40b4e8",
+    "teal": "#0f766e",
+    "teal_hover": "#115e59",
     "muted_action": "#2a2a30",
     "muted_action_hover": "#3a3a42",
     "input_bg": "#18181c",
@@ -64,8 +64,8 @@ LIGHT_THEME: Dict[str, str] = {
     "danger_hover": "#d70015",
     "warning": "#ff9500",
     "warning_hover": "#c97800",
-    "teal": "#00c7be",
-    "teal_hover": "#00a39c",
+    "teal": "#0d9488",
+    "teal_hover": "#0f766e",
     "muted_action": "#e5e5ea",
     "muted_action_hover": "#d1d1d6",
     "input_bg": "#ffffff",
@@ -235,20 +235,24 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
-    # Teal Button
+    # Teal Button (Apple Deep Sea Teal - dark, eye-friendly, high contrast)
     style.configure(
         "Teal.TButton",
-        background=colors.get("teal", "#0d9488"),
+        background=colors.get("teal", "#0f766e"),
         foreground="#ffffff",
         font=(family, 9, "bold"),
-        borderwidth=0,
+        bordercolor=colors.get("teal", "#0f766e"),
+        lightcolor=colors.get("teal", "#0f766e"),
+        darkcolor=colors.get("teal", "#0f766e"),
+        borderwidth=1,
         focuscolor="none",
-        relief="flat",
-        padding=(7, 3),
+        relief="solid",
+        padding=(12, 5),
     )
     style.map(
         "Teal.TButton",
-        background=[("active", colors.get("teal_hover", "#0f766e")), ("pressed", "#115e59")],
+        background=[("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
+        bordercolor=[("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
         foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
