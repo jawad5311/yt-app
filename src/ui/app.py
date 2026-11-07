@@ -1,4 +1,5 @@
 import logging
+import os
 import queue
 import threading
 import time
@@ -10,6 +11,7 @@ from tkinter import messagebox, ttk
 from .theme import DARK_THEME, get_font, get_theme_colors, setup_ttk_styles
 
 from ..automation.dispatcher import TaskDispatcher
+from ..automation.driver import close_driver
 from ..automation.watching_worker import WatchingWorker
 from ..automation.worker import AutomationWorker
 from ..config.manager import ConfigManager
@@ -100,7 +102,8 @@ class YTBotApp(tk.Tk):
         self._poll_job: Optional[str] = None
         self._close_check_job: Optional[str] = None
         self._close_start_time: float = 0.0
-        self._close_timeout: float = 20.0
+        self._close_timeout: float = 30.0
+        self._report_finish_time: Optional[float] = None
         self.report_modal: Optional[Any] = None
 
         self._build_ui()
@@ -922,7 +925,7 @@ class YTBotApp(tk.Tk):
 
     def _handle_worker_event(self, event) -> None:
         """Apply a structured worker event to the dashboard (main thread only)."""
-        if not event or self.__dict__.get("is_closing", False):
+        if not event:
             return
 
         if isinstance(event, tuple) and len(event) >= 3 and event[0] == "session_event":
@@ -937,6 +940,21 @@ class YTBotApp(tk.Tk):
             return
 
         kind = event[0]
+
+        # During shutdown, process report and lifecycle events, skipping dashboard redraws
+        if self.__dict__.get("is_closing", False):
+            if kind == "report_generating":
+                msg = event[1] if len(event) > 1 else "Generating session report... Please do not close the app."
+                self.show_report_modal(msg)
+            elif kind == "report_sent":
+                ok = event[1] if len(event) > 1 else True
+                msg = event[2] if len(event) > 2 else ""
+                self.update_report_modal_completed(ok, msg)
+            elif kind == "finished":
+                error_msg = event[1] if len(event) > 1 else None
+                if self.__dict__.get("report_modal", None) is not None and getattr(self.report_modal, "is_generating", False):
+                    self.update_report_modal_completed(error_msg is None, error_msg or "Session finished.")
+            return
 
         if kind == "progress" and len(event) == 4:
             _, worker_id, done, total = event
@@ -1100,42 +1118,61 @@ class YTBotApp(tk.Tk):
                 pass
             self._close_check_job = None
 
-    def _safe_exit(self) -> None:
-        """Destroy UI safely."""
+    def _safe_exit(self, force: bool = False) -> None:
+        """Destroy UI safely and exit the application process at all cost."""
+        self.is_closing = True
+        self._cancel_scheduled_callbacks()
+
+        if self.__dict__.get("report_modal", None) is not None:
+            try:
+                self.report_modal.destroy()
+            except Exception:
+                pass
+            self.report_modal = None
+
+        # Cleanly stop any worker drivers if still active
+        for worker in list(self.__dict__.get("active_workers", [])):
+            if hasattr(worker, "driver") and worker.driver:
+                try:
+                    close_driver(worker.driver)
+                    worker.driver = None
+                except Exception:
+                    pass
+            if hasattr(worker, "reporting_driver") and worker.reporting_driver:
+                try:
+                    close_driver(worker.reporting_driver)
+                    worker.reporting_driver = None
+                except Exception:
+                    pass
+
+        try:
+            self.quit()
+        except Exception:
+            pass
         try:
             self.destroy()
         except Exception:
             pass
 
-    def _prompt_stuck_workers(self) -> str:
-        """Prompt user when workers take too long during shutdown.
-        Returns 'wait' to continue waiting or 'cancel' to cancel closing.
-        """
-        try:
-            from tkinter import messagebox
-            resp = messagebox.askyesno(
-                "Workers Busy",
-                "Some worker threads are taking longer than expected to finish saving data.\n\n"
-                "Do you want to continue waiting?\n"
-                "(Selecting 'No' will cancel closing so no data is lost.)",
-                parent=self,
-            )
-            return "wait" if resp else "cancel"
-        except Exception:
-            return "wait"
+        # Ensure lingering daemon/browser processes do not keep the Python process running
+        delay = 0.1 if force else 0.8
+
+        def _force_exit():
+            time.sleep(delay)
+            os._exit(0)
+
+        threading.Thread(target=_force_exit, daemon=True, name="force-exit").start()
 
     def on_closing(self) -> None:
         """Orderly application shutdown handler registered with WM_DELETE_WINDOW."""
         if self.__dict__.get("is_closing", False):
-            if self.__dict__.get("report_modal", None) is not None:
-                try:
-                    if self.report_modal.winfo_exists():
-                        self.report_modal.lift()
-                except Exception:
-                    pass
+            # User clicked the X button again while closing is in progress: force close immediately
+            emit(self.log_queue, "Force exit requested on second close. Closing immediately.")
+            self._safe_exit(force=True)
             return
 
         self.is_closing = True
+        self._report_finish_time = None
 
         active_threads = self._get_owned_threads()
         has_active_session = self.is_running or bool(active_threads)
@@ -1151,6 +1188,8 @@ class YTBotApp(tk.Tk):
                         self.report_modal.msg_label.configure(
                             text="Session report is being delivered before exit...\nPlease wait, the app will close automatically."
                         )
+                    self.report_modal.deiconify()
+                    self.report_modal.lift()
             except Exception:
                 pass
             self._close_start_time = time.monotonic()
@@ -1172,6 +1211,8 @@ class YTBotApp(tk.Tk):
                             self.report_modal.msg_label.configure(
                                 text="Stopping session and sending report before closing...\nPlease wait, the app will exit automatically."
                             )
+                        self.report_modal.deiconify()
+                        self.report_modal.lift()
                 except Exception:
                     pass
 
@@ -1187,15 +1228,14 @@ class YTBotApp(tk.Tk):
             return
 
         # Idle: clean exit immediately
-        self._cancel_scheduled_callbacks()
         self._safe_exit()
 
     def _check_shutdown_progress(self) -> None:
         if not self.__dict__.get("is_closing", False):
             return
 
-        # Drain worker events during shutdown so report_sent & finished are processed
-        for _ in range(20):
+        # 1. Drain all worker events during shutdown so report_sent & finished are processed
+        while True:
             try:
                 event = self.event_queue.get_nowait()
             except queue.Empty:
@@ -1205,46 +1245,49 @@ class YTBotApp(tk.Tk):
             except Exception:
                 pass
 
-        living_threads = self._get_owned_threads()
-        is_modal_busy = False
+        # 2. Check if report is actively generating/sending
+        is_report_in_progress = False
         if self.__dict__.get("report_modal", None) is not None:
             try:
                 if self.report_modal.winfo_exists() and getattr(self.report_modal, "is_generating", False):
-                    is_modal_busy = True
+                    is_report_in_progress = True
             except Exception:
                 pass
 
-        if not living_threads and not is_modal_busy:
-            # All session threads finished cleanly and report sent!
-            emit(self.log_queue, "Session stopped and report sent successfully. Application exiting.")
-            if self.__dict__.get("report_modal", None) is not None:
-                try:
-                    self.report_modal.destroy()
-                except Exception:
-                    pass
-                self.report_modal = None
-            self._cancel_scheduled_callbacks()
-            self._safe_exit()
-            return
+        if not is_report_in_progress:
+            for w in list(self.__dict__.get("active_workers", [])):
+                rep_t = getattr(w, "reporting_thread", None)
+                if rep_t and rep_t.is_alive():
+                    is_report_in_progress = True
+                    break
 
-        elapsed = time.monotonic() - self.__dict__.get("_close_start_time", time.monotonic())
-        close_timeout = self.__dict__.get("_close_timeout", 60.0)
+        living_threads = self._get_owned_threads()
 
-        if elapsed >= close_timeout:
-            decision = self._prompt_stuck_workers()
-            if decision == "wait":
-                self._close_start_time = time.monotonic()
-                self._close_check_job = self.after(200, self._check_shutdown_progress)
+        # 3. If report is finished (or was never started), close the app!
+        if not is_report_in_progress:
+            if self.__dict__.get("_report_finish_time", None) is None:
+                self._report_finish_time = time.monotonic()
+
+            report_finish = self.__dict__.get("_report_finish_time") or time.monotonic()
+            report_elapsed = time.monotonic() - report_finish
+            if not living_threads or report_elapsed >= 3.0:
+                emit(self.log_queue, "Session report finished. Application exiting now.")
+                self._safe_exit()
                 return
-            else:
-                self.is_closing = False
-                emit(self.log_queue, "Close request cancelled. Active session remains stopped.", logging.WARNING)
-                dashboard = self.views.get("dashboard")
-                if dashboard is not None:
-                    try:
-                        dashboard.set_status("Close cancelled. Workers still finishing.", "warning")
-                    except Exception:
-                        pass
+
+        # 4. If report delivery is still in progress, enforce maximum timeout (30s)
+        close_start = self.__dict__.get("_close_start_time", 0.0)
+        close_timeout = self.__dict__.get("_close_timeout", 30.0)
+
+        if close_start > 0:
+            elapsed = time.monotonic() - close_start
+            if elapsed >= close_timeout:
+                emit(
+                    self.log_queue,
+                    "Shutdown timeout reached while waiting for report/workers. Forcing application exit.",
+                    logging.WARNING,
+                )
+                self._safe_exit(force=True)
                 return
 
         self._close_check_job = self.after(100, self._check_shutdown_progress)
