@@ -417,6 +417,7 @@ def format_watch_line(
     task_duration: float = 0.0,
     show_multiplier: bool = True,
     unit: str = "runs",
+    last_played: Optional[str] = None,
 ) -> str:
     """Queue-card line: ``x/x runs -- xx watched (multiplier)``."""
     current_runs = record.runs if record is not None else 0
@@ -437,6 +438,9 @@ def format_watch_line(
         time_str = format_watch_time(watch_sec, eff_duration)
     else:
         time_str = f"{format_duration(watch_sec)} watched"
+
+    if last_played:
+        time_str = f"{time_str} · Last Played: {last_played}"
 
     mult_suffix = f" ({mult})" if mult else ""
     return f"{runs_str} -- {time_str}{mult_suffix}"

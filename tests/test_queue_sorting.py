@@ -234,5 +234,11 @@ def test_shorts_queue_sorting_and_card_display():
         text_arg = lbl_call[1].get("text")
         lines = text_arg.split("\n")
         assert len(lines) == 2
-        assert "Watch Time:" in lines[1]
-        assert "Last Played: Just now" in lines[1]
+        assert "Watch Time:" not in lines[1]
+        assert "Last Played:" not in lines[1]
+        assert "1 min" in lines[1]
+
+        # Verify Last Played is rendered in the third line next to watched
+        stats_lbl_call = mock_label_cls.call_args_list[1]
+        line3_text = stats_lbl_call[1].get("text")
+        assert "watched · Last Played: Just now" in line3_text

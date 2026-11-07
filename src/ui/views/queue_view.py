@@ -61,6 +61,33 @@ def format_last_played(timestamp_str: Optional[str], now: Optional[datetime] = N
         return "Never"
 
 
+def format_published_date(pub_val: Optional[str]) -> str:
+    """Format an ISO 8601 or date string into '01 Jan 2026'."""
+    if not pub_val or not str(pub_val).strip():
+        return ""
+    val = str(pub_val).strip()
+    try:
+        clean_val = val.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(clean_val)
+        return dt.strftime("%d %b %Y")
+    except Exception:
+        pass
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%d %b %Y",
+        "%d-%b-%Y",
+    ):
+        try:
+            dt = datetime.strptime(val[:19] if ("T" in val or " " in val) else val[:10], fmt)
+            return dt.strftime("%d %b %Y")
+        except Exception:
+            pass
+    return ""
+
+
 def _get_task_sort_val(task: VideoTask, key: str, stats_store: Optional[Any], reverse: bool = True) -> float:
     """Extract numeric sort value for a task based on sort key and reverse direction."""
     record = stats_store.find_for_task(task) if stats_store is not None else None
@@ -1398,15 +1425,15 @@ class QueueView(Frame):
         ratio_part = format_video_watch_ratio(watch_sec, 0.0 if is_short_item else target_sec)
         last_played_val = (record.last_run or record.last_completed) if record else ""
         last_played_text = format_last_played(last_played_val)
+        pub_date_text = format_published_date(getattr(task, "published_at", ""))
 
         second_line_parts = []
         if length_part:
             second_line_parts.append(length_part)
-        second_line_parts.append(f"Watch Time: {ratio_part}")
-        second_line_parts.append(f"Last Played: {last_played_text}")
-        if getattr(task, "published_at", ""):
-            pub_short = str(task.published_at)[:10]
-            second_line_parts.append(f"Published: {pub_short}")
+        if ratio_part:
+            second_line_parts.append(ratio_part)
+        if pub_date_text:
+            second_line_parts.append(pub_date_text)
 
         stats_second_line = " | ".join(second_line_parts)
 
@@ -1430,6 +1457,7 @@ class QueueView(Frame):
                 task_duration=effective_duration,
                 show_multiplier=not is_short_item,
                 unit="views" if is_short_item else "runs",
+                last_played=last_played_text,
             ),
             justify="left",
             font=ctk.CTkFont(size=8),

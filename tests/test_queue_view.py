@@ -161,15 +161,16 @@ def test_queue_card_title_and_stats_lines_display():
         assert "Max Views:" not in lines[1]
         assert "Multiplier:" not in lines[1]
         assert "Watchtime:" not in lines[1]
-        assert "Watch Time:" in lines[1]
+        assert "Watch Time:" not in lines[1]
         assert "Length: 8 min" in lines[1]
+        assert "0s" in lines[1]
 
         # Second label created is stats_lbl (line 3)
         stats_lbl_call = mock_label_cls.call_args_list[1]
         line3_text = stats_lbl_call[1].get("text")
         assert "runs --" in line3_text
         assert "Length:" not in line3_text
-        assert "last" not in line3_text
+        assert "watched · Last Played: Never" in line3_text
 
     # 2. Multiple titles test
     task_multi = VideoTask(
@@ -197,11 +198,12 @@ def test_queue_card_title_and_stats_lines_display():
         assert len(lines) == 2
         # Line 1: All titles joined with " | "
         assert lines[0] == "#2. Strategy A | Strategy B | Strategy C"
-        # Line 2: Stats only, no "Titles:" prefix, displays Length and Watch Time ratio
+        # Line 2: Stats only, no "Titles:" prefix, displays Length and Watch Time ratio (without Watch Time text)
         assert "Titles:" not in lines[1]
         assert "Watchtime:" not in lines[1]
         assert "Length: 5 min" in lines[1]
-        assert "Watch Time:" in lines[1]
+        assert "Watch Time:" not in lines[1]
+        assert "0s" in lines[1]
 
 
 def test_queue_card_displays_video_watch_time_ratio():
@@ -218,6 +220,7 @@ def test_queue_card_displays_video_watch_time_ratio():
         duration_seconds=480,
         target_multiplier=3.0,
         max_runs=5,
+        published_at="2026-01-01T12:00:00Z",
     )
     rec = StatRecord(runs=1, watch_seconds=420.0, video_duration=480.0)
     store = MagicMock()
@@ -240,4 +243,19 @@ def test_queue_card_displays_video_watch_time_ratio():
         lines = text_arg.split("\n")
         assert len(lines) == 2
         assert lines[0] == "#1. Stop Wasting Money on Meta Ads! Try This Strategy"
-        assert lines[1] == "Length: 8 min | Watch Time: 7 / 24 min (29%) | Last Played: Never"
+        assert lines[1] == "Length: 8 min | 7 / 24 min (29%) | 01 Jan 2026"
+        stats_lbl_call = mock_label_cls.call_args_list[1]
+        line3_text = stats_lbl_call[1].get("text")
+        assert "watched · Last Played: Never" in line3_text
+
+
+def test_format_published_date():
+    from src.ui.views.queue_view import format_published_date
+
+    assert format_published_date("2026-01-01T15:30:00Z") == "01 Jan 2026"
+    assert format_published_date("2026-01-01T15:30:00.000Z") == "01 Jan 2026"
+    assert format_published_date("2026-01-01") == "01 Jan 2026"
+    assert format_published_date("2025-10-15T08:00:00Z") == "15 Oct 2025"
+    assert format_published_date("2026-11-07") == "07 Nov 2026"
+    assert format_published_date("") == ""
+    assert format_published_date(None) == ""
