@@ -226,10 +226,11 @@ class ChannelsView(Frame):
             btn_frame,
             text="⚡ Sync Data All",
             width=110,
-            fg_color="#1F6AA5",
-            hover_color="#144870",
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
             font=ctk.CTkFont(weight="bold"),
         )
+        self.sync_data_btn = sync_data_btn
         sync_data_btn.configure(
             command=with_button_feedback(sync_data_btn, "Syncing Data", self.sync_data_all)
         )
@@ -243,8 +244,8 @@ class ChannelsView(Frame):
             btn_frame,
             text="⚡ Sync All Channels Shorts",
             width=175,
-            fg_color="#1F6AA5",
-            hover_color="#144870",
+            fg_color="#0284C7",
+            hover_color="#0369A1",
             font=ctk.CTkFont(weight="bold"),
         )
         self.sync_all_channels_shorts_btn.configure(
@@ -3347,8 +3348,8 @@ class ChannelsView(Frame):
                 width=110,
                 height=22,
                 font=ctk.CTkFont(size=9, weight="bold"),
-                fg_color="#2563EB" if has_url else "gray30",
-                hover_color="#1D4ED8" if has_url else "gray30",
+                fg_color="#0284C7" if has_url else "gray30",
+                hover_color="#0369A1" if has_url else "gray30",
                 state="normal" if has_url else "disabled",
             )
             def _on_sync_shorts(ch=channel, btn=sync_shorts_btn):

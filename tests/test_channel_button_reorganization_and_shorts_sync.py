@@ -86,8 +86,12 @@ def test_channel_action_buttons_order_and_grid_positions(ctk_app):
     assert del_info["column"] == 4
     assert del_info["row"] == 1
 
-    # Verify Sync All and Sync All Shorts have matching style/color scheme
-    assert sync_shorts_btn.cget("style") == sync_all_btn.cget("style") == "Primary.TButton"
+    # Verify Sync All (Royal Blue) and Sync All Shorts (Ocean Cerulean Blue) have distinct blue colors and styles
+    assert sync_all_btn.cget("style") == "Primary.TButton"
+    assert sync_shorts_btn.cget("style") == "Cerulean.TButton"
+    assert sync_all_btn.cget("fg_color").lower() == "#2563eb"
+    assert sync_shorts_btn.cget("fg_color").lower() == "#0284c7"
+    assert sync_all_btn.cget("fg_color").lower() != sync_shorts_btn.cget("fg_color").lower()
 
     view.destroy()
 

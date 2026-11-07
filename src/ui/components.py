@@ -124,6 +124,8 @@ class Button(ttk.Button):
         if style is None:
             if fg_color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
                 style = "Primary.TButton"
+            elif fg_color in ("#0284C7", "#0284c7", "#0369A1", "#0369a1", "#0EA5E9", "#0ea5e9"):
+                style = "Cerulean.TButton"
             elif fg_color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
                 style = "Success.TButton"
             elif fg_color in ("#D32F2F", "#d32f2f", "#C62828", "#c62828"):
@@ -132,7 +134,7 @@ class Button(ttk.Button):
                 style = "Warning.TButton"
             elif fg_color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
                 style = "Teal.TButton"
-            elif fg_color in ("#374151", "#4B5563", "#4b5563"):
+            elif fg_color in ("#374151", "#4B5563", "#4b5563", "gray30"):
                 style = "MutedAction.TButton"
             elif fg_color == "transparent":
                 style = "Nav.TButton"
@@ -184,6 +186,8 @@ class Button(ttk.Button):
             is_apple = "Apple" in str(cur_style)
             if color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
                 kwargs["style"] = "ApplePrimary.TButton" if is_apple else "Primary.TButton"
+            elif color in ("#0284C7", "#0284c7", "#0369A1", "#0369a1", "#0EA5E9", "#0ea5e9"):
+                kwargs["style"] = "Cerulean.TButton"
             elif color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
                 kwargs["style"] = "Success.TButton"
             elif color in ("#D32F2F", "#d32f2f", "#C62828", "#c62828"):
@@ -192,7 +196,7 @@ class Button(ttk.Button):
                 kwargs["style"] = "AppleWarning.TButton" if is_apple else "Warning.TButton"
             elif color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
                 kwargs["style"] = "Teal.TButton"
-            elif color in ("#374151", "#4B5563", "#4b5563"):
+            elif color in ("#374151", "#4B5563", "#4b5563", "gray30"):
                 kwargs["style"] = "MutedAction.TButton"
             elif color == "transparent":
                 kwargs["style"] = "Nav.TButton"

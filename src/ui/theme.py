@@ -32,6 +32,8 @@ DARK_THEME: Dict[str, str] = {
     "warning_hover": "#c97800",
     "teal": "#0f766e",
     "teal_hover": "#115e59",
+    "cerulean": "#0284c7",
+    "cerulean_hover": "#0369a1",
     "muted_action": "#2a2a30",
     "muted_action_hover": "#3a3a42",
     "input_bg": "#18181c",
@@ -66,6 +68,8 @@ LIGHT_THEME: Dict[str, str] = {
     "warning_hover": "#c97800",
     "teal": "#0d9488",
     "teal_hover": "#0f766e",
+    "cerulean": "#0284c7",
+    "cerulean_hover": "#0369a1",
     "muted_action": "#e5e5ea",
     "muted_action_hover": "#d1d1d6",
     "input_bg": "#ffffff",
@@ -253,6 +257,27 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "Teal.TButton",
         background=[("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
         bordercolor=[("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    # Cerulean / Ocean Blue Button (Shorts Sync actions - distinct secondary blue)
+    style.configure(
+        "Cerulean.TButton",
+        background=colors.get("cerulean", "#0284c7"),
+        foreground="#ffffff",
+        font=(family, 9, "bold"),
+        bordercolor=colors.get("cerulean", "#0284c7"),
+        lightcolor=colors.get("cerulean", "#0284c7"),
+        darkcolor=colors.get("cerulean", "#0284c7"),
+        borderwidth=1,
+        focuscolor="none",
+        relief="solid",
+        padding=(7, 3),
+    )
+    style.map(
+        "Cerulean.TButton",
+        background=[("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
+        bordercolor=[("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
         foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 

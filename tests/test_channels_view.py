@@ -238,3 +238,60 @@ def test_check_new_button_color(ctk_app):
     assert btn.cget("hover_color").lower() == "#115e59"
 
     view.destroy()
+
+def test_sync_all_and_sync_all_shorts_distinct_blue_colors(ctk_app):
+    """Verify that 'Sync All' and 'Sync All Shorts' buttons have distinct blue shades."""
+    from unittest.mock import MagicMock
+    import customtkinter as ctk
+    from src.ui.background_jobs import BackgroundJobs
+
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store = MagicMock()
+    app.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+    app.background_jobs = BackgroundJobs()
+
+    view = ChannelsView(app, app)
+
+    # 1. Verify header buttons
+    assert hasattr(view, "sync_data_btn")
+    assert hasattr(view, "sync_all_channels_shorts_btn")
+    data_fg = view.sync_data_btn.cget("fg_color").lower()
+    shorts_fg = view.sync_all_channels_shorts_btn.cget("fg_color").lower()
+    assert data_fg == "#2563eb", f"Expected #2563eb for sync_data_btn, got {data_fg}"
+    assert shorts_fg == "#0284c7", f"Expected #0284c7 for sync_all_channels_shorts_btn, got {shorts_fg}"
+    assert data_fg != shorts_fg, "Header sync buttons must have different blue colors"
+
+    # 2. Verify channel card buttons
+    channel = Channel(
+        name="Test Blue Sync",
+        url="https://youtube.com/@testbluesync",
+    )
+    view.channels = [channel]
+    view.refresh_list()
+
+    cards = [w for w in view.scroll_frame.winfo_children() if isinstance(w, ctk.CTkFrame)]
+    assert len(cards) == 1
+    action_frame = cards[0].grid_slaves(row=0, column=2)[0]
+
+    sync_all_btn = next((b for b in action_frame.winfo_children() if isinstance(b, ctk.CTkButton) and b.cget("text") == "⚡ Sync All"), None)
+    sync_shorts_btn = next((b for b in action_frame.winfo_children() if isinstance(b, ctk.CTkButton) and "Sync All Shorts" in b.cget("text")), None)
+
+    assert sync_all_btn is not None
+    assert sync_shorts_btn is not None
+
+    card_all_fg = sync_all_btn.cget("fg_color").lower()
+    card_shorts_fg = sync_shorts_btn.cget("fg_color").lower()
+
+    assert card_all_fg == "#2563eb", f"Expected #2563eb for card sync_all_btn, got {card_all_fg}"
+    assert card_shorts_fg == "#0284c7", f"Expected #0284c7 for card sync_shorts_btn, got {card_shorts_fg}"
+    assert card_all_fg != card_shorts_fg, "Card sync buttons must have different blue colors"
+
+    # Verify distinct styles
+    assert sync_all_btn.cget("style") == "Primary.TButton"
+    assert sync_shorts_btn.cget("style") == "Cerulean.TButton"
+
+    view.destroy()
+
