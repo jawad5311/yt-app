@@ -899,3 +899,8 @@ class Font:
 
 
 DropdownMenu = AppleDropdownMenu
+from .confirm_dialog import ThemedConfirmDialog, show_themed_confirm_dialog
+
+ThemedConfirmDialog = ThemedConfirmDialog
+ConfirmDialog = ThemedConfirmDialog
+show_themed_confirm_dialog = show_themed_confirm_dialog

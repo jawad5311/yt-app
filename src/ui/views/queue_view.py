@@ -25,6 +25,7 @@ from ...models.watch_stats import (
 )
 from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
+from ..confirm_dialog import show_themed_confirm_dialog
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 
 
@@ -257,32 +258,30 @@ class QueueView(Frame):
         reset_btn = ctk.CTkButton(
             btn_frame,
             text="🗑 Reset Stats",
-            fg_color="#616161",
-            hover_color="#3F3F3F",
-        )
-        reset_btn.configure(
-            command=with_button_feedback(reset_btn, "Resetting...", self.reset_stats)
+            fg_color="#D97706",
+            hover_color="#B45309",
+            command=self.reset_stats,
         )
         reset_btn.pack(side="right", padx=(0, 10))
         add_tooltip(
             reset_btn,
             "Reset historical watch time and view counts for tasks in this queue.",
         )
+        self.reset_btn = reset_btn
 
         clear_btn = ctk.CTkButton(
             btn_frame,
             text="🗑 Clear Queue",
             fg_color="#D32F2F",
             hover_color="#9A0007",
+            command=self.clear_queue,
         )
-        clear_btn.configure(
-            command=with_button_feedback(clear_btn, "Clearing...", self.clear_queue)
-        )
-        clear_btn.pack(side="right")
+        clear_btn.pack(side="right", padx=(0, 10))
         add_tooltip(
             clear_btn,
             "Clear all tasks from this queue.",
         )
+        self.clear_btn = clear_btn
 
         # Scrollable Task List
         scroll_label = "Queued Target Shorts" if getattr(self, "shorts_only", False) else "Queued Target Videos"
@@ -840,21 +839,47 @@ class QueueView(Frame):
             self.save_queue()
             self.refresh_list()
 
-    def clear_queue(self):
+    def clear_queue(self, confirm: bool = True):
+        if confirm and hasattr(self, "_w") and hasattr(self, "tk"):
+            queue_label = "shorts" if getattr(self, "shorts_only", False) else "videos"
+            if not show_themed_confirm_dialog(
+                self,
+                title="Clear Queue",
+                heading=f"Clear All {queue_label.capitalize()}?",
+                message=f"Are you sure you want to remove all {queue_label} from the automation queue?\n\nThis action cannot be undone.",
+                confirm_text="Clear All",
+                cancel_text="Cancel",
+                confirm_color="#D32F2F",
+                confirm_hover="#9A0007",
+                icon="🗑",
+            ):
+                return
+
         if getattr(self, "shorts_only", False):
             self.video_tasks = [t for t in self.video_tasks if not getattr(t, "is_short", False)]
         else:
             self.video_tasks = [t for t in self.video_tasks if getattr(t, "is_short", False)]
         self.save_queue()
         self.refresh_list()
+        if hasattr(self, "clear_btn") and self.clear_btn:
+            flash_button_feedback(self.clear_btn, "Cleared", duration_ms=2500)
 
-    def reset_stats(self):
+    def reset_stats(self, confirm: bool = True):
         """Delete every recorded watch statistic after a confirmation."""
-        if not messagebox.askyesno(
-            "Reset Statistics",
-            "Delete all recorded watch statistics?\n\nThis cannot be undone.",
-        ):
-            return
+        if confirm and hasattr(self, "_w") and hasattr(self, "tk"):
+            if not show_themed_confirm_dialog(
+                self,
+                title="Reset Statistics",
+                heading="Reset All Statistics?",
+                message="Are you sure you want to delete all recorded watch statistics?\n\nThis action cannot be undone.",
+                confirm_text="Reset Stats",
+                cancel_text="Cancel",
+                confirm_color="#D97706",
+                confirm_hover="#B45309",
+                icon="⚠️",
+            ):
+                return
+
         if hasattr(self, "app_controller") and hasattr(self.app_controller, "reset_all_watch_stats"):
             self.app_controller.reset_all_watch_stats()
         else:
@@ -868,6 +893,8 @@ class QueueView(Frame):
                 refresh()
             else:
                 self.refresh_list()
+        if hasattr(self, "reset_btn") and self.reset_btn:
+            flash_button_feedback(self.reset_btn, "Reset", duration_ms=2500)
 
     def _cancel_pending_render(self):
         """Cancel any queued progressive card rendering jobs."""
