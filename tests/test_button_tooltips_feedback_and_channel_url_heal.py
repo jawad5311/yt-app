@@ -25,80 +25,75 @@ def test_channel_url_auto_heal_from_name():
     assert ch3.url == "https://www.youtube.com/@iamcarhacker"
 
 
-def test_flash_button_feedback_updates_and_restores():
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        btn = tk.Button(root, text="Original Text")
-        called = []
-
-        def dummy_cmd():
-            called.append(True)
-
-        wrapped = with_button_feedback(btn, "Executing...", dummy_cmd, duration_ms=50)
-        wrapped()
-
-        assert called == [True]
-        assert btn.cget("text") == "Executing..."
-
-        # Trigger pending after callbacks
-        root.update()
-        root.after(60, root.quit)
-        root.mainloop()
-
-        assert btn.cget("text") == "Original Text"
-    finally:
-        root.destroy()
+@pytest.fixture
+def tk_root(ctk_app):
+    return ctk_app
 
 
-def test_dashboard_buttons_tooltips_and_feedback():
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        controller = MagicMock()
-        controller.config_mgr.get_int.return_value = 1
-        controller.config_mgr.get_bool.return_value = True
-        view = DashboardView(root, controller)
+def test_flash_button_feedback_updates_and_restores(tk_root):
+    root = tk_root
+    btn = tk.Button(root, text="Original Text")
+    called = []
 
-        # Tooltips exist
-        assert hasattr(view.start_watching_btn, "_tooltip") or getattr(view.start_watching_btn, "winfo_exists", None)
-        assert hasattr(view.stop_btn, "_tooltip") or getattr(view.stop_btn, "winfo_exists", None)
-        assert hasattr(view.pause_btn, "_tooltip") or getattr(view.pause_btn, "winfo_exists", None)
+    def dummy_cmd():
+        called.append(True)
 
-        # Click feedback
-        view.start_watching_btn.invoke()
-        assert view.start_watching_btn.cget("text") == "Browsing started"
+    wrapped = with_button_feedback(btn, "Executing...", dummy_cmd, duration_ms=50)
+    wrapped()
 
-        view.set_running_state(True)
-        assert view.stop_btn.cget("state") == "normal"
-        view.stop_btn.invoke()
-        assert view.stop_btn.cget("text") == "Stopped"
-    finally:
-        root.destroy()
+    assert called == [True]
+    assert btn.cget("text") == "Executing..."
+
+    # Trigger pending after callbacks
+    root.update()
+    root.after(60, root.quit)
+    root.mainloop()
+
+    assert btn.cget("text") == "Original Text"
 
 
-def test_channels_view_sync_buttons_enabled_and_blue_with_healed_url():
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        controller = MagicMock()
-        controller.config_mgr.get_channels.return_value = [
-            {"name": "youtube.com/@iamcarhacker", "url": "", "total_videos": 10, "total_shorts": 5}
-        ]
-        controller.config_mgr.get_video_queue.return_value = []
-        controller.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+def test_dashboard_buttons_tooltips_and_feedback(tk_root):
+    root = tk_root
+    controller = MagicMock()
+    controller.config_mgr.get_int.return_value = 1
+    controller.config_mgr.get_bool.return_value = True
+    view = DashboardView(root, controller)
 
-        view = ChannelsView(root, controller)
+    # Tooltips exist
+    assert hasattr(view.start_watching_btn, "_tooltip") or getattr(view.start_watching_btn, "winfo_exists", None)
+    assert hasattr(view.stop_btn, "_tooltip") or getattr(view.stop_btn, "winfo_exists", None)
+    assert hasattr(view.pause_btn, "_tooltip") or getattr(view.pause_btn, "winfo_exists", None)
 
-        # The channel should have its url healed
-        assert len(view.channels) == 1
-        assert view.channels[0].url == "https://www.youtube.com/@iamcarhacker"
+    # Click feedback
+    view.start_watching_btn.invoke()
+    assert view.start_watching_btn.cget("text") == "Browsing started"
 
-        # Channels to sync should not be empty
-        channels_to_sync = [ch for ch in view.channels if ch.url and not ch.archived]
-        assert len(channels_to_sync) == 1
-    finally:
-        root.destroy()
+    view.set_running_state(True)
+    assert view.stop_btn.cget("state") == "normal"
+    view.stop_btn.invoke()
+    assert view.stop_btn.cget("text") == "Stopped"
+    view.destroy()
+
+
+def test_channels_view_sync_buttons_enabled_and_blue_with_healed_url(tk_root):
+    root = tk_root
+    controller = MagicMock()
+    controller.config_mgr.get_channels.return_value = [
+        {"name": "youtube.com/@iamcarhacker", "url": "", "total_videos": 10, "total_shorts": 5}
+    ]
+    controller.config_mgr.get_video_queue.return_value = []
+    controller.stats_store.channel_totals.return_value = MagicMock(runs=0, watch_seconds=0.0)
+
+    view = ChannelsView(root, controller)
+
+    # The channel should have its url healed
+    assert len(view.channels) == 1
+    assert view.channels[0].url == "https://www.youtube.com/@iamcarhacker"
+
+    # Channels to sync should not be empty
+    channels_to_sync = [ch for ch in view.channels if ch.url and not ch.archived]
+    assert len(channels_to_sync) == 1
+    view.destroy()
 
 
 def test_accounts_view_tooltips_and_feedback():

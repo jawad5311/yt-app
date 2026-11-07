@@ -165,13 +165,32 @@ class Button(ttk.Button):
         self._style = style
         self._fg_color = fg_color
         self._hover_color = hover_color
+        if "cursor" not in kwargs:
+            st = kwargs.get("state", "normal")
+            kwargs["cursor"] = "arrow" if st == "disabled" else "hand2"
         super().__init__(master, text=text, command=command, style=style, **kwargs)
+
+        def _on_enter(event):
+            try:
+                cur_state = str(self.cget("state"))
+                if cur_state == "disabled" or "disabled" in self.state():
+                    super(Button, self).configure(cursor="arrow")
+                else:
+                    super(Button, self).configure(cursor="hand2")
+            except Exception:
+                pass
+
+        self.bind("<Enter>", _on_enter, add="+")
 
     def configure(self, **kwargs):
         if "hover_color" in kwargs:
             self._hover_color = kwargs.pop("hover_color")
         for k in ("corner_radius", "text_color", "border_width", "border_color", "bg_color", "height"):
             kwargs.pop(k, None)
+        if "state" in kwargs:
+            st = kwargs["state"]
+            if "cursor" not in kwargs:
+                kwargs["cursor"] = "arrow" if st == "disabled" else "hand2"
         if "command" in kwargs:
             self._command = kwargs["command"]
         if "text" in kwargs:

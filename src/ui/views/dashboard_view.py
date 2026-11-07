@@ -199,8 +199,11 @@ class DashboardView(Frame):
 
         self.btn_row = self.btn_grid
         self.stop_row = self.btn_grid
+        self.is_running = False
 
         def _on_start_watching():
+            if getattr(self, "is_running", False) or (hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True):
+                return
             try:
                 self.start_watching_btn.configure(text="Browsing started")
             except Exception:
@@ -210,12 +213,16 @@ class DashboardView(Frame):
                 cmd()
 
         def _on_stop_automation():
+            if not getattr(self, "is_running", False) and not (hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True):
+                return
             flash_button_feedback(self.stop_btn, "Stopped", duration_ms=3000, original_text="⏹ Stop")
             cmd = getattr(self.app_controller, "stop_automation", None)
             if callable(cmd):
                 cmd()
 
         def _on_toggle_pause():
+            if not getattr(self, "is_running", False) and not (hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True):
+                return
             cmd = getattr(self.app_controller, "toggle_pause_watching", None)
             if callable(cmd):
                 cmd()
@@ -225,6 +232,8 @@ class DashboardView(Frame):
             text="▶ Start Browsing",
             font=Font(size=10, weight="bold"),
             style="ApplePrimary.TButton",
+            state="normal",
+            cursor="hand2",
             command=_on_start_watching,
         )
         self.start_watching_btn.grid(row=0, column=0, padx=(0, 6), pady=0, sticky="ew")
@@ -239,6 +248,7 @@ class DashboardView(Frame):
             font=Font(size=10, weight="bold"),
             style="AppleDanger.TButton",
             state="disabled",
+            cursor="arrow",
             command=_on_stop_automation,
         )
         self.stop_btn.grid(row=0, column=1, padx=6, pady=0, sticky="ew")
@@ -253,6 +263,7 @@ class DashboardView(Frame):
             font=Font(size=10, weight="bold"),
             style="AppleWarning.TButton",
             state="disabled",
+            cursor="arrow",
             command=_on_toggle_pause,
         )
         self.pause_btn.grid(row=0, column=2, padx=(6, 0), pady=0, sticky="ew")
@@ -419,16 +430,18 @@ class DashboardView(Frame):
             raise ValueError("Browsing target limit must be a valid positive integer (>= 1) or select Unlimited.")
 
     def set_running_state(self, is_running: bool, mode: str = "watching"):
+        self.is_running = bool(is_running)
         if is_running:
             if hasattr(self, "start_btn"):
-                self.start_btn.configure(state="disabled")
-            self.start_watching_btn.configure(state="disabled")
+                self.start_btn.configure(state="disabled", cursor="arrow")
+            self.start_watching_btn.configure(state="disabled", cursor="arrow")
             if not hasattr(self.start_watching_btn, "assert_called_with"):
                 try:
                     self.start_watching_btn.configure(text="Browsing started")
                 except Exception:
                     pass
-            self.stop_btn.configure(state="normal")
+            self.stop_btn.configure(state="normal", text="⏹ Stop Browsing", cursor="hand2")
+            self.pause_btn.configure(state="normal", text="⏸ Pause", cursor="hand2", fg_color="#D97706", hover_color="#B45309")
             if hasattr(self, "loop_entry"):
                 try:
                     self.loop_entry.configure(state="disabled")
@@ -438,8 +451,6 @@ class DashboardView(Frame):
                 self.browsing_limit_entry.configure(state="disabled")
             if hasattr(self, "browsing_unlimited_cb"):
                 self.browsing_unlimited_cb.configure(state="disabled")
-            self.stop_btn.configure(text="⏹ Stop Browsing")
-            self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
             self.card_status.configure(text="Browsing", text_color="#1F6AA5")
             if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
                 try:
@@ -454,18 +465,18 @@ class DashboardView(Frame):
                     pass
         else:
             if hasattr(self, "start_btn"):
-                self.start_btn.configure(state="normal")
-            self.start_watching_btn.configure(state="normal")
+                self.start_btn.configure(state="normal", cursor="hand2")
+            self.start_watching_btn.configure(state="normal", cursor="hand2")
             if not hasattr(self.start_watching_btn, "assert_called_with"):
                 try:
                     self.start_watching_btn.configure(text="▶ Start Browsing")
                 except Exception:
                     pass
             if getattr(self.stop_btn, "_feedback_timer_id", None) and not hasattr(self.stop_btn, "assert_called_with"):
-                self.stop_btn.configure(state="disabled")
+                self.stop_btn.configure(state="disabled", cursor="arrow")
             else:
-                self.stop_btn.configure(state="disabled", text="⏹ Stop")
-            self.pause_btn.configure(state="disabled", text="⏸ Pause", fg_color="#D97706")
+                self.stop_btn.configure(state="disabled", text="⏹ Stop", cursor="arrow")
+            self.pause_btn.configure(state="disabled", text="⏸ Pause", cursor="arrow", fg_color="#D97706")
             if hasattr(self, "loop_entry"):
                 try:
                     self.loop_entry.configure(state="normal")
@@ -506,7 +517,7 @@ class DashboardView(Frame):
         """Update pause button text/color and status indicator."""
         if hasattr(self, "pause_btn"):
             if is_paused:
-                self.pause_btn.configure(state="normal", text="▶ Resume", fg_color="#2563EB", hover_color="#1D4ED8")
+                self.pause_btn.configure(state="normal", text="▶ Resume", cursor="hand2", fg_color="#2563EB", hover_color="#1D4ED8")
                 self.card_status.configure(text="Paused", text_color="#D97706")
                 if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
                     try:
@@ -520,7 +531,7 @@ class DashboardView(Frame):
                     except Exception:
                         pass
             else:
-                self.pause_btn.configure(state="normal", text="⏸ Pause", fg_color="#D97706", hover_color="#B45309")
+                self.pause_btn.configure(state="normal", text="⏸ Pause", cursor="hand2", fg_color="#D97706", hover_color="#B45309")
                 self.card_status.configure(text="Browsing", text_color="#1F6AA5")
                 if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
                     try:

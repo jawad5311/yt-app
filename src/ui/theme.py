@@ -202,10 +202,14 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         relief="flat",
         padding=(8, 3),
     )
+    is_dark = colors.get("bg", "#161619") != "#f5f5f7"
+    btn_disabled_bg = "#222226" if is_dark else "#e5e5ea"
+    btn_disabled_fg = "#55555c" if is_dark else "#aeaeb2"
+
     style.map(
         "Primary.TButton",
-        background=[("active", colors["accent_hover"]), ("pressed", colors["accent_active"])],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", btn_disabled_bg), ("active", colors["accent_hover"]), ("pressed", colors["accent_active"])],
+        foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     # Danger Button
@@ -221,8 +225,8 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "Danger.TButton",
-        background=[("active", colors["danger_hover"]), ("pressed", colors["danger_hover"])],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", btn_disabled_bg), ("active", colors["danger_hover"]), ("pressed", colors["danger_hover"])],
+        foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     # Success Button
@@ -238,8 +242,8 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "Success.TButton",
-        background=[("active", colors["success_hover"]), ("pressed", colors["success_hover"])],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", btn_disabled_bg), ("active", colors["success_hover"]), ("pressed", colors["success_hover"])],
+        foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     # Warning Button
@@ -255,8 +259,8 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "Warning.TButton",
-        background=[("active", colors["warning_hover"]), ("pressed", colors["warning_hover"])],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", btn_disabled_bg), ("active", colors["warning_hover"]), ("pressed", colors["warning_hover"])],
+        foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     # Teal Button (Apple Deep Sea Teal - dark, eye-friendly, high contrast)
@@ -275,9 +279,9 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "Teal.TButton",
-        background=[("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
-        bordercolor=[("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", btn_disabled_bg), ("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
+        bordercolor=[("disabled", btn_disabled_bg), ("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
+        foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     # Cerulean / Ocean Blue Button (Shorts Sync actions - distinct secondary blue)
@@ -296,9 +300,9 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "Cerulean.TButton",
-        background=[("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
-        bordercolor=[("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", btn_disabled_bg), ("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
+        bordercolor=[("disabled", btn_disabled_bg), ("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
+        foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     # Muted Action Button (Up/Down buttons, subtle secondary icons)
@@ -648,6 +652,9 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         "orange_hover": "#c97800",
         "green": "#30d158" if is_dark else "#34c759",
         "trough": "#161619" if is_dark else "#e5e5ea",
+        "disabled_bg": "#222226" if is_dark else "#e5e5ea",
+        "disabled_border": "#323238" if is_dark else "#d1d1d6",
+        "disabled_fg": "#55555c" if is_dark else "#aeaeb2",
     }
 
     # Apple Frames
@@ -742,9 +749,9 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "ApplePrimary.TButton",
-        background=[("active", apple["blue_hover"]), ("pressed", apple["blue_active"])],
-        bordercolor=[("active", apple["blue_hover"]), ("pressed", apple["blue_active"])],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", apple["disabled_bg"]), ("active", apple["blue_hover"]), ("pressed", apple["blue_active"])],
+        bordercolor=[("disabled", apple["disabled_border"]), ("active", apple["blue_hover"]), ("pressed", apple["blue_active"])],
+        foreground=[("disabled", apple["disabled_fg"]), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     style.configure(
@@ -761,9 +768,9 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "AppleDanger.TButton",
-        background=[("active", apple["red_hover"]), ("pressed", "#b91c1c")],
-        bordercolor=[("active", apple["red_hover"]), ("pressed", "#b91c1c")],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", apple["disabled_bg"]), ("active", apple["red_hover"]), ("pressed", "#b91c1c")],
+        bordercolor=[("disabled", apple["disabled_border"]), ("active", apple["red_hover"]), ("pressed", "#b91c1c")],
+        foreground=[("disabled", apple["disabled_fg"]), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     style.configure(
@@ -780,9 +787,9 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     )
     style.map(
         "AppleWarning.TButton",
-        background=[("active", apple["orange_hover"]), ("pressed", "#b45309")],
-        bordercolor=[("active", apple["orange_hover"]), ("pressed", "#b45309")],
-        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+        background=[("disabled", apple["disabled_bg"]), ("active", apple["orange_hover"]), ("pressed", "#b45309")],
+        bordercolor=[("disabled", apple["disabled_border"]), ("active", apple["orange_hover"]), ("pressed", "#b45309")],
+        foreground=[("disabled", apple["disabled_fg"]), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
     # Apple Progressbar
