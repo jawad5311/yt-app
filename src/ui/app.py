@@ -117,27 +117,39 @@ class YTBotApp(tk.Tk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # Navigation Sidebar
-        self.sidebar = ttk.Frame(self, style="Sidebar.TFrame", width=200)
+        # Navigation Sidebar (Apple macOS Sidebar)
+        self.sidebar = ttk.Frame(self, style="Sidebar.TFrame", width=210)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_rowconfigure(8, weight=1)
+        self.sidebar.grid_rowconfigure(9, weight=1)
+
+        # macOS Sidebar Header
+        self.sidebar_header = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
+        self.sidebar_header.grid(row=0, column=0, padx=16, pady=(18, 14), sticky="ew")
 
         ttk.Label(
-            self.sidebar,
+            self.sidebar_header,
             text="YT Organic Bot",
             style="Sidebar.TLabel",
-            font=get_font(size=13, weight="bold"),
-        ).grid(row=0, column=0, padx=16, pady=(18, 16))
+            font=get_font(size=12, weight="bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            self.sidebar_header,
+            text="AUTOMATION SUITE",
+            style="Sidebar.TLabel",
+            foreground="#98989d",
+            font=get_font(size=8, weight="bold"),
+        ).pack(anchor="w", pady=(2, 0))
 
         self.nav_buttons: Dict[str, Any] = {}
         nav_items = [
-            ("dashboard", "📊 Dashboard"),
-            ("accounts", "👤 Accounts"),
-            ("channels", "📺 Channels"),
-            ("queue", "🎥 Video Queue"),
-            ("shorts_queue", "⚡ Shorts Queue"),
-            ("settings", "⚙ Settings"),
-            ("logs", "📋 Logs"),
+            ("dashboard", "📊  Dashboard"),
+            ("accounts", "👤  Accounts"),
+            ("channels", "📺  Channels"),
+            ("queue", "🎥  Video Queue"),
+            ("shorts_queue", "⚡  Shorts Queue"),
+            ("settings", "⚙  Settings"),
+            ("logs", "📋  Logs"),
         ]
 
         for idx, (name, label_text) in enumerate(nav_items, start=1):
@@ -147,7 +159,7 @@ class YTBotApp(tk.Tk):
                 style="Nav.TButton",
                 command=lambda n=name: self.show_view(n),
             )
-            btn.grid(row=idx, column=0, padx=10, pady=5, sticky="ew")
+            btn.grid(row=idx, column=0, padx=10, pady=4, sticky="ew")
             self.nav_buttons[name] = btn
 
         # Main Views Container

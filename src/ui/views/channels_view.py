@@ -119,15 +119,25 @@ class ChannelsView(Frame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
 
-        # Header
+        # Header (macOS Large Title & Subtitle)
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
+        title_container = ctk.CTkFrame(header_frame, fg_color="transparent")
+        title_container.pack(side="left", anchor="w")
+
         ctk.CTkLabel(
-            header_frame,
+            title_container,
             text="Channels",
-            font=ctk.CTkFont(size=16, weight="bold"),
-        ).pack(side="left")
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            title_container,
+            text="Channel-Level Targets, Data Sync & Video Organization",
+            font=ctk.CTkFont(size=9),
+            text_color=("gray45", "gray65"),
+        ).pack(anchor="w", pady=(2, 0))
 
         self.clear_btn = ctk.CTkButton(
             header_frame,

@@ -16,16 +16,26 @@ class LogsView(Frame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Header Frame
+        # Header Frame (macOS Large Title & Subtitle)
         h_frame = Frame(self, style="Transparent.TFrame")
         h_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
+        title_container = Frame(h_frame, style="Transparent.TFrame")
+        title_container.pack(side="left", anchor="w")
+
         Label(
-            h_frame,
-            text="Logs",
+            title_container,
+            text="System Logs",
             font=Font(size=22, weight="bold"),
             style="Header.TLabel",
-        ).pack(side="left")
+        ).pack(anchor="w")
+
+        Label(
+            title_container,
+            text="Real-Time Execution Diagnostics & Activity Console",
+            font=Font(size=9),
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
 
         # Action Buttons
         self._clear_reset_timer: Optional[str] = None
@@ -58,17 +68,18 @@ class LogsView(Frame):
         # Native Text Widget with High-Contrast Console Styling
         self.log_textbox = tk.Text(
             self.logs_container,
-            font=("Consolas", 11),
+            font=("Consolas", 10),
             wrap="word",
-            background="#1e1e1e",
+            background="#18181c",
             foreground="#e2e8f0",
-            insertbackground="#ffffff",
-            selectbackground="#094771",
+            insertbackground="#0a84ff",
+            selectbackground="#0a84ff",
             selectforeground="#ffffff",
-            borderwidth=0,
+            borderwidth=1,
+            relief="solid",
             highlightthickness=0,
-            padx=10,
-            pady=10,
+            padx=12,
+            pady=12,
         )
         self._scrollbar = ttk.Scrollbar(
             self.logs_container,

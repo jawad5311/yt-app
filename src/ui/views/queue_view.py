@@ -142,16 +142,27 @@ class QueueView(Frame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
 
-        # Header
+        # Header (macOS Large Title & Subtitle)
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
+        title_container = ctk.CTkFrame(header_frame, fg_color="transparent")
+        title_container.pack(side="left", anchor="w")
+
         header_title = "Shorts Automation Queue" if getattr(self, "shorts_only", False) else "Video Automation Queue"
         ctk.CTkLabel(
-            header_frame,
+            title_container,
             text=header_title,
             font=ctk.CTkFont(size=22, weight="bold"),
-        ).pack(side="left")
+        ).pack(anchor="w")
+
+        sub_title = "Shorts Scheduling, Watch Time Metrics & Priority Queue" if getattr(self, "shorts_only", False) else "Task Scheduling, Watch Time Metrics & Priority Queue"
+        ctk.CTkLabel(
+            title_container,
+            text=sub_title,
+            font=ctk.CTkFont(size=9),
+            text_color=("gray45", "gray65"),
+        ).pack(anchor="w", pady=(2, 0))
 
         # Action Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")

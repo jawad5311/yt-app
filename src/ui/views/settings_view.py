@@ -57,13 +57,23 @@ class SettingsView(Frame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Header Title
+        # Header (macOS Large Title & Subtitle)
+        header_frame = Frame(self, style="Transparent.TFrame")
+        header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
+
         Label(
-            self,
+            header_frame,
             text="Application Settings",
             font=Font(size=22, weight="bold"),
             style="Header.TLabel",
-        ).grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
+        ).pack(anchor="w")
+
+        Label(
+            header_frame,
+            text="Preferences, Automation Parameters & System Configuration",
+            font=Font(size=9),
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
 
         # Sub-Tabs Container
         self.tabview = Tabview(self, anchor="w")

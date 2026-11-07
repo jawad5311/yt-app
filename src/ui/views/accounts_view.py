@@ -19,16 +19,26 @@ class AccountsView(Frame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
 
-        # Header
+        # Header (macOS Large Title & Subtitle)
         header_frame = Frame(self, style="Transparent.TFrame")
         header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
+        title_container = Frame(header_frame, style="Transparent.TFrame")
+        title_container.pack(side="left", anchor="w")
+
         Label(
-            header_frame,
+            title_container,
             text="Google Accounts Manager",
             font=Font(size=22, weight="bold"),
             style="Header.TLabel",
-        ).pack(side="left")
+        ).pack(anchor="w")
+
+        Label(
+            title_container,
+            text="Browser Profiles, Cookies & Authentication Status",
+            font=Font(size=9),
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
 
         # Action Buttons
         btn_frame = Frame(self, style="Transparent.TFrame")
@@ -210,8 +220,8 @@ class AccountsView(Frame):
 
             Label(
                 row,
-                text=f"{idx + 1}. {acc.email}",
-                font=Font(weight="bold"),
+                text=f"👤  {idx + 1}.  {acc.email}",
+                font=Font(size=10, weight="bold"),
                 style="Card.TLabel",
             ).pack(side="left", padx=15, pady=10)
 

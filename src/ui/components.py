@@ -464,7 +464,7 @@ class ScrollableFrame(ttk.Frame):
         else:
             self._label = None
 
-        colors = DARK_THEME
+        colors = get_theme_colors()
         self._parent_canvas = tk.Canvas(
             self._parent_frame,
             borderwidth=0,
