@@ -943,11 +943,14 @@ class Font:
 
 
 DropdownMenu = AppleDropdownMenu
-from .confirm_dialog import ThemedConfirmDialog, show_themed_confirm_dialog
+from .confirm_dialog import ThemedConfirmDialog, show_themed_confirm_dialog, ThemedAlertDialog, show_themed_alert_dialog
 
 ThemedConfirmDialog = ThemedConfirmDialog
 ConfirmDialog = ThemedConfirmDialog
 show_themed_confirm_dialog = show_themed_confirm_dialog
+ThemedAlertDialog = ThemedAlertDialog
+AlertDialog = ThemedAlertDialog
+show_themed_alert_dialog = show_themed_alert_dialog
 
 def update_all_scrollable_frames(mode: Optional[str] = None):
     """Update background and styles for all active ScrollableFrame containers."""

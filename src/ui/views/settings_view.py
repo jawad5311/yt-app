@@ -20,6 +20,8 @@ from ..components import (
     Switch,
     Tabview,
 )
+from ..confirm_dialog import ThemedAlertDialog, show_themed_alert_dialog
+from ..theme import get_font, get_theme_colors
 from ..tooltip import add_tooltip
 
 APPEARANCE_OPTIONS: List[str] = ["Dark", "Light", "System"]
@@ -864,13 +866,37 @@ class SettingsView(Frame):
         self._notify_result(True)
 
     def _notify_result(self, success: bool, reason: str = "") -> None:
-        """Handle save settings notification via in-app themed bubble."""
+        """Handle save settings notification via Apple HIG themed pop-up dialog and in-app feedback."""
         self.last_settings_updated = success
         msg = "Settings updated" if success else "Settings not updated"
         self.last_bubble_message = msg
 
         # Display the in-app themed bubble notification for 3 seconds
         self._show_bubble_notification(msg, success=success, duration_ms=3000)
+
+        # Show prominent Apple HIG themed alert pop-up dialog
+        if success:
+            dialog_title = "Settings Saved"
+            dialog_heading = "Settings Saved Successfully"
+            dialog_body = "All configuration settings have been updated and applied."
+            dialog_icon = "✓"
+        else:
+            dialog_title = "Invalid Settings"
+            dialog_heading = "Settings Not Saved"
+            dialog_body = reason or "Please check your settings and correct any invalid inputs."
+            dialog_icon = "⚠️"
+
+        try:
+            self.last_alert_dialog = show_themed_alert_dialog(
+                parent=self,
+                title=dialog_title,
+                heading=dialog_heading,
+                message=dialog_body,
+                button_text="OK",
+                icon=dialog_icon,
+            )
+        except Exception:
+            pass
 
         # In testing environments where messagebox is mocked/monitored, record the call
         if success:
@@ -919,9 +945,8 @@ class SettingsView(Frame):
             colors = get_theme_colors()
             icon = "✓" if success else "✕"
             icon_color = "#10b981" if success else "#ef4444"
-            bg_color = colors.get("card_bg", "#1e293b")
+            bg_color = "#1e293b"
             fg_color = colors.get("fg", "#f8fafc")
-            border_color = colors.get("card_border", "#334155")
 
             # Create floating in-app notification bubble
             bubble = tk.Frame(
