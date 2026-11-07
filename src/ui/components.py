@@ -292,8 +292,8 @@ class Entry(ttk.Entry):
         super().delete(first, last)
 
 
-class CheckBox(ttk.Checkbutton):
-    """TTK Checkbutton with select/deselect/get helpers."""
+class AppleToggleSwitch(ttk.Frame):
+    """Native Apple macOS / iOS Human Interface Guidelines Toggle Switch."""
 
     def __init__(
         self,
@@ -301,43 +301,215 @@ class CheckBox(ttk.Checkbutton):
         text: str = "",
         command: Optional[Callable[[], None]] = None,
         variable: Optional[tk.Variable] = None,
-        style: str = "TCheckbutton",
+        state: str = "normal",
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        font: Optional[Any] = None,
         **kwargs,
     ):
         for k in (
-            "font", "corner_radius", "border_width", "border_color", "fg_color",
-            "text_color", "height", "width", "bg_color", "checkbox_width", "checkbox_height"
+            "corner_radius", "border_width", "border_color", "fg_color",
+            "progress_color", "button_color", "button_hover_color",
+            "text_color", "switch_width", "switch_height", "style",
+            "bg_color", "checkbox_width", "checkbox_height",
         ):
             kwargs.pop(k, None)
+
+        super().__init__(master, style="Transparent.TFrame", **kwargs)
+
+        self._command = command
+        self._state = state
+        self._text = text
+        self._width = max(34, width if width and width < 60 else 38)
+        self._height = max(18, height if height and height < 40 else 22)
         self._var = variable if variable is not None else tk.IntVar(value=0)
-        super().__init__(master, text=text, command=command, variable=self._var, style=style, **kwargs)
+        self.variable = self._var
+        self._font = font
 
-    def configure(self, **kwargs):
-        for k in (
-            "font", "corner_radius", "border_width", "border_color", "fg_color",
-            "text_color", "height", "width", "bg_color", "checkbox_width", "checkbox_height"
-        ):
-            kwargs.pop(k, None)
-        super().configure(**kwargs)
+        # Apple HIG Palette:
+        # ON track: Apple System Green (#34C759 / #30D158)
+        # OFF track: Dark (#3A3A3C), Light (#D1D1D6)
+        self._on_track = "#34C759"
+        self._on_border = "#30D158"
+        self._off_track_dark = "#3A3A3C"
+        self._off_border_dark = "#48484A"
+        self._off_track_light = "#D1D1D6"
+        self._off_border_light = "#C7C7CC"
+        self._thumb_color = "#FFFFFF"
 
-    def cget(self, prop: str) -> Any:
-        val = super().cget(prop)
-        if not isinstance(val, (str, int, float, bool, list, tuple, dict)):
-            return str(val)
-        return val
+        parent_bg = self._resolve_bg()
+
+        self._canvas = tk.Canvas(
+            self,
+            width=self._width,
+            height=self._height,
+            highlightthickness=0,
+            borderwidth=0,
+            background=parent_bg,
+            cursor="hand2" if self._state == "normal" else "arrow",
+        )
+        self._canvas.pack(side="left")
+        self._canvas.bind("<Button-1>", self._on_click)
+
+        if self._text:
+            self._label = ttk.Label(self, text=self._text, font=_resolve_font(self._font) or get_font(size=9))
+            self._label.pack(side="left", padx=(8, 0))
+            self._label.bind("<Button-1>", self._on_click)
+        else:
+            self._label = None
+
+        self._draw()
+
+    def _resolve_bg(self) -> str:
+        try:
+            m = self.master
+            while m:
+                if hasattr(m, "cget"):
+                    bg = m.cget("background")
+                    if bg and isinstance(bg, str) and (bg.startswith("#") or bg in ("white", "black")):
+                        return bg
+                m = getattr(m, "master", None)
+        except Exception:
+            pass
+        return get_theme_colors().get("card_bg", "#202024")
+
+    def _draw(self):
+        self._canvas.delete("all")
+        is_on = bool(self._var.get())
+        w = self._width
+        h = self._height
+        r = h / 2.0
+
+        colors = get_theme_colors()
+        is_dark = colors.get("bg", "#161619") != "#f5f5f7"
+
+        if is_on:
+            bg_track = self._on_track
+            border_track = self._on_border
+        else:
+            bg_track = self._off_track_dark if is_dark else self._off_track_light
+            border_track = self._off_border_dark if is_dark else self._off_border_light
+
+        if self._state == "disabled":
+            bg_track = "#2C2C2E" if is_dark else "#E5E5EA"
+            border_track = "#3A3A3C" if is_dark else "#D1D1D6"
+
+        # Pill track
+        self._canvas.create_arc(0, 0, 2 * r, 2 * r, start=90, extent=180, fill=bg_track, outline=border_track, width=1)
+        self._canvas.create_arc(w - 2 * r, 0, w, 2 * r, start=270, extent=180, fill=bg_track, outline=border_track, width=1)
+        self._canvas.create_rectangle(r, 0, w - r, 2 * r, fill=bg_track, outline=bg_track)
+        self._canvas.create_line(r, 0, w - r, 0, fill=border_track, width=1)
+        self._canvas.create_line(r, 2 * r, w - r, 2 * r, fill=border_track, width=1)
+
+        # White knob / thumb
+        thumb_r = r - 2.5
+        thumb_cx = (w - r) if is_on else r
+        self._canvas.create_oval(
+            thumb_cx - thumb_r,
+            r - thumb_r,
+            thumb_cx + thumb_r,
+            r + thumb_r,
+            fill=self._thumb_color,
+            outline="#E5E5EA" if not is_on else "#FFFFFF",
+            width=1,
+        )
+
+    def _on_click(self, event=None):
+        if self._state == "disabled":
+            return
+        self.toggle()
+
+    def toggle(self):
+        cur = bool(self._var.get())
+        new_val = 0 if cur else 1
+        self._var.set(new_val)
+        self._draw()
+        if self._command:
+            try:
+                self._command()
+            except Exception:
+                pass
+
+    def invoke(self):
+        return self.toggle()
 
     def select(self):
         self._var.set(1)
+        self._draw()
 
     def deselect(self):
         self._var.set(0)
+        self._draw()
 
     def get(self) -> int:
         return int(self._var.get())
 
+    def set(self, val):
+        self._var.set(1 if val else 0)
+        self._draw()
 
-class Switch(CheckBox):
-    """Switch representation using TTK Checkbutton."""
+    def configure(self, **kwargs):
+        for k in (
+            "corner_radius", "border_width", "border_color", "fg_color",
+            "progress_color", "button_color", "button_hover_color",
+            "text_color", "switch_width", "switch_height", "style",
+            "bg_color", "checkbox_width", "checkbox_height",
+        ):
+            kwargs.pop(k, None)
+
+        if "state" in kwargs:
+            self._state = kwargs.pop("state")
+            cursor = "hand2" if self._state == "normal" else "arrow"
+            self._canvas.configure(cursor=cursor)
+            if self._label:
+                self._label.configure(state=self._state)
+
+        if "command" in kwargs:
+            self._command = kwargs.pop("command")
+
+        if "text" in kwargs:
+            self._text = kwargs.pop("text")
+            if self._label:
+                self._label.configure(text=self._text)
+            elif self._text:
+                self._label = ttk.Label(self, text=self._text, font=_resolve_font(self._font) or get_font(size=9))
+                self._label.pack(side="left", padx=(8, 0))
+                self._label.bind("<Button-1>", self._on_click)
+
+        if "variable" in kwargs:
+            self._var = kwargs.pop("variable")
+            self.variable = self._var
+
+        if "font" in kwargs:
+            self._font = kwargs.pop("font")
+            if self._label:
+                self._label.configure(font=_resolve_font(self._font))
+
+        self._draw()
+
+    def cget(self, prop: str) -> Any:
+        if prop == "state":
+            return self._state
+        if prop == "text":
+            return self._text
+        if prop == "variable":
+            return self._var
+        return ""
+
+    def __getitem__(self, key: str) -> Any:
+        return self.cget(key)
+
+    def __setitem__(self, key: str, value: Any):
+        self.configure(**{key: value})
+
+
+class Switch(AppleToggleSwitch):
+    """Native Apple macOS / iOS Human Interface Guidelines Toggle Switch."""
+    pass
+
+
+class CheckBox(AppleToggleSwitch):
+    """Apple UI toggle switch replacement for standard checkboxes."""
     pass
 
 

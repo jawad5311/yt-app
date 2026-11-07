@@ -176,3 +176,55 @@ def test_logs_view_apple_header_and_console(tk_root):
     assert hasattr(view, "copy_btn")
     assert hasattr(view, "log_textbox")
     assert view.log_textbox.cget("background") == "#18181c"
+
+
+def test_apple_toggle_switch_component(tk_root):
+    """Verify AppleToggleSwitch state transitions, callbacks, and HIG styling."""
+    from src.ui.components import AppleToggleSwitch, CheckBox, Switch
+
+    events = []
+    sw = AppleToggleSwitch(tk_root, text="Enable Feature", command=lambda: events.append("toggled"))
+
+    # Initial state
+    assert sw.get() == 0
+    assert bool(sw.get()) is False
+    assert sw.cget("text") == "Enable Feature"
+
+    # Select / Deselect
+    sw.select()
+    assert sw.get() == 1
+    assert bool(sw.get()) is True
+    assert len(events) == 0  # programmatic select does not fire command
+
+    sw.deselect()
+    assert sw.get() == 0
+    assert len(events) == 0
+
+    # User toggle click
+    sw.toggle()
+    assert sw.get() == 1
+    assert events == ["toggled"]
+
+    # Invoke
+    sw.invoke()
+    assert sw.get() == 0
+    assert events == ["toggled", "toggled"]
+
+    # Disabled state
+    sw.configure(state="disabled")
+    assert sw.cget("state") == "disabled"
+    sw._on_click()
+    assert sw.get() == 0  # No change when disabled
+
+    # Verify CheckBox and Switch aliases
+    chk = CheckBox(tk_root, text="")
+    assert isinstance(chk, AppleToggleSwitch)
+    assert chk.get() == 0
+    chk.select()
+    assert chk.get() == 1
+
+    sett_sw = Switch(tk_root, text="Fallback")
+    assert isinstance(sett_sw, AppleToggleSwitch)
+    assert sett_sw.get() == 0
+    sett_sw.select()
+    assert sett_sw.get() == 1
