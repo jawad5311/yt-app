@@ -158,7 +158,10 @@ def setup_driver(
         options.add_argument("--password-store=basic")
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--window-size=1280,800")
+        if headless:
+            options.add_argument("--window-size=1920,1080")
+        else:
+            options.add_argument("--start-maximized")
         options.add_argument("--lang=en-US,en")
         if headless:
             options.add_argument("--headless=new")
@@ -196,6 +199,12 @@ def setup_driver(
                 launch_kwargs.pop("driver_executable_path", None)
                 driver = uc.Chrome(options=options, **launch_kwargs)
         driver.set_page_load_timeout(45)
+
+        if not headless:
+            try:
+                driver.maximize_window()
+            except Exception:
+                pass
 
         # First successful automatic download -> keep a copy for offline launches using safe publication.
         if driver_path is None and chrome_major:

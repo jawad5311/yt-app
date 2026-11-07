@@ -8,6 +8,7 @@ import pytest
 from src.models.channel import Channel
 from src.models.video_task import VideoTask
 from src.ui.confirm_dialog import ThemedConfirmDialog, show_themed_confirm_dialog
+from src.ui.views.channels_view import ChannelsView
 from src.ui.views.queue_view import QueueView
 
 
@@ -195,6 +196,110 @@ def test_queue_view_reset_stats_confirmed(tk_root):
             view.reset_stats(confirm=True)
             mock_dialog.assert_called_once()
             app.reset_all_watch_stats.assert_called_once()
+    finally:
+        try:
+            view.destroy()
+        except Exception:
+            pass
+
+
+
+def test_channels_view_clear_all_confirmed(tk_root):
+    """Verify Clear All channels executes after confirmation dialog is confirmed."""
+    app = MagicMock()
+    app.current_view_name = "channels"
+    app.appearance_mode = "Dark"
+    ch = Channel(name="Test Channel", url="https://youtube.com/@test")
+    app.config_mgr.get_channels.return_value = [ch.to_dict()]
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store.channel_totals.return_value = MagicMock(watch_seconds=0, runs=0)
+
+    view = ChannelsView(tk_root, app)
+    view.channels = [ch]
+
+    try:
+        # 1. User cancels confirmation dialog -> channels preserved
+        with patch("src.ui.views.channels_view.show_themed_confirm_dialog", return_value=False) as mock_dialog:
+            view.clear_channels(confirm=True)
+            mock_dialog.assert_called_once()
+            assert len(view.channels) == 1
+
+        # 2. User confirms confirmation dialog -> channels cleared
+        with patch("src.ui.views.channels_view.show_themed_confirm_dialog", return_value=True) as mock_dialog:
+            view.clear_channels(confirm=True)
+            mock_dialog.assert_called_once()
+            assert len(view.channels) == 0
+    finally:
+        try:
+            view.destroy()
+        except Exception:
+            pass
+
+
+def test_channels_view_archive_all_confirmed(tk_root):
+    """Verify Archive All channels executes after confirmation dialog is confirmed."""
+    app = MagicMock()
+    app.current_view_name = "channels"
+    app.appearance_mode = "Dark"
+    ch1 = Channel(name="Channel 1", url="https://youtube.com/@test1", archived=False)
+    ch2 = Channel(name="Channel 2", url="https://youtube.com/@test2", archived=False)
+    ch3 = Channel(name="Channel 3", url="https://youtube.com/@test3", archived=True)
+    app.config_mgr.get_channels.return_value = [ch1.to_dict(), ch2.to_dict(), ch3.to_dict()]
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store.channel_totals.return_value = MagicMock(watch_seconds=0, runs=0)
+
+    view = ChannelsView(tk_root, app)
+    view.channels = [ch1, ch2, ch3]
+    view.current_tab = "Active"
+
+    try:
+        # 1. User cancels confirmation dialog -> active channels unchanged
+        with patch("src.ui.views.channels_view.show_themed_confirm_dialog", return_value=False) as mock_dialog:
+            view.archive_all_channels(confirm=True)
+            mock_dialog.assert_called_once()
+            assert view.channels[0].archived is False
+            assert view.channels[1].archived is False
+            assert view.current_tab == "Active"
+
+        # 2. User confirms confirmation dialog -> active channels archived & tab switched
+        with patch("src.ui.views.channels_view.show_themed_confirm_dialog", return_value=True) as mock_dialog:
+            view.archive_all_channels(confirm=True)
+            mock_dialog.assert_called_once()
+            assert all(c.archived for c in view.channels)
+            assert view.current_tab == "Archived"
+    finally:
+        try:
+            view.destroy()
+        except Exception:
+            pass
+
+
+def test_channels_view_empty_skips_confirm_dialog(tk_root):
+    """Verify Clear All and Archive All skip confirmation dialog when no applicable channels exist."""
+    app = MagicMock()
+    app.current_view_name = "channels"
+    app.appearance_mode = "Dark"
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.stats_store.channel_totals.return_value = MagicMock(watch_seconds=0, runs=0)
+
+    view = ChannelsView(tk_root, app)
+    view.channels = []
+
+    try:
+        with patch("src.ui.views.channels_view.show_themed_confirm_dialog") as mock_dialog:
+            # Clear all on empty list
+            view.clear_channels(confirm=True)
+            mock_dialog.assert_not_called()
+
+            # Archive all on empty list
+            view.archive_all_channels(confirm=True)
+            mock_dialog.assert_not_called()
+
+            # Archive all when only already-archived channels exist
+            view.channels = [Channel(name="Archived Only", url="https://youtube.com/@arch", archived=True)]
+            view.archive_all_channels(confirm=True)
+            mock_dialog.assert_not_called()
     finally:
         try:
             view.destroy()

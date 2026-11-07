@@ -26,6 +26,7 @@ from ...models.watch_stats import (
 from ...utils.helpers import clean_youtube_url
 from ...utils.scroll_helper import setup_smooth_scrolling
 from ..confirm_dialog import show_themed_confirm_dialog
+from ..theme import get_font, get_theme_colors
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 
 
@@ -500,14 +501,147 @@ class QueueView(Frame):
         self.app_controller.on_queue_changed(self.video_tasks)
 
     def show_popup_notification(self, title: str, message: str) -> None:
-        """Display a pop-up notification dialog for user updates."""
+        """Display an in-app floating bubble notification for user updates."""
+        self._show_bubble_notification(message=message, title=title, success=True, duration_ms=3000)
+
+    def show_bubble_notification(
+        self,
+        message: str,
+        title: Optional[str] = None,
+        success: bool = True,
+        duration_ms: int = 3000,
+    ) -> None:
+        """Public method to display a floating in-app bubble notification."""
+        self._show_bubble_notification(message=message, title=title, success=success, duration_ms=duration_ms)
+
+    def _show_bubble_notification(
+        self,
+        message: str,
+        title: Optional[str] = None,
+        success: bool = True,
+        duration_ms: int = 3000,
+    ) -> None:
+        """Display a floating in-app bubble notification at the middle-top of the queue view."""
+        self.last_bubble_message = message
+        self.last_bubble_title = title
+
+        # Dismiss any active bubble notification first
+        self.dismiss_bubble()
+
+        if not hasattr(self, "_w") or not hasattr(self, "tk"):
+            return
+
         try:
-            messagebox.showinfo(title, message, parent=self)
+            mode = getattr(self.app_controller, "appearance_mode", "Dark")
+            colors = get_theme_colors(mode)
+            bg_color = colors.get("card_bg", "#202024")
+            border_color = colors.get("card_border", "#323238")
+            fg_color = colors.get("fg", "#ffffff")
+            fg_dim = colors.get("fg_dim", "#d4d4d8")
+            icon_color = colors.get("success", "#30d158") if success else colors.get("danger", "#ff453a")
+            icon_text = "✓" if success else "✕"
+
+            bubble = tk.Frame(
+                self,
+                background=bg_color,
+                highlightbackground=border_color,
+                highlightcolor=border_color,
+                highlightthickness=1,
+                padx=16,
+                pady=10,
+                cursor="hand2",
+            )
+            self._bubble_widget = bubble
+
+            content_frame = tk.Frame(bubble, background=bg_color, cursor="hand2")
+            content_frame.pack(fill="both", expand=True)
+
+            lbl_icon = tk.Label(
+                content_frame,
+                text=icon_text,
+                font=get_font(size=13, weight="bold"),
+                foreground=icon_color,
+                background=bg_color,
+                cursor="hand2",
+            )
+            lbl_icon.pack(side="left", padx=(0, 10), anchor="center")
+
+            text_block = tk.Frame(content_frame, background=bg_color, cursor="hand2")
+            text_block.pack(side="left", fill="both", expand=True)
+
+            if title:
+                lbl_title = tk.Label(
+                    text_block,
+                    text=title,
+                    font=get_font(size=10, weight="bold"),
+                    foreground=fg_color,
+                    background=bg_color,
+                    cursor="hand2",
+                    anchor="w",
+                )
+                lbl_title.pack(anchor="w")
+
+            clean_msg = message.replace("\n", " ").strip()
+            lbl_msg = tk.Label(
+                text_block,
+                text=clean_msg,
+                font=get_font(size=9, weight="normal"),
+                foreground=fg_dim if title else fg_color,
+                background=bg_color,
+                cursor="hand2",
+                anchor="w",
+            )
+            lbl_msg.pack(anchor="w")
+
+            lbl_close = tk.Label(
+                content_frame,
+                text="✕",
+                font=get_font(size=9, weight="bold"),
+                foreground=colors.get("fg_muted", "#888888"),
+                background=bg_color,
+                cursor="hand2",
+            )
+            lbl_close.pack(side="right", padx=(12, 0), anchor="center")
+
+            if callable(getattr(bubble, "place", None)):
+                bubble.place(relx=0.5, y=20, anchor="n")
+            if callable(getattr(bubble, "lift", None)):
+                bubble.lift()
+
+            def _dismiss(event=None):
+                self.dismiss_bubble()
+
+            for ev in ("<ButtonPress>", "<Button-1>"):
+                bubble.bind(ev, _dismiss)
+                content_frame.bind(ev, _dismiss)
+                lbl_icon.bind(ev, _dismiss)
+                text_block.bind(ev, _dismiss)
+                lbl_msg.bind(ev, _dismiss)
+                lbl_close.bind(ev, _dismiss)
+                if title:
+                    lbl_title.bind(ev, _dismiss)
+
+            if callable(getattr(self, "after", None)):
+                self._bubble_timer = self.after(duration_ms, _dismiss)
         except Exception:
+            pass
+
+    def dismiss_bubble(self) -> None:
+        """Dismiss active in-app bubble notification immediately."""
+        if getattr(self, "_bubble_timer", None) is not None:
             try:
-                messagebox.showinfo(title, message)
+                if callable(getattr(self, "after_cancel", None)):
+                    self.after_cancel(self._bubble_timer)
             except Exception:
                 pass
+            self._bubble_timer = None
+
+        if getattr(self, "_bubble_widget", None) is not None:
+            try:
+                self._bubble_widget.destroy()
+            except Exception:
+                pass
+            self._bubble_widget = None
 
     # -------------------------------------------------------------- channels
 

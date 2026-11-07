@@ -1320,7 +1320,8 @@ class WatchingWorker:
                 if _is_navigated():
                     return True
         except Exception as exc:
-            emit(self.log_queue, f"Native element click attempt bypassed: {exc}", logging.DEBUG)
+            err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
+            emit(self.log_queue, f"Native element click attempt bypassed ({err_line})", logging.DEBUG)
 
         if _is_navigated():
             return True
@@ -1353,7 +1354,8 @@ class WatchingWorker:
                 if _is_navigated():
                     return True
         except Exception as exc:
-            emit(self.log_queue, f"JavaScript synthetic click attempt bypassed: {exc}", logging.DEBUG)
+            err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
+            emit(self.log_queue, f"JavaScript synthetic click attempt bypassed ({err_line})", logging.DEBUG)
 
         if _is_navigated():
             return True
@@ -1366,7 +1368,8 @@ class WatchingWorker:
                 if _is_navigated():
                     return True
         except Exception as exc:
-            emit(self.log_queue, f"ActionChains click attempt bypassed: {exc}", logging.DEBUG)
+            err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
+            emit(self.log_queue, f"ActionChains click attempt bypassed ({err_line})", logging.DEBUG)
 
         if _is_navigated():
             return True
@@ -1379,7 +1382,8 @@ class WatchingWorker:
                 if _is_navigated():
                     return True
         except Exception as exc:
-            emit(self.log_queue, f"click_element helper attempt bypassed: {exc}", logging.DEBUG)
+            err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
+            emit(self.log_queue, f"click_element helper attempt bypassed ({err_line})", logging.DEBUG)
 
         return _is_navigated()
 

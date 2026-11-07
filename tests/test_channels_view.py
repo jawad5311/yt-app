@@ -193,7 +193,7 @@ def test_channels_view_reordered_buttons_and_archive_all(ctk_app, tmp_path):
     view.refresh_list()
 
     assert view.current_tab == "Active"
-    view.archive_all_channels()
+    view.archive_all_channels(confirm=False)
 
     # All channels should now be marked archived
     assert all(c.archived for c in view.channels)

@@ -29,6 +29,7 @@ from ...utils.channel_fetcher import (
 )
 from ...utils.helpers import extract_video_id
 from ...utils.scroll_helper import setup_smooth_scrolling
+from ..confirm_dialog import show_themed_confirm_dialog
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 from .channel_import_modal import ChannelImportModal
 
@@ -147,7 +148,7 @@ class ChannelsView(Frame):
             font=ctk.CTkFont(weight="bold"),
         )
         self.clear_btn.configure(
-            command=with_button_feedback(self.clear_btn, "Clearing...", self.clear_channels)
+            command=self.clear_channels
         )
         self.clear_btn.pack(side="right")
         add_tooltip(
@@ -163,7 +164,7 @@ class ChannelsView(Frame):
             font=ctk.CTkFont(weight="bold"),
         )
         self.archive_all_btn.configure(
-            command=with_button_feedback(self.archive_all_btn, "Archiving...", self.archive_all_channels)
+            command=self.archive_all_channels
         )
         self.archive_all_btn.pack(side="right", padx=(0, 10))
         add_tooltip(
@@ -2165,9 +2166,30 @@ class ChannelsView(Frame):
             discard=_close,
         )
 
-    def clear_channels(self) -> None:
+    def clear_channels(self, confirm: bool = True) -> None:
+        """Permanently remove all channels from the list after user confirmation."""
         if not self.channels:
             return
+
+        if confirm and hasattr(self, "_w") and hasattr(self, "tk"):
+            ch_count = len(self.channels)
+            ch_word = "channel" if ch_count == 1 else "channels"
+            if not show_themed_confirm_dialog(
+                self,
+                title="Clear All Channels",
+                heading="Clear All Channels?",
+                message=(
+                    f"Are you sure you want to permanently remove all {ch_count} {ch_word} from your list?\n\n"
+                    "Associated queued videos will be unassigned. This action cannot be undone."
+                ),
+                confirm_text="Clear All",
+                cancel_text="Cancel",
+                confirm_color="#D32F2F",
+                confirm_hover="#9A0007",
+                icon="🗑",
+            ):
+                return
+
         self.channels.clear()
         self.save_channels()
 
@@ -2175,12 +2197,35 @@ class ChannelsView(Frame):
         if queue is not None:
             queue.unassign_all_channels()
 
+        if hasattr(self, "clear_btn") and self.clear_btn:
+            flash_button_feedback(self.clear_btn, "Cleared", duration_ms=2500)
 
-    def archive_all_channels(self) -> None:
+
+    def archive_all_channels(self, confirm: bool = True) -> None:
         """Archive all active channels in the list and switch to the Archived tab."""
         active_channels = [ch for ch in self.channels if not ch.archived]
         if not active_channels:
             return
+
+        if confirm and hasattr(self, "_w") and hasattr(self, "tk"):
+            ch_count = len(active_channels)
+            ch_word = "channel" if ch_count == 1 else "channels"
+            if not show_themed_confirm_dialog(
+                self,
+                title="Archive All Channels",
+                heading="Archive All Channels?",
+                message=(
+                    f"Are you sure you want to archive all {ch_count} active {ch_word}?\n\n"
+                    "They will be moved to the Archived tab."
+                ),
+                confirm_text="Archive All",
+                cancel_text="Cancel",
+                confirm_color="#D97706",
+                confirm_hover="#B45309",
+                icon="📁",
+            ):
+                return
+
         for ch in active_channels:
             ch.archived = True
         self.current_tab = "Archived"
@@ -2188,6 +2233,9 @@ class ChannelsView(Frame):
         queue = self._queue_view()
         if queue is not None:
             queue.refresh_list()
+
+        if hasattr(self, "archive_all_btn") and self.archive_all_btn:
+            flash_button_feedback(self.archive_all_btn, "Archived", duration_ms=2500)
     def open_channel_url(self, url: str) -> None:
         if url and url.strip():
             webbrowser.open(url.strip())
