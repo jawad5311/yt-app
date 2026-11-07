@@ -15,6 +15,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from .helpers import extract_video_id
+
 
 @dataclass
 class FetchedVideo:
@@ -96,21 +98,42 @@ def normalize_channel_url(input_str: str) -> str:
 
 
 def parse_duration_str(duration_str: str) -> int:
-    """Convert YouTube duration string (e.g. '8:20', '1:14:05') into seconds."""
+    """Convert YouTube duration string (e.g. '8:20', '1:14:05', '16 min', '28s', 'Short') into seconds."""
     clean = (duration_str or "").strip()
     if not clean:
         return 0
 
-    parts = clean.split(":")
-    try:
-        if len(parts) == 1:
-            return max(0, int(parts[0]))
-        if len(parts) == 2:
-            return max(0, int(parts[0]) * 60 + int(parts[1]))
-        if len(parts) == 3:
-            return max(0, int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
-    except ValueError:
-        return 0
+    if clean.lower() == "short":
+        return 30
+
+    if ":" in clean:
+        parts = clean.split(":")
+        try:
+            if len(parts) == 1:
+                return max(0, int(parts[0]))
+            if len(parts) == 2:
+                return max(0, int(parts[0]) * 60 + int(parts[1]))
+            if len(parts) == 3:
+                return max(0, int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
+        except ValueError:
+            return 0
+
+    tot = 0
+    h_m = re.search(r"(\d+)\s*(?:hours?|hrs?|h)\b", clean, re.IGNORECASE)
+    if h_m:
+        tot += int(h_m.group(1)) * 3600
+    m_m = re.search(r"(\d+)\s*(?:minutes?|mins?|m)\b", clean, re.IGNORECASE)
+    if m_m:
+        tot += int(m_m.group(1)) * 60
+    s_m = re.search(r"(\d+)\s*(?:seconds?|secs?|s)\b", clean, re.IGNORECASE)
+    if s_m:
+        tot += int(s_m.group(1))
+    if tot > 0:
+        return tot
+
+    if clean.isdigit():
+        return int(clean)
+
     return 0
 
 
@@ -361,6 +384,22 @@ def extract_videos_from_data(
                                         dur_str = str(txt).strip()
                                         break
 
+                pub_val = ""
+                meta_vm = lum.get("metadata", {}).get("lockupMetadataViewModel", {})
+                content_meta = meta_vm.get("metadata", {}).get("contentMetadataViewModel", {})
+                if isinstance(content_meta, dict):
+                    for row in content_meta.get("metadataRows", []):
+                        if not isinstance(row, dict):
+                            continue
+                        for part in row.get("parts", []):
+                            if isinstance(part, dict) and "text" in part:
+                                t = part.get("text", {}).get("content", "")
+                                if t and ("ago" in t.lower() or "stream" in t.lower() or any(m in t.lower() for m in ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))):
+                                    pub_val = str(t).strip()
+                                    break
+                        if pub_val:
+                            break
+
                 if vid and title and vid not in seen_ids:
                     seen_ids.add(vid)
                     target_url = f"https://www.youtube.com/shorts/{vid}" if is_short_item else f"https://www.youtube.com/watch?v={vid}"
@@ -372,6 +411,7 @@ def extract_videos_from_data(
                             duration_text=dur_str or ("Short" if is_short_item else ""),
                             duration_seconds=parse_duration_str(dur_str) if dur_str != "Short" else 30,
                             is_short=is_short_item,
+                            published_at=pub_val,
                         )
                     )
                     if limit_val > 0 and len(results) >= limit_val:
@@ -460,6 +500,16 @@ def extract_videos_from_data(
                                         dur_str = str(text_obj["simpleText"]).strip()
                                         break
 
+                    pub_val = ""
+                    pt_obj = vr.get("publishedTimeText", {})
+                    if isinstance(pt_obj, dict):
+                        if pt_obj.get("simpleText"):
+                            pub_val = str(pt_obj["simpleText"]).strip()
+                        elif isinstance(pt_obj.get("runs"), list) and pt_obj["runs"]:
+                            first_r = pt_obj["runs"][0]
+                            if isinstance(first_r, dict) and first_r.get("text"):
+                                pub_val = str(first_r["text"]).strip()
+
                     if vid and title and vid not in seen_ids:
                         seen_ids.add(vid)
                         results.append(
@@ -469,6 +519,7 @@ def extract_videos_from_data(
                                 title=title,
                                 duration_text=dur_str,
                                 duration_seconds=parse_duration_str(dur_str),
+                                published_at=pub_val,
                             )
                         )
                         if limit_val > 0 and len(results) >= limit_val:
@@ -577,13 +628,13 @@ def format_seconds_to_duration(seconds: int) -> str:
 
 
 def enrich_video_durations(
-    videos: List[FetchedVideo],
+    videos: List[Any],
     api_key: str,
     timeout: int = 15,
     cancel_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> None:
-    """Batch-query YouTube Data API v3 videos endpoint to populate duration fields concurrently."""
+    """Batch-query YouTube Data API v3 videos endpoint to populate duration & snippet fields concurrently."""
     if not videos or not api_key:
         return
 
@@ -594,16 +645,25 @@ def enrich_video_durations(
     if not chunks:
         return
 
-    def _fetch_chunk_durations(chunk: List[FetchedVideo]) -> Dict[str, Tuple[int, str]]:
+    def _get_item_vid(v: Any) -> Optional[str]:
+        if isinstance(v, dict):
+            return v.get("video_id") or extract_video_id(v.get("url", ""))
+        vid = getattr(v, "video_id", None)
+        if not vid and hasattr(v, "url"):
+            vid = extract_video_id(getattr(v, "url", ""))
+        return str(vid) if vid else None
+
+    def _fetch_chunk_durations(chunk: List[Any]) -> Dict[str, Tuple[int, str, str, str]]:
         if cancel_event is not None and cancel_event.is_set():
             return {}
-        ids = [v.video_id for v in chunk if v.video_id]
-        if not ids:
+        ids = [_get_item_vid(v) for v in chunk]
+        valid_ids = [vid for vid in ids if vid]
+        if not valid_ids:
             return {}
-        ids_param = ",".join(ids)
-        url = f"https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id={ids_param}&key={api_key}"
+        ids_param = ",".join(valid_ids)
+        url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id={ids_param}&key={api_key}"
         req = urllib.request.Request(url, headers={"User-Agent": "yt-tool/2.1"})
-        dur_map: Dict[str, Tuple[int, str]] = {}
+        dur_map: Dict[str, Tuple[int, str, str, str]] = {}
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
@@ -611,14 +671,18 @@ def enrich_video_durations(
             for item in items:
                 vid = item.get("id")
                 iso_dur = item.get("contentDetails", {}).get("duration", "")
-                if vid and iso_dur:
-                    sec = parse_iso8601_duration(iso_dur)
-                    dur_map[vid] = (sec, format_seconds_to_duration(sec))
+                snippet = item.get("snippet", {})
+                pub_at = snippet.get("publishedAt", "")
+                title = snippet.get("title", "")
+                if vid:
+                    sec = parse_iso8601_duration(iso_dur) if iso_dur else 0
+                    text_d = format_seconds_to_duration(sec) if sec > 0 else ""
+                    dur_map[vid] = (sec, text_d, str(pub_at).strip(), str(title).strip())
         except Exception:
             pass
         return dur_map
 
-    all_dur_maps: Dict[str, Tuple[int, str]] = {}
+    all_dur_maps: Dict[str, Tuple[int, str, str, str]] = {}
     processed_count = 0
     max_workers = min(5, len(chunks))
 
@@ -655,10 +719,68 @@ def enrich_video_durations(
                         pass
 
     for v in videos:
-        if v.video_id in all_dur_maps:
-            sec, text_d = all_dur_maps[v.video_id]
-            v.duration_seconds = sec
-            v.duration_text = text_d
+        v_id = _get_item_vid(v)
+        if v_id and v_id in all_dur_maps:
+            sec, text_d, pub_at, title = all_dur_maps[v_id]
+            if isinstance(v, dict):
+                if sec > 0:
+                    v["duration_seconds"] = sec
+                if text_d and not v.get("duration_text"):
+                    v["duration_text"] = text_d
+                if pub_at and not v.get("published_at"):
+                    v["published_at"] = pub_at
+                if title and not v.get("title"):
+                    v["title"] = title
+            else:
+                if sec > 0:
+                    v.duration_seconds = sec
+                if text_d and not getattr(v, "duration_text", ""):
+                    v.duration_text = text_d
+                if pub_at and not getattr(v, "published_at", ""):
+                    v.published_at = pub_at
+                if title and not getattr(v, "title", ""):
+                    v.title = title
+
+
+def enrich_video_tasks(
+    tasks: List[Any],
+    api_key: str,
+    timeout: int = 15,
+    cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> int:
+    """Batch enrich tasks (VideoTask, FetchedVideo, or dict) with missing duration or published_at via YouTube API.
+
+    Returns the number of tasks updated.
+    """
+    if not tasks or not api_key:
+        return 0
+
+    to_enrich = []
+    for t in tasks:
+        dur = t.get("duration_seconds", 0) if isinstance(t, dict) else (getattr(t, "duration_seconds", 0) or 0)
+        pub = t.get("published_at", "") if isinstance(t, dict) else (getattr(t, "published_at", "") or "")
+        if dur <= 0 or not pub:
+            to_enrich.append(t)
+
+    if not to_enrich:
+        return 0
+
+    enrich_video_durations(
+        to_enrich,
+        api_key=api_key,
+        timeout=timeout,
+        cancel_event=cancel_event,
+        progress_callback=progress_callback,
+    )
+
+    updated = 0
+    for t in to_enrich:
+        dur = t.get("duration_seconds", 0) if isinstance(t, dict) else (getattr(t, "duration_seconds", 0) or 0)
+        pub = t.get("published_at", "") if isinstance(t, dict) else (getattr(t, "published_at", "") or "")
+        if dur > 0 or pub:
+            updated += 1
+    return updated
 
 
 def get_playlist_total_results(

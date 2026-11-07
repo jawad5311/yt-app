@@ -113,6 +113,40 @@ class YTBotApp(tk.Tk):
             if Path(accounts_file).exists():
                 self.views["accounts"].import_accounts_file(accounts_file)
 
+        # Auto-enrich queued video tasks with missing published date or duration
+        self._start_background_metadata_enrichment()
+
+    def _start_background_metadata_enrichment(self) -> None:
+        """Enrich queued video tasks with missing published date or duration via YouTube API."""
+        if not hasattr(self, "config_mgr") or not self.config_mgr:
+            return
+        api_key = (self.config_mgr.get_setting("YouTubeApiKey", "") or "").strip()
+        if not api_key:
+            return
+
+        needs = [
+            t for t in self.queued_video_tasks
+            if not getattr(t, "published_at", "") or getattr(t, "duration_seconds", 0) <= 0
+        ]
+        if not needs:
+            return
+
+        def _worker():
+            try:
+                from ..utils.channel_fetcher import enrich_video_tasks
+                updated = enrich_video_tasks(self.queued_video_tasks, api_key=api_key)
+                if updated > 0:
+                    raw = [t.to_dict() for t in self.queued_video_tasks]
+                    self.config_mgr.set_video_queue(raw)
+                    def _update_ui():
+                        self.on_queue_changed(self.queued_video_tasks)
+                        self.refresh_stats_views()
+                    self.after(0, _update_ui)
+            except Exception as err:
+                logging.getLogger("views_app").debug("Background enrichment failed: %s", err)
+
+        threading.Thread(target=_worker, daemon=True, name="bg-metadata-enrichment").start()
+
     def _build_ui(self):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)

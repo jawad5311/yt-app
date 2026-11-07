@@ -24,6 +24,7 @@ from ...models.watch_stats import (
     resolve_video_key,
 )
 from ...utils.helpers import clean_youtube_url
+from ...utils.channel_fetcher import parse_duration_str
 from ...utils.scroll_helper import setup_smooth_scrolling
 from ..confirm_dialog import show_themed_confirm_dialog
 from ..theme import get_font, get_theme_colors
@@ -63,10 +64,10 @@ def format_last_played(timestamp_str: Optional[str], now: Optional[datetime] = N
         return "Never"
 
 
-def format_published_date(pub_val: Optional[str]) -> str:
+def format_published_date(pub_val: Optional[str], fallback: str = "") -> str:
     """Format an ISO 8601 or date string into '01 Jan 2026'."""
     if not pub_val or not str(pub_val).strip():
-        return ""
+        return fallback
     val = str(pub_val).strip()
     try:
         clean_val = val.replace("Z", "+00:00")
@@ -75,19 +76,27 @@ def format_published_date(pub_val: Optional[str]) -> str:
     except Exception:
         pass
     for fmt in (
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d",
-        "%Y/%m/%d",
         "%d %b %Y",
         "%d-%b-%Y",
+        "%d %B %Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
     ):
         try:
-            dt = datetime.strptime(val[:19] if ("T" in val or " " in val) else val[:10], fmt)
+            dt = datetime.strptime(val[:19] if ("T" in val or " " in val) else val[:11], fmt)
             return dt.strftime("%d %b %Y")
         except Exception:
             pass
-    return ""
+        try:
+            dt = datetime.strptime(val, fmt)
+            return dt.strftime("%d %b %Y")
+        except Exception:
+            pass
+    if val:
+        return val
+    return fallback
 
 
 def _get_task_sort_val(task: VideoTask, key: str, stats_store: Optional[Any], reverse: bool = True) -> float:
@@ -101,8 +110,22 @@ def _get_task_sort_val(task: VideoTask, key: str, stats_store: Optional[Any], re
                 clean_pub = pub_str.strip().replace("Z", "+00:00")
                 return datetime.fromisoformat(clean_pub).timestamp()
             except Exception:
+                pass
+            for fmt in (
+                "%d %b %Y",
+                "%d-%b-%Y",
+                "%d %B %Y",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+            ):
                 try:
-                    return datetime.strptime(pub_str[:10], "%Y-%m-%d").timestamp()
+                    return datetime.strptime(pub_str.strip()[:19] if ("T" in pub_str or " " in pub_str) else pub_str.strip()[:11], fmt).timestamp()
+                except Exception:
+                    pass
+                try:
+                    return datetime.strptime(pub_str.strip(), fmt).timestamp()
                 except Exception:
                     pass
         # Unparsed/empty published dates stay at bottom regardless of sort direction
@@ -1596,26 +1619,30 @@ class QueueView(Frame):
         mult = float(getattr(task, "target_multiplier", 0.0) or 0.0)
         target_sec = (effective_duration * mult) if (mult > 0 and not is_short_item) else 0.0
 
+        if effective_duration <= 0.0 and getattr(task, "duration_text", ""):
+            try:
+                effective_duration = float(parse_duration_str(task.duration_text))
+            except Exception:
+                effective_duration = 0.0
+
         if effective_duration >= 60.0:
             length_part = f"Length: {max(1, int(round(effective_duration / 60.0)))} min"
         elif effective_duration > 0.0:
             length_part = f"Length: {int(effective_duration)}s"
+        elif is_short_item:
+            length_part = "Length: Short"
         else:
-            length_part = ""
+            length_part = "Length: Unknown"
 
         ratio_part = format_video_watch_ratio(watch_sec, 0.0 if is_short_item else target_sec)
+        if not ratio_part or not str(ratio_part).strip():
+            ratio_part = "0s"
+
         last_played_val = (record.last_run or record.last_completed) if record else ""
         last_played_text = format_last_played(last_played_val)
-        pub_date_text = format_published_date(getattr(task, "published_at", ""))
+        pub_date_text = format_published_date(getattr(task, "published_at", ""), fallback="Date: N/A")
 
-        second_line_parts = []
-        if length_part:
-            second_line_parts.append(length_part)
-        if ratio_part:
-            second_line_parts.append(ratio_part)
-        if pub_date_text:
-            second_line_parts.append(pub_date_text)
-
+        second_line_parts = [length_part, ratio_part, pub_date_text]
         stats_second_line = " | ".join(second_line_parts)
 
         info_text = f"#{position}. {status_prefix}{title_text}\n{stats_second_line}"

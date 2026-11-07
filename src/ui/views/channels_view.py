@@ -26,12 +26,14 @@ from ...utils.channel_fetcher import (
     fetch_channel_data,
     fetch_channel_title_online,
     fetch_channel_videos,
+    parse_duration_str,
 )
 from ...utils.helpers import extract_video_id
 from ...utils.scroll_helper import setup_smooth_scrolling
 from ..confirm_dialog import show_themed_confirm_dialog
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 from .channel_import_modal import ChannelImportModal
+from .queue_view import format_published_date
 
 def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
     if not mgr:
@@ -1775,22 +1777,28 @@ class ChannelsView(Frame):
                 rec = store.find_for_task(task) if store else None
                 v_watch_sec = float(rec.watch_seconds) if rec else 0.0
                 eff_dur = float(rec.video_duration if rec and rec.video_duration > 0 else getattr(task, "duration_seconds", 0.0))
+                if eff_dur <= 0 and getattr(task, "duration_text", ""):
+                    try:
+                        eff_dur = float(parse_duration_str(task.duration_text))
+                    except Exception:
+                        eff_dur = 0.0
 
                 v_mult = float(getattr(task, "target_multiplier", 0.0) or 0.0)
-                v_target_sec = eff_dur * v_mult if v_mult > 0 else 0.0
+                v_target_sec = eff_dur * v_mult if (v_mult > 0 and not is_short) else 0.0
 
                 if eff_dur >= 60.0:
                     v_len = f"Length: {max(1, int(round(eff_dur / 60.0)))} min"
                 elif eff_dur > 0.0:
                     v_len = f"Length: {int(eff_dur)}s"
+                elif is_short:
+                    v_len = "Length: Short"
                 else:
-                    v_len = ""
+                    v_len = "Length: Unknown"
 
-                ratio_display = format_video_watch_ratio(v_watch_sec, v_target_sec)
-                if v_len:
-                    label_parts.append(f"{v_len} | Watch Time: {ratio_display}")
-                else:
-                    label_parts.append(f"Watch Time: {ratio_display}")
+                ratio_display = format_video_watch_ratio(v_watch_sec, v_target_sec) or "0s"
+                pub_display = format_published_date(getattr(task, "published_at", ""), fallback="Date: N/A")
+
+                label_parts.append(f"{v_len} | {ratio_display} | {pub_display}")
 
                 if task.max_runs > 0:
                     label_parts.append(f"Limit: {task.max_runs} runs")
