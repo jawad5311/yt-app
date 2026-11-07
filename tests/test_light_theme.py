@@ -18,14 +18,8 @@ from src.ui.views.settings_view import SettingsView
 
 
 @pytest.fixture
-def tk_root():
-    root = tk.Tk()
-    root.withdraw()
-    yield root
-    try:
-        root.destroy()
-    except Exception:
-        pass
+def tk_root(ctk_app):
+    yield ctk_app
 
 
 def test_theme_mode_switch_tokens():
@@ -53,11 +47,11 @@ def test_scrollable_frame_light_background_and_expansion(tk_root):
         # Verify canvas background is light (#f5f5f7), not dark (#161619)
         assert sf._parent_canvas.cget("background") == "#f5f5f7"
 
-        # Verify expansion on configure
+        # Verify width adapts on configure without clamping height (enabling natural scrolling)
         event = MagicMock(width=400, height=500)
         sf._on_canvas_configure(event)
-        canvas_item_h = sf._parent_canvas.itemcget(sf._window_id, "height")
-        assert float(canvas_item_h) >= 500
+        canvas_item_w = sf._parent_canvas.itemcget(sf._window_id, "width")
+        assert float(canvas_item_w) >= 400
 
         # Switch to Dark and verify apply_theme updates canvas background
         sf.apply_theme("Dark")

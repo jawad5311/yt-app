@@ -66,24 +66,26 @@ def test_channel_action_buttons_order_and_grid_positions(ctk_app):
     archive_info = archive_btn.grid_info()
     del_info = del_btn.grid_info()
 
-    # Column 0 & 1: arrows
+    # Column 0: arrows stacked vertically (top arrow at top, bottom arrow below it)
     assert up_info["column"] == 0
-    assert dn_info["column"] == 1
+    assert up_info["row"] == 0
+    assert dn_info["column"] == 0
+    assert dn_info["row"] == 1
 
-    # Column 2: Sync Recent (shown separately before Sync All)
-    assert recent_info["column"] == 2
+    # Column 1: Sync Recent (shown separately before Sync All)
+    assert recent_info["column"] == 1
     assert recent_info["rowspan"] == 2
 
-    # Column 3: Sync All on top (row 0), Sync All Shorts below (row 1)
-    assert all_info["column"] == 3
+    # Column 2: Sync All on top (row 0), Sync All Shorts below (row 1)
+    assert all_info["column"] == 2
     assert all_info["row"] == 0
-    assert shorts_info["column"] == 3
+    assert shorts_info["column"] == 2
     assert shorts_info["row"] == 1
 
-    # Column 4: Archive on top (row 0), Delete below (row 1)
-    assert archive_info["column"] == 4
+    # Column 3: Archive on top (row 0), Delete below (row 1)
+    assert archive_info["column"] == 3
     assert archive_info["row"] == 0
-    assert del_info["column"] == 4
+    assert del_info["column"] == 3
     assert del_info["row"] == 1
 
     # Verify Sync All (Royal Blue) and Sync All Shorts (Ocean Cerulean Blue) have distinct blue colors and styles
@@ -129,9 +131,9 @@ def test_channel_action_buttons_archived_restore_and_delete(ctk_app):
     restore_info = restore_btn.grid_info()
     del_info = del_btn.grid_info()
 
-    assert restore_info["column"] == 4
+    assert restore_info["column"] == 3
     assert restore_info["row"] == 0
-    assert del_info["column"] == 4
+    assert del_info["column"] == 3
     assert del_info["row"] == 1
 
     view.destroy()

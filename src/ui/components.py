@@ -127,7 +127,9 @@ class Button(ttk.Button):
 
         if style is None:
             if fg_color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
-                style = "Primary.TButton"
+                style = "ArrowActive.TButton" if text in ("▲", "▼") else "Primary.TButton"
+            elif fg_color in ("gray25", "gray30", "#374151") and text in ("▲", "▼"):
+                style = "ArrowDisabled.TButton"
             elif fg_color in ("#0284C7", "#0284c7", "#0369A1", "#0369a1", "#0EA5E9", "#0ea5e9"):
                 style = "Cerulean.TButton"
             elif fg_color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
@@ -188,22 +190,28 @@ class Button(ttk.Button):
             color = kwargs.pop("fg_color")
             cur_style = getattr(self, "_style", None) or (self.cget("style") if hasattr(self, "cget") else "")
             is_apple = "Apple" in str(cur_style)
-            if color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
-                kwargs["style"] = "ApplePrimary.TButton" if is_apple else "Primary.TButton"
-            elif color in ("#0284C7", "#0284c7", "#0369A1", "#0369a1", "#0EA5E9", "#0ea5e9"):
-                kwargs["style"] = "Cerulean.TButton"
-            elif color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
-                kwargs["style"] = "Success.TButton"
-            elif color in ("#D32F2F", "#d32f2f", "#C62828", "#c62828"):
-                kwargs["style"] = "AppleDanger.TButton" if is_apple else "Danger.TButton"
-            elif color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706", "#B45309"):
-                kwargs["style"] = "AppleWarning.TButton" if is_apple else "Warning.TButton"
-            elif color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
-                kwargs["style"] = "Teal.TButton"
-            elif color in ("#374151", "#4B5563", "#4b5563", "gray30"):
-                kwargs["style"] = "MutedAction.TButton"
-            elif color == "transparent":
-                kwargs["style"] = "Nav.TButton"
+            is_arrow = "Arrow" in str(cur_style) or getattr(self, "_text", "") in ("▲", "▼")
+            if "style" not in kwargs:
+                if is_arrow and color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8", "#0A84FF", "#0a84ff", "#007AFF", "#007aff"):
+                    kwargs["style"] = "ArrowActive.TButton"
+                elif is_arrow and color in ("gray25", "gray30", "#374151"):
+                    kwargs["style"] = "ArrowDisabled.TButton"
+                elif color in ("#1F6AA5", "#1f6aa5", "#0E639C", "#2563EB", "#2563eb", "#1D4ED8"):
+                    kwargs["style"] = "ApplePrimary.TButton" if is_apple else "Primary.TButton"
+                elif color in ("#0284C7", "#0284c7", "#0369A1", "#0369a1", "#0EA5E9", "#0ea5e9"):
+                    kwargs["style"] = "Cerulean.TButton"
+                elif color in ("#2E7D32", "#2e7d32", "#388E3C", "#388e3c", "#059669", "#047857"):
+                    kwargs["style"] = "Success.TButton"
+                elif color in ("#D32F2F", "#d32f2f", "#C62828", "#c62828"):
+                    kwargs["style"] = "AppleDanger.TButton" if is_apple else "Danger.TButton"
+                elif color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706", "#B45309"):
+                    kwargs["style"] = "AppleWarning.TButton" if is_apple else "Warning.TButton"
+                elif color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
+                    kwargs["style"] = "Teal.TButton"
+                elif color in ("#374151", "#4B5563", "#4b5563", "gray30"):
+                    kwargs["style"] = "MutedAction.TButton"
+                elif color == "transparent":
+                    kwargs["style"] = "Nav.TButton"
         if "width" in kwargs:
             w = kwargs.pop("width")
             if w is not None:
@@ -703,18 +711,14 @@ class ScrollableFrame(ttk.Frame):
         _ALL_SCROLLABLE_FRAMES.add(self)
 
     def _on_frame_configure(self, event=None):
-        if self._parent_canvas.winfo_exists():
-            canvas_h = self._parent_canvas.winfo_height()
-            req_h = self.winfo_reqheight()
-            h = max(canvas_h, req_h)
-            self._parent_canvas.itemconfig(self._window_id, height=h)
-            self._parent_canvas.configure(scrollregion=self._parent_canvas.bbox("all"))
+        if hasattr(self, "_parent_canvas") and self._parent_canvas.winfo_exists():
+            bbox = self._parent_canvas.bbox("all")
+            if bbox:
+                self._parent_canvas.configure(scrollregion=bbox)
 
     def _on_canvas_configure(self, event):
-        if self._parent_canvas.winfo_exists():
-            req_h = self.winfo_reqheight()
-            h = max(event.height, req_h)
-            self._parent_canvas.itemconfig(self._window_id, width=event.width, height=h)
+        if hasattr(self, "_parent_canvas") and self._parent_canvas.winfo_exists():
+            self._parent_canvas.itemconfig(self._window_id, width=event.width)
 
     def apply_theme(self, mode: Optional[str] = None):
         colors = get_theme_colors(mode)
@@ -744,8 +748,12 @@ class ScrollableFrame(ttk.Frame):
 
     def update_idletasks(self):
         super().update_idletasks()
-        if self._parent_frame.winfo_exists():
+        if hasattr(self, "_parent_frame") and self._parent_frame.winfo_exists():
             self._parent_frame.update_idletasks()
+        if hasattr(self, "_parent_canvas") and self._parent_canvas.winfo_exists():
+            bbox = self._parent_canvas.bbox("all")
+            if bbox:
+                self._parent_canvas.configure(scrollregion=bbox)
 
 
 class _DummySegmentedButton:

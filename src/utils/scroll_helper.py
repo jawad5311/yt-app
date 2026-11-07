@@ -21,6 +21,12 @@ def setup_smooth_scrolling(
     if canvas is None:
         return
 
+    if getattr(scroll_frame, "_smooth_scrolling_installed", False):
+        return
+    scroll_frame._smooth_scrolling_installed = True
+
+    parent_frame = getattr(scroll_frame, "_parent_frame", None)
+
     # Ensure 1 unit = 1 pixel for genuine pixel-level smooth interpolation
     try:
         canvas.configure(yscrollincrement=1)
@@ -40,7 +46,7 @@ def setup_smooth_scrolling(
     def _is_descendant(child: Any) -> bool:
         cur = child
         while cur is not None:
-            if cur == canvas or cur == scroll_frame:
+            if cur == canvas or cur == scroll_frame or (parent_frame is not None and cur == parent_frame):
                 return True
             cur = getattr(cur, "master", None)
         return False

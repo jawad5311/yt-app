@@ -1836,13 +1836,16 @@ class ChannelsView(Frame):
                     width=30,
                     height=28,
                     font=ctk.CTkFont(size=12, weight="bold"),
-                    fg_color="#374151" if can_m_up else "gray30",
-                    hover_color="#4B5563" if can_m_up else "gray30",
+                    style="ArrowActive.TButton" if can_m_up else "ArrowDisabled.TButton",
+                    fg_color="#2563EB" if can_m_up else "gray25",
+                    hover_color="#1D4ED8" if can_m_up else "gray25",
                     state="normal" if can_m_up else "disabled",
-                    command=_move_modal_up,
+                    cursor="hand2" if can_m_up else "arrow",
+                    command=_move_modal_up if can_m_up else None,
                 )
                 btn_m_up.pack(side="left", padx=(0, 2))
-                add_tooltip(btn_m_up, "Move this video higher in the channel queue order.")
+                if can_m_up:
+                    add_tooltip(btn_m_up, "Move this video higher in the channel queue order.")
 
                 btn_m_down = ctk.CTkButton(
                     card_btns,
@@ -1850,13 +1853,16 @@ class ChannelsView(Frame):
                     width=30,
                     height=28,
                     font=ctk.CTkFont(size=12, weight="bold"),
-                    fg_color="#374151" if can_m_down else "gray30",
-                    hover_color="#4B5563" if can_m_down else "gray30",
+                    style="ArrowActive.TButton" if can_m_down else "ArrowDisabled.TButton",
+                    fg_color="#2563EB" if can_m_down else "gray25",
+                    hover_color="#1D4ED8" if can_m_down else "gray25",
                     state="normal" if can_m_down else "disabled",
-                    command=_move_modal_down,
+                    cursor="hand2" if can_m_down else "arrow",
+                    command=_move_modal_down if can_m_down else None,
                 )
                 btn_m_down.pack(side="left", padx=(0, 6))
-                add_tooltip(btn_m_down, "Move this video lower in the channel queue order.")
+                if can_m_down:
+                    add_tooltip(btn_m_down, "Move this video lower in the channel queue order.")
 
                 def _edit(idx_to_edit=real_idx):
                     if queue is not None:
@@ -3268,35 +3274,41 @@ class ChannelsView(Frame):
                 action_frame,
                 text="▲",
                 width=24,
-                height=24,
+                height=20,
                 font=ctk.CTkFont(size=9, weight="bold"),
-                fg_color="#374151" if can_up else "gray30",
-                hover_color="#4B5563" if can_up else "gray30",
+                style="ArrowActive.TButton" if can_up else "ArrowDisabled.TButton",
+                fg_color="#2563EB" if can_up else "gray25",
+                hover_color="#1D4ED8" if can_up else "gray25",
                 state="normal" if can_up else "disabled",
-                command=_move_channel_up,
+                cursor="hand2" if can_up else "arrow",
+                command=_move_channel_up if can_up else None,
             )
-            btn_up.grid(row=0, column=0, rowspan=2, padx=(0, 2))
-            add_tooltip(
-                btn_up,
-                "Move this channel up in list order\nto prioritize it during playback cycles.",
-            )
+            btn_up.grid(row=0, column=0, pady=(0, 2), padx=(0, 6))
+            if can_up:
+                add_tooltip(
+                    btn_up,
+                    "Move this channel up in list order\nto prioritize it during playback cycles.",
+                )
 
             btn_down = ctk.CTkButton(
                 action_frame,
                 text="▼",
                 width=24,
-                height=24,
+                height=20,
                 font=ctk.CTkFont(size=9, weight="bold"),
-                fg_color="#374151" if can_down else "gray30",
-                hover_color="#4B5563" if can_down else "gray30",
+                style="ArrowActive.TButton" if can_down else "ArrowDisabled.TButton",
+                fg_color="#2563EB" if can_down else "gray25",
+                hover_color="#1D4ED8" if can_down else "gray25",
                 state="normal" if can_down else "disabled",
-                command=_move_channel_down,
+                cursor="hand2" if can_down else "arrow",
+                command=_move_channel_down if can_down else None,
             )
-            btn_down.grid(row=0, column=1, rowspan=2, padx=(0, 6))
-            add_tooltip(
-                btn_down,
-                "Move this channel down in list order\nto deprioritize it during playback cycles.",
-            )
+            btn_down.grid(row=1, column=0, pady=(2, 0), padx=(0, 6))
+            if can_down:
+                add_tooltip(
+                    btn_down,
+                    "Move this channel down in list order\nto deprioritize it during playback cycles.",
+                )
 
             if not channel.url and channel.name:
                 if ("youtube.com" in channel.name.lower()) or channel.name.startswith("@") or channel.name.startswith("http"):
@@ -3317,7 +3329,7 @@ class ChannelsView(Frame):
             sync_btn.configure(
                 command=with_button_feedback(sync_btn, "Syncing...", lambda ch=channel: self.sync_single_channel_data(ch))
             )
-            sync_btn.grid(row=0, column=2, rowspan=2, padx=(0, 6), sticky="ns")
+            sync_btn.grid(row=0, column=1, rowspan=2, padx=(0, 6), sticky="ns")
             add_tooltip(
                 sync_btn,
                 "Fetch newly published videos or shorts\navailable on YouTube for this channel.",
@@ -3336,7 +3348,7 @@ class ChannelsView(Frame):
             sync_all_btn.configure(
                 command=with_button_feedback(sync_all_btn, "Syncing All...", lambda ch=channel: self.sync_channel_all(ch))
             )
-            sync_all_btn.grid(row=0, column=3, padx=(0, 6), pady=(0, 2), sticky="ew")
+            sync_all_btn.grid(row=0, column=2, padx=(0, 6), pady=(0, 2), sticky="ew")
             add_tooltip(
                 sync_all_btn,
                 "Fetch and sync all public long-form videos\nand shorts from this channel into the queue.",
@@ -3357,7 +3369,7 @@ class ChannelsView(Frame):
                 self.sync_channel_all_shorts(ch)
 
             sync_shorts_btn.configure(command=_on_sync_shorts)
-            sync_shorts_btn.grid(row=1, column=3, padx=(0, 6), pady=(2, 0), sticky="ew")
+            sync_shorts_btn.grid(row=1, column=2, padx=(0, 6), pady=(2, 0), sticky="ew")
             add_tooltip(
                 sync_shorts_btn,
                 "Fetch all public shorts from this channel\nand choose which ones to import into the queue.",
@@ -3376,7 +3388,7 @@ class ChannelsView(Frame):
                 restore_btn.configure(
                     command=with_button_feedback(restore_btn, "Restored", lambda i=real_idx: self.unarchive_channel(i))
                 )
-                restore_btn.grid(row=0, column=4, pady=(0, 2), sticky="ew")
+                restore_btn.grid(row=0, column=3, pady=(0, 2), sticky="ew")
                 add_tooltip(
                     restore_btn,
                     "Restore this archived channel back\nto the active channel list.",
@@ -3394,7 +3406,7 @@ class ChannelsView(Frame):
                 archive_btn.configure(
                     command=with_button_feedback(archive_btn, "Archived", lambda i=real_idx: self.archive_channel(i))
                 )
-                archive_btn.grid(row=0, column=4, pady=(0, 2), sticky="ew")
+                archive_btn.grid(row=0, column=3, pady=(0, 2), sticky="ew")
                 add_tooltip(
                     archive_btn,
                     "Archive this channel to pause automation\nwithout losing its saved statistics.",
@@ -3410,9 +3422,10 @@ class ChannelsView(Frame):
                 hover_color="#9A0007",
             )
             del_btn.configure(
-                command=with_button_feedback(del_btn, "Deleting...", lambda i=real_idx: self.remove_channel(i))
+                command=with_button_feedback(del_btn, "Deleted", lambda i=real_idx: self.delete_channel(i))
             )
-            del_btn.grid(row=1, column=4, pady=(2, 0), sticky="ew")
+            del_btn.grid(row=1, column=3, pady=(2, 0), sticky="ew")
+
             add_tooltip(
                 del_btn,
                 "Permanently delete this channel\nand remove it from your saved list.",

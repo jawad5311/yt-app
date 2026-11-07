@@ -1351,6 +1351,8 @@ class QueueView(Frame):
         reorder_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
         reorder_frame.grid(row=0, column=0, padx=(2, 6), sticky="")
 
+        noun = "short" if getattr(self, "shorts_only", False) else "video"
+
         btn_mv_up = ctk.CTkButton(
             reorder_frame,
             text="▲",
@@ -1358,13 +1360,16 @@ class QueueView(Frame):
             height=20,
             corner_radius=4,
             font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#374151" if can_move_up else "gray25",
-            hover_color="#4B5563" if can_move_up else "gray25",
+            style="ArrowActive.TButton" if can_move_up else "ArrowDisabled.TButton",
+            fg_color="#2563EB" if can_move_up else "gray25",
+            hover_color="#1D4ED8" if can_move_up else "gray25",
             state="normal" if can_move_up else "disabled",
-            command=on_move_up,
+            cursor="hand2" if can_move_up else "arrow",
+            command=on_move_up if can_move_up else None,
         )
         btn_mv_up.pack(side="top", pady=(0, 2))
-        add_tooltip(btn_mv_up, "Move this video up in queue priority.")
+        if can_move_up:
+            add_tooltip(btn_mv_up, f"Move this {noun} up in queue priority.")
 
         btn_mv_down = ctk.CTkButton(
             reorder_frame,
@@ -1373,13 +1378,16 @@ class QueueView(Frame):
             height=20,
             corner_radius=4,
             font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#374151" if can_move_down else "gray25",
-            hover_color="#4B5563" if can_move_down else "gray25",
+            style="ArrowActive.TButton" if can_move_down else "ArrowDisabled.TButton",
+            fg_color="#2563EB" if can_move_down else "gray25",
+            hover_color="#1D4ED8" if can_move_down else "gray25",
             state="normal" if can_move_down else "disabled",
-            command=on_move_down,
+            cursor="hand2" if can_move_down else "arrow",
+            command=on_move_down if can_move_down else None,
         )
         btn_mv_down.pack(side="bottom", pady=(2, 0))
-        add_tooltip(btn_mv_down, "Move this video down in queue priority.")
+        if can_move_down:
+            add_tooltip(btn_mv_down, f"Move this {noun} down in queue priority.")
 
         # The video box itself
         card = ctk.CTkFrame(row_frame, corner_radius=6)
@@ -1408,7 +1416,14 @@ class QueueView(Frame):
         current_runs = record.runs if record is not None else 0
         watch_sec = record.watch_seconds if record else 0.0
 
-        effective_duration = float(record.video_duration if record and record.video_duration > 0 else getattr(task, "duration_seconds", 0.0))
+        rec_dur = getattr(record, "video_duration", 0.0) if record else 0.0
+        if not isinstance(rec_dur, (int, float)):
+            try:
+                rec_dur = float(rec_dur)
+            except Exception:
+                rec_dur = 0.0
+        task_dur = getattr(task, "duration_seconds", 0.0) or 0.0
+        effective_duration = float(rec_dur if rec_dur > 0 else (task_dur if isinstance(task_dur, (int, float)) else 0.0))
         mult_str = format_watch_multiplier(watch_sec, effective_duration)
 
         is_limit_reached = task.is_target_reached(

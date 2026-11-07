@@ -269,6 +269,7 @@ def test_queue_channel_buttons_rearranged_order(ctk_app):
     from src.models.video_task import VideoTask
 
     app = ctk_app
+    app.queued_video_tasks = None
     app.config_mgr = MagicMock()
     app.config_mgr.get_video_queue.return_value = []
     app.stats_store = MagicMock()

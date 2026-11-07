@@ -318,6 +318,47 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
+    # Highlighted / Clickable Arrow Button (Up / Down)
+    is_dark = colors.get("bg", "#161619") != "#f5f5f7"
+    arrow_active_bg = colors.get("accent", "#0a84ff" if is_dark else "#007aff")
+    arrow_active_hover = colors.get("accent_hover", "#0071e3" if is_dark else "#0077ed")
+
+    style.configure(
+        "ArrowActive.TButton",
+        background=arrow_active_bg,
+        foreground="#ffffff",
+        font=(family, 8, "bold"),
+        borderwidth=0,
+        focuscolor="none",
+        relief="flat",
+        padding=(2, 1),
+    )
+    style.map(
+        "ArrowActive.TButton",
+        background=[("pressed", "#1d4ed8"), ("active", arrow_active_hover)],
+        foreground=[("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    # Disabled / Unclickable Arrow Button (Boundary items)
+    arrow_disabled_bg = "#222226" if is_dark else "#e5e5ea"
+    arrow_disabled_fg = "#4b5563" if is_dark else "#aeaeb2"
+
+    style.configure(
+        "ArrowDisabled.TButton",
+        background=arrow_disabled_bg,
+        foreground=arrow_disabled_fg,
+        font=(family, 8, "bold"),
+        borderwidth=0,
+        focuscolor="none",
+        relief="flat",
+        padding=(2, 1),
+    )
+    style.map(
+        "ArrowDisabled.TButton",
+        background=[("disabled", arrow_disabled_bg), ("active", arrow_disabled_bg), ("pressed", arrow_disabled_bg)],
+        foreground=[("disabled", arrow_disabled_fg), ("active", arrow_disabled_fg), ("pressed", arrow_disabled_fg)],
+    )
+
     # Segmented Tab Buttons (Pill styling)
     style.configure(
         "Segmented.TButton",
