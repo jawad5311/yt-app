@@ -16,7 +16,7 @@ from ..utils.logger import emit
 from .dispatcher import TaskDispatcher
 from .driver import close_driver, is_driver_alive, setup_driver
 from .email_reporter import EmailReporter, SessionReport
-from .login import perform_google_login
+from .login import check_account_logged_in, perform_google_login
 from .navigation import navigate_to_video_organically
 from .session_tracker import SessionChannelTracker
 from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_short, watch_video
@@ -362,6 +362,10 @@ class AutomationWorker:
                                     logging.INFO,
                                 )
 
+                        if not self._check_account_login_before_play(content_type="short", content_title=task.title or ""):
+                            outcome.error = "Manual action required on this PC"
+                            self._report_status(f"Manual action required on this PC for {self.account.email}.", "error")
+                            break
                         result = watch_short(
                             self.driver,
                             stop_event=self.stop_event,
@@ -373,6 +377,10 @@ class AutomationWorker:
                         )
                         outcome.runs = 0
                     else:
+                        if not self._check_account_login_before_play(content_type="video", content_title=task.title or ""):
+                            outcome.error = "Manual action required on this PC"
+                            self._report_status(f"Manual action required on this PC for {self.account.email}.", "error")
+                            break
                         result = watch_video(
                             self.driver,
                             task.parse_duration_seconds(),
@@ -467,6 +475,8 @@ class AutomationWorker:
                 self.account,
                 log_queue=self.log_queue,
                 stop_event=self.stop_event,
+                config_mgr=self.config_mgr,
+                alert_callback=self._send_critical_alert,
             )
 
             if not login_ok:
@@ -659,6 +669,27 @@ class AutomationWorker:
                 self.session_thread_message_id = self.session_thread_info["message_id"]
         except Exception as exc:
             logging.debug(f"Failed dispatching start notification email: {exc}")
+
+    def _check_account_login_before_play(self, content_type: str = "video", content_title: str = "") -> bool:
+        """Verify account login status before playing every video or short."""
+        if not self.account or not getattr(self.account, "email", None):
+            return True
+        if self.stop_event.is_set():
+            return False
+        emit(self.log_queue, f"[Account Check] Verifying login state for {self.account.email} before playing {content_type}...", logging.DEBUG)
+        ok = check_account_logged_in(
+            driver=self.driver,
+            account=self.account,
+            config_mgr=self.config_mgr,
+            log_queue=self.log_queue,
+            stop_event=self.stop_event,
+            alert_callback=self._send_critical_alert,
+            content_type=content_type,
+            content_title=content_title,
+        )
+        if not ok and not self.stop_event.is_set():
+            self._report_status(f"Manual action needed on this PC for {self.account.email}.", "error")
+        return ok
 
     def _send_critical_alert(self, alert_type: str, details: str) -> None:
         """Send urgent alert email for bot challenges, disconnections, or crashes."""

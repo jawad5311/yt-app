@@ -46,7 +46,7 @@ from .driver import (
     is_session_disconnected_error,
     setup_driver,
 )
-from .login import perform_google_login
+from .login import check_account_logged_in, perform_google_login
 from .navigation import (
     dismiss_youtube_dialogs,
     find_and_click_search_result,
@@ -2377,6 +2377,8 @@ class WatchingWorker:
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
         ensure_video_playing(self.driver, log_queue=self.log_queue)
 
+        if not self._check_account_login_before_play(content_type="random video", content_title=title):
+            return False
         self._report_status(f"Watching random video ({duration_seconds:.0f}s): {title}", "info")
 
         # Disable all interactivity: no comments, no likes, no subscribe
@@ -2515,6 +2517,8 @@ class WatchingWorker:
         except Exception:
             pass
 
+        if not self._check_account_login_before_play(content_type="video", content_title=title):
+            return
         enable_interactivity, interactivity_cfg = self._interactivity_settings()
         self._report_status(f"Watching: {title}", "info")
 
@@ -3250,6 +3254,8 @@ class WatchingWorker:
                     logging.INFO,
                 )
 
+        if not self._check_account_login_before_play(content_type="short", content_title=title):
+            return
         watch_res = watch_short(
             self.driver,
             target_loops=target_loops,
@@ -4034,6 +4040,8 @@ class WatchingWorker:
                             logging.INFO,
                         )
 
+                if not self._check_account_login_before_play(content_type="discovered short", content_title=ch_display):
+                    return
                 watch_res = watch_short(
                     self.driver,
                     target_loops=target_loops,
@@ -4663,6 +4671,8 @@ class WatchingWorker:
             self.account,
             log_queue=self.log_queue,
             stop_event=self.stop_event,
+            config_mgr=self.config_mgr,
+            alert_callback=self._send_critical_alert,
         )
         if not login_ok and not self.stop_event.is_set():
             emit(self.log_queue, f"Notice: Google sign-in verification check after wake-up for {self.account.email}.", logging.WARNING)
@@ -4701,6 +4711,8 @@ class WatchingWorker:
                 self.account,
                 log_queue=self.log_queue,
                 stop_event=self.stop_event,
+                config_mgr=self.config_mgr,
+                alert_callback=self._send_critical_alert,
             )
 
             if not login_ok:
@@ -5317,6 +5329,27 @@ class WatchingWorker:
                 self.session_thread_message_id = self.session_thread_info["message_id"]
         except Exception as exc:
             logging.debug(f"Failed dispatching start notification email: {exc}")
+
+    def _check_account_login_before_play(self, content_type: str = "video", content_title: str = "") -> bool:
+        """Verify account login status before playing every video or short."""
+        if not self.account or not getattr(self.account, "email", None):
+            return True
+        if self.stop_event.is_set():
+            return False
+        emit(self.log_queue, f"[Account Check] Verifying login state for {self.account.email} before playing {content_type}...", logging.DEBUG)
+        ok = check_account_logged_in(
+            driver=self.driver,
+            account=self.account,
+            config_mgr=self.config_mgr,
+            log_queue=self.log_queue,
+            stop_event=self.stop_event,
+            alert_callback=self._send_critical_alert,
+            content_type=content_type,
+            content_title=content_title,
+        )
+        if not ok and not self.stop_event.is_set():
+            self._report_status(f"Manual action needed on this PC for {self.account.email}.", "error")
+        return ok
 
     def _send_critical_alert(self, alert_type: str, details: str) -> None:
         """Send urgent alert email for bot challenges, disconnections, or crashes."""

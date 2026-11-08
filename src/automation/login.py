@@ -4,7 +4,7 @@ import re
 import threading
 import time
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from selenium.webdriver.common.by import By
@@ -409,11 +409,83 @@ def _handle_post_login_prompts(driver: Any, log_queue: Optional[queue.Queue] = N
         pass
 
 
+
+def _dispatch_login_alert(
+    alert_type: str,
+    details: str,
+    account: Account,
+    config_mgr: Optional[Any] = None,
+    alert_callback: Optional[Callable[[str, str], None]] = None,
+    driver: Optional[Any] = None,
+    log_queue: Optional[queue.Queue] = None,
+) -> None:
+    """Dispatch an alert via custom worker callback or standard EmailReporter."""
+    if alert_callback:
+        try:
+            alert_callback(alert_type, details)
+            return
+        except Exception as exc:
+            emit(log_queue, f"Notice during alert callback dispatch: {exc}", logging.DEBUG)
+
+    if config_mgr:
+        try:
+            from .email_reporter import EmailReporter
+            EmailReporter.send_alert_notification(
+                account=account,
+                alert_type=alert_type,
+                message_details=details,
+                config_mgr=config_mgr,
+                log_queue=log_queue,
+                driver=driver,
+            )
+        except Exception as exc:
+            emit(log_queue, f"Notice during email alert dispatch: {exc}", logging.DEBUG)
+
+
+def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
+    """Detect if Google or YouTube is currently presenting a challenge requiring manual action.
+
+    Returns (alert_type, details) if manual action is required, or None if normal.
+    """
+    try:
+        url = (getattr(driver, "current_url", "") or "").lower()
+        page_source = ""
+        try:
+            page_source = (getattr(driver, "page_source", "") or "").lower()
+        except Exception:
+            pass
+
+        # 1. CAPTCHA / Bot challenge
+        if any(c in url for c in ("captcha", "sorry/index", "recaptcha")) or            any(c in page_source for c in ("sorry/index", "g-recaptcha", "recaptcha", "solve the puzzle", "unusual traffic from your computer network", "our systems have detected unusual traffic")):
+            return (
+                "Manual Action Required - Google CAPTCHA / Bot Challenge",
+                "Google presented a CAPTCHA or bot verification challenge. Manual completion in the browser is required.",
+            )
+
+        # 2. 2-Step Verification / Security Challenge / Phone prompt
+        if any(c in url for c in ("2step", "challenge/pwd", "challenge/totp", "challenge/ipp", "challenge/az", "challenge/selection", "speedbump")) or            any(c in page_source for c in ("2-step verification", "check your phone", "google sent a notification to your phone", "enter the 2-digit number", "get a verification code", "verify it's you")):
+            return (
+                "Manual Action Required - 2-Step Verification / Security Challenge",
+                "Google presented a 2-Step Verification prompt or security challenge. Please verify on your device or browser manually.",
+            )
+
+        # 3. Google / Gmail asking for sign-in again / re-authentication
+        if "accounts.google.com" in url and any(c in page_source for c in ("sign in again", "your session has expired", "re-enter your password", "confirm your password", "verify your identity")):
+            return (
+                "Manual Action Required - Google Re-Authentication Required",
+                "Google / Gmail is asking for sign-in or password confirmation again. Manual re-authentication is required.",
+            )
+
+        return None
+    except Exception:
+        return None
 def perform_google_login(
     driver: Any,
     account: Account,
     log_queue: Optional[queue.Queue] = None,
     stop_event: Optional[threading.Event] = None,
+    config_mgr: Optional[Any] = None,
+    alert_callback: Optional[Callable[[str, str], None]] = None,
 ) -> bool:
     """Perform Google sign-in or verify existing active session matching the requested account."""
     emit(log_queue, f"Checking Google sign-in status for {account.email}...")
@@ -437,11 +509,9 @@ def perform_google_login(
             human_like_delay(2.0, 3.0)
             return True
         elif state == LoginState.SIGNED_IN_OTHER:
-            emit(
-                log_queue,
-                f"Browser is signed into a different account than {account.email}. Please switch accounts manually.",
-                logging.ERROR,
-            )
+            details = f"Browser on this PC is signed into a different account than {account.email}. Please switch accounts manually."
+            emit(log_queue, details, logging.ERROR)
+            _dispatch_login_alert("Manual Action Required - Wrong Account Signed In", details, account, config_mgr, alert_callback, driver, log_queue)
             return False
 
         time.sleep(1.0)
@@ -474,23 +544,171 @@ def perform_google_login(
             human_like_delay(2.0, 3.0)
             return True
         elif state == LoginState.SIGNED_IN_OTHER:
-            emit(
-                log_queue,
-                f"Signed in as a different account than expected ({account.email}). Aborting login.",
-                logging.ERROR,
-            )
+            details = f"Signed in as a different account than expected ({account.email}). Aborting login."
+            emit(log_queue, details, logging.ERROR)
+            _dispatch_login_alert("Manual Action Required - Wrong Account Signed In", details, account, config_mgr, alert_callback, driver, log_queue)
             return False
 
-        url = (getattr(driver, "current_url", "") or "").lower()
-        if not challenge_logged and ("challenge" in url or "captcha" in url or "2step" in url):
+        challenge_info = detect_manual_challenge(driver)
+        if not challenge_logged and challenge_info is not None:
+            alert_type, det = challenge_info
+            full_details = f"{det} Account: {account.email}."
             emit(
                 log_queue,
-                "Google requested CAPTCHA / 2-Step Verification! Please complete it manually in the browser window.",
+                f"Google requested manual challenge / verification: {det} Please complete it manually in the browser window.",
                 logging.WARNING,
             )
             challenge_logged = True
+            _dispatch_login_alert(alert_type, full_details, account, config_mgr, alert_callback, driver, log_queue)
+        elif not challenge_logged:
+            url = (getattr(driver, "current_url", "") or "").lower()
+            if "challenge" in url or "captcha" in url or "2step" in url:
+                det = f"Google requested CAPTCHA or 2-Step Verification for account {account.email} on this PC. Please complete it manually in the browser window."
+                emit(log_queue, det, logging.WARNING)
+                challenge_logged = True
+                _dispatch_login_alert("Manual Action Required - Google Challenge / CAPTCHA", det, account, config_mgr, alert_callback, driver, log_queue)
 
         time.sleep(2)
 
-    emit(log_queue, f"Sign-in timed out for {account.email}.", logging.ERROR)
+    if not (stop_event is not None and stop_event.is_set()):
+        emit(log_queue, f"Sign-in timed out for {account.email}.", logging.ERROR)
+        if not challenge_logged:
+            det = f"Google sign-in timed out after 180 seconds for {account.email} on this PC. ID is stuck at signing in."
+            _dispatch_login_alert("Manual Action Required - Sign-In Stuck / Timed Out", det, account, config_mgr, alert_callback, driver, log_queue)
     return False
+
+
+def check_account_logged_in(
+    driver: Any,
+    account: Optional[Account],
+    config_mgr: Optional[Any] = None,
+    log_queue: Optional[queue.Queue] = None,
+    stop_event: Optional[threading.Event] = None,
+    alert_callback: Optional[Callable[[str, str], None]] = None,
+    content_type: str = "video",
+    content_title: str = "",
+) -> bool:
+    """Verify that the account is logged in before playing a video or short.
+
+    If Google requests CAPTCHA, 2FA, re-sign in, or if the account was logged out
+    and re-login fails, dispatches an alert email to notify the user which PC is stuck.
+    """
+    if account is None or not getattr(account, "email", "").strip():
+        return True
+
+    if stop_event is not None and stop_event.is_set():
+        return False
+
+    # 1. Check for immediate manual challenges (CAPTCHA, 2FA prompt, etc.)
+    challenge = detect_manual_challenge(driver)
+    if challenge is not None:
+        alert_type, details = challenge
+        full_details = f"{details} Issue detected on this PC before playing {content_type} '{content_title or 'item'}' for account {account.email}."
+        emit(log_queue, f"[Manual Action Required] {full_details}", logging.ERROR)
+        _dispatch_login_alert(alert_type, full_details, account, config_mgr, alert_callback, driver, log_queue)
+        return False
+
+    # 2. Check YouTube logged-in status via YouTube client config (fast, zero DOM delay)
+    try:
+        yt_logged_in = driver.execute_script(
+            "try { return window.ytcfg ? window.ytcfg.get('LOGGED_IN') : (window.yt && window.yt.config_ ? window.yt.config_.LOGGED_IN : null); } catch(e) { return null; }"
+        )
+    except Exception:
+        yt_logged_in = None
+
+    if yt_logged_in is True:
+        emit(log_queue, f"[Account Check] Confirmed {account.email} is logged in before playing {content_type}.", logging.DEBUG)
+        return True
+    elif yt_logged_in is False:
+        emit(
+            log_queue,
+            f"[Account Check] Account {account.email} is signed out before playing {content_type} '{content_title or ''}'. Attempting automatic re-login...",
+            logging.WARNING,
+        )
+        login_ok = perform_google_login(
+            driver,
+            account,
+            log_queue=log_queue,
+            stop_event=stop_event,
+            config_mgr=config_mgr,
+            alert_callback=alert_callback,
+        )
+        if login_ok:
+            emit(log_queue, f"[Account Check] Re-login successful for {account.email}. Resuming {content_type} playback.", logging.INFO)
+            return True
+        if stop_event is not None and stop_event.is_set():
+            return False
+
+        alert_type = "Manual Action Required - Account Logged Out / Re-Login Failed"
+        details = (
+            f"Account {account.email} automatically logged out on this PC and automatic re-login failed "
+            f"before playing {content_type} '{content_title or 'item'}'. Manual sign-in is required."
+        )
+        emit(log_queue, f"[Manual Action Required] {details}", logging.ERROR)
+        _dispatch_login_alert(alert_type, details, account, config_mgr, alert_callback, driver, log_queue)
+        return False
+
+    # 3. Fallback: inspect DOM login state
+    state = check_login_state(driver, account)
+    if state == LoginState.SIGNED_IN_MATCH:
+        return True
+    elif state == LoginState.SIGNED_IN_OTHER:
+        alert_type = "Manual Action Required - Wrong Account Signed In"
+        details = f"Browser on this PC is signed into a different account than expected ({account.email})."
+        emit(log_queue, f"[Manual Action Required] {details}", logging.ERROR)
+        _dispatch_login_alert(alert_type, details, account, config_mgr, alert_callback, driver, log_queue)
+        return False
+    elif state == LoginState.SIGNED_OUT:
+        emit(
+            log_queue,
+            f"[Account Check] Account {account.email} is signed out before playing {content_type} '{content_title or ''}'. Attempting automatic re-login...",
+            logging.WARNING,
+        )
+        login_ok = perform_google_login(
+            driver,
+            account,
+            log_queue=log_queue,
+            stop_event=stop_event,
+            config_mgr=config_mgr,
+            alert_callback=alert_callback,
+        )
+        if login_ok:
+            return True
+        if stop_event is not None and stop_event.is_set():
+            return False
+
+        alert_type = "Manual Action Required - Account Logged Out / Re-Login Failed"
+        details = (
+            f"Account {account.email} automatically logged out on this PC and automatic re-login failed "
+            f"before playing {content_type} '{content_title or 'item'}'. Manual sign-in is required."
+        )
+        emit(log_queue, f"[Manual Action Required] {details}", logging.ERROR)
+        _dispatch_login_alert(alert_type, details, account, config_mgr, alert_callback, driver, log_queue)
+        return False
+    else:
+        # UNKNOWN: check if avatar or sign-in buttons exist
+        try:
+            avatar_els = driver.find_elements(By.CSS_SELECTOR, "#avatar-btn, ytd-topbar-menu-button-renderer img")
+            if any(getattr(el, "is_displayed", lambda: True)() for el in avatar_els):
+                return True
+            signin_els = driver.find_elements(
+                By.XPATH,
+                "//a[contains(@href, 'signin') or contains(., 'Sign in') or contains(., 'Anmelden')]"
+            )
+            if any(getattr(b, "is_displayed", lambda: True)() for b in signin_els):
+                login_ok = perform_google_login(
+                    driver,
+                    account,
+                    log_queue=log_queue,
+                    stop_event=stop_event,
+                    config_mgr=config_mgr,
+                    alert_callback=alert_callback,
+                )
+                if not login_ok and (stop_event is None or not stop_event.is_set()):
+                    alert_type = "Manual Action Required - Account Logged Out / Re-Login Failed"
+                    details = f"Account {account.email} is signed out and re-login failed before playing {content_type}."
+                    _dispatch_login_alert(alert_type, details, account, config_mgr, alert_callback, driver, log_queue)
+                return login_ok
+        except Exception:
+            pass
+        return True

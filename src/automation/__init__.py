@@ -17,7 +17,7 @@ from .interactivity import (
     simulate_micro_pause,
     simulate_reading_comments_or_description,
 )
-from .login import perform_google_login
+from .login import check_account_logged_in, detect_manual_challenge, perform_google_login
 from .navigation import (
     find_and_click_search_result,
     find_and_click_suggested_video,
@@ -33,6 +33,8 @@ __all__ = [
     "setup_driver",
     "close_driver",
     "perform_google_login",
+    "check_account_logged_in",
+    "detect_manual_challenge",
     "navigate_to_video_organically",
     "perform_youtube_search",
     "find_and_click_search_result",

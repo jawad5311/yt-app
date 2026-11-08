@@ -477,12 +477,14 @@ class EmailReporter:
 
     last_thread_url: Optional[str] = None
     last_message_id: Optional[str] = None
+    _recent_alert_times: Dict[tuple, float] = {}
 
     @classmethod
     def reset_session_thread(cls) -> None:
         """Reset cached class-level thread IDs and URLs when a new session starts."""
         cls.last_message_id = None
         cls.last_thread_url = None
+        cls._recent_alert_times.clear()
 
     @classmethod
     def send_via_smtp(
@@ -1514,6 +1516,7 @@ class EmailReporter:
         thread_url: Optional[str] = None,
         thread_message_id: Optional[str] = None,
         thread_info: Optional[Dict[str, Any]] = None,
+        force: bool = False,
     ) -> bool:
         """Send an urgent alert notification email for bot challenges, disconnections, or crashes."""
         recipient, bcc_email = resolve_report_recipients(config_mgr)
@@ -1522,27 +1525,64 @@ class EmailReporter:
         email_addr = getattr(account, "email", "N/A")
         system_name = (config_mgr.get_setting("SystemName", "") or "").strip() if config_mgr else ""
 
+        import platform
+        import socket
+        try:
+            pc_hostname = socket.gethostname()
+        except Exception:
+            pc_hostname = "Unknown-PC"
+        try:
+            local_ip = socket.gethostbyname(pc_hostname)
+        except Exception:
+            local_ip = "N/A"
+        os_platform = f"{platform.system()} {platform.release()}"
+        effective_system_name = system_name or pc_hostname
+
+        # Deduplication / throttling: prevent flooding if identical alert was sent recently
+        alert_key = (str(email_addr).lower(), str(alert_type).lower())
+        now_ts = time.time()
+        last_sent = cls._recent_alert_times.get(alert_key, 0.0)
+        if not force and (now_ts - last_sent < 120.0):
+            if log_queue:
+                emit(log_queue, f"Alert email throttled ({alert_type} for {email_addr} sent recently).", logging.DEBUG)
+            return True
+
         if not custom_subject:
             start_dt = start_time or alert_dt
             stamp = start_dt.strftime("%d %b %Y - %I:%M %p")
             base = f"Entertainment Hub Session [{stamp}] - {email_addr}"
-            subject = f"{system_name} - {base}" if system_name else base
+            subject = f"{effective_system_name} - {base}"
         else:
             if system_name and not custom_subject.startswith(system_name):
                 subject = f"{system_name} - {custom_subject}"
             else:
                 subject = custom_subject
 
-        system_line = f"- System Name:  {system_name}\n" if system_name else "- System Name:  N/A\n"
+        if system_name:
+            system_line = (
+                f"- System Name:  {system_name}\n"
+                f"- PC Hostname:  {pc_hostname}\n"
+                f"- Local IP:     {local_ip}\n"
+                f"- OS Platform:  {os_platform}\n"
+            )
+        else:
+            system_line = (
+                f"- System Name:  {pc_hostname} (Auto-detected Hostname)\n"
+                f"- PC Hostname:  {pc_hostname}\n"
+                f"- Local IP:     {local_ip}\n"
+                f"- OS Platform:  {os_platform}\n"
+            )
+
         plain_text = (
             f"URGENT ALERT: {alert_type.upper()}\n"
             f"{'=' * 50}\n\n"
-            f"An issue requires attention during your session:\n\n"
+            f"Manual action is required on this PC:\n\n"
             f"{system_line}"
             f"- Account:      {email_addr}\n"
             f"- Alert Type:   {alert_type}\n"
             f"- Timestamp:    {stamp_str}\n"
             f"- Details:      {message_details}\n\n"
+            f"Please access this PC directly or via Remote Desktop to perform the required action manually.\n"
             f"Session has been paused or stopped to protect the account.\n"
             f"A session entertainment report will follow in this email thread."
         )
@@ -1576,6 +1616,7 @@ class EmailReporter:
                 thread_info=thread_info,
             )
             if ok:
+                cls._recent_alert_times[alert_key] = now_ts
                 if log_queue:
                     emit(log_queue, f"Dispatched critical alert email to '{recipient}' via SMTP ({alert_type}).", logging.WARNING)
                 return True

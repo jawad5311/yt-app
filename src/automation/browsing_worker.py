@@ -14,7 +14,7 @@ from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .adblock import ensure_adblock
 from .driver import close_driver, setup_driver
-from .login import perform_google_login
+from .login import check_account_logged_in, perform_google_login
 from .navigation import (
     find_and_click_search_result,
     find_and_click_suggested_video,
@@ -74,6 +74,44 @@ class BrowsingWorker:
 
     def _report_progress(self, processed: int, total: int) -> None:
         self._emit_event(("progress", self.worker_id, processed, total))
+
+    def _send_critical_alert(self, alert_type: str, details: str) -> None:
+        """Send urgent alert email for bot challenges, disconnections, or manual action needed."""
+        if not self.config_mgr:
+            return
+        try:
+            from .email_reporter import EmailReporter
+            EmailReporter.send_alert_notification(
+                account=self.account,
+                alert_type=alert_type,
+                message_details=details,
+                config_mgr=self.config_mgr,
+                log_queue=self.log_queue,
+                driver=self.driver,
+            )
+        except Exception as exc:
+            logging.debug(f"Failed dispatching critical alert email in BrowsingWorker: {exc}")
+
+    def _check_account_login_before_play(self, content_type: str = "video", content_title: str = "") -> bool:
+        """Verify that account is logged in before playing any video; alert if manual action needed."""
+        if not self.account or not getattr(self.account, "email", None):
+            return True
+        if self.stop_event.is_set():
+            return False
+        emit(self.log_queue, f"[Account Check] Verifying login state for {self.account.email} before playing {content_type}...", logging.DEBUG)
+        ok = check_account_logged_in(
+            driver=self.driver,
+            account=self.account,
+            config_mgr=self.config_mgr,
+            log_queue=self.log_queue,
+            stop_event=self.stop_event,
+            alert_callback=self._send_critical_alert,
+            content_type=content_type,
+            content_title=content_title,
+        )
+        if not ok and not self.stop_event.is_set():
+            self._report_status(f"Manual action needed on this PC for {self.account.email}.", "error")
+        return ok
 
     def _report_status(self, message: str, level: str = "info") -> None:
         self._emit_event(("status", message, level))
@@ -156,21 +194,33 @@ class BrowsingWorker:
                 self.account,
                 log_queue=self.log_queue,
                 stop_event=self.stop_event,
+                config_mgr=self.config_mgr,
+                alert_callback=self._send_critical_alert,
             )
 
             if not login_ok:
                 if self.stop_event.is_set():
                     emit(self.log_queue, "Session stopped during sign-in.", logging.WARNING)
                     return
-                emit(
-                    self.log_queue,
-                    f"Skipping browsing session for {self.account.email} due to failed login.",
-                    logging.ERROR,
-                )
-                self._report_status(
-                    f"Sign-in failed for {self.account.email} — complete CAPTCHA / 2FA manually or remove the account.",
-                    "error",
-                )
+                alert_type = "Account Disconnected / Sign-In Failure"
+                details = f"Google sign-in could not be completed for {self.account.email}."
+                curr_url = (getattr(self.driver, "current_url", "") or "").lower()
+                page_src = ""
+                try:
+                    page_src = (getattr(self.driver, "page_source", "") or "").lower()
+                except Exception:
+                    pass
+
+                if any(c in curr_url or c in page_src for c in ("captcha", "challenge", "2step", "speedbump", "sorry/index")):
+                    alert_type = "Bot Challenge / CAPTCHA Alert"
+                    details = f"Google presented a CAPTCHA or 2-Step challenge for account {self.account.email}."
+                elif any(c in curr_url or c in page_src for c in ("err_internet_disconnected", "err_proxy_connection_failed", "err_name_not_resolved", "neterror")):
+                    alert_type = "Proxy / Network Failure"
+                    details = f"Network or proxy connection failed during sign-in for {self.account.email}."
+
+                emit(self.log_queue, f"Sign-in failed for {self.account.email}: {details}", logging.ERROR)
+                self._report_status(f"Sign-in failed for {self.account.email} — {details}", "error")
+                self._send_critical_alert(alert_type, details)
                 return
 
             self._report_status(f"Browsing session running on {self.account.email}...", "info")
@@ -190,6 +240,8 @@ class BrowsingWorker:
                 )
 
                 if home_video:
+                    if not self._check_account_login_before_play(content_type="video", content_title=home_video.get("title", "")):
+                        return
                     emit(self.log_queue, f"[Browsing Loop] Watching target channel video found on Home: '{home_video.get('title')}'")
                     watch_dur = self._default_browsing_duration()
                     result = watch_video(
@@ -265,6 +317,8 @@ class BrowsingWorker:
                             )
                             break
 
+                        if not self._check_account_login_before_play(content_type="suggested video", content_title=s_video.get("title", "")):
+                            break
                         emit(
                             self.log_queue,
                             f"[Browsing Loop] Watching suggested video ({s_step}/{suggested_target_count}): '{s_video.get('title')}'...",
@@ -358,6 +412,8 @@ class BrowsingWorker:
                         )
 
                         if found_item:
+                            if not self._check_account_login_before_play(content_type="search video", content_title=found_item.get("title", task.title or "")):
+                                break
                             emit(
                                 self.log_queue,
                                 f"[Browsing Loop] Successfully found and opened video in current tab: '{found_item.get('title')}'!",
@@ -421,6 +477,8 @@ class BrowsingWorker:
                                 log_queue=self.log_queue,
                             )
                             if found_item:
+                                if not self._check_account_login_before_play(content_type="browse video", content_title=found_item.get("title", "")):
+                                    break
                                 emit(self.log_queue, f"[Browsing Loop] Found channel video in search results: '{found_item.get('title')}'!")
                                 w_res = watch_video(
                                     self.driver,
