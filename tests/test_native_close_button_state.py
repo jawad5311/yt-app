@@ -23,12 +23,14 @@ class TestNativeCloseButtonState:
         app.log_queue = queue.Queue()
         app.event_queue = queue.Queue()
         app._close_button_enabled = None
+        app.worker_progress = {}
 
         app.after = MagicMock(return_value="job_1")
         app.after_cancel = MagicMock()
         app.destroy = MagicMock()
         app.winfo_exists = MagicMock(return_value=True)
         app.winfo_id = MagicMock(return_value=12345)
+        app.refresh_watch_stats = MagicMock()
 
         return app
 
@@ -127,3 +129,53 @@ class TestNativeCloseButtonState:
 
         assert fake_app.is_closing is True
         fake_app.destroy.assert_called_once()
+
+    def test_poll_log_queue_automatically_re_enables_close_button_after_task_completion(self, fake_app):
+        """When tasks stop, the periodic queue poller must automatically detect idle and re-enable close."""
+        fake_app.is_running = True
+        fake_app._close_button_enabled = False
+
+        with patch.object(fake_app, "_set_native_close_button_enabled") as mock_set_native:
+            # Task finishes
+            fake_app.is_running = False
+
+            # Periodic poll tick runs
+            fake_app._poll_log_queue()
+
+            assert fake_app._close_button_enabled is True
+            mock_set_native.assert_called_once_with(True)
+
+    def test_finished_event_re_enables_close_button(self, fake_app):
+        """Worker 'finished' event triggers close button re-enabling."""
+        fake_app.is_running = False
+        fake_app._close_button_enabled = False
+
+        with patch.object(fake_app, "_set_native_close_button_enabled") as mock_set_native:
+            fake_app._handle_worker_event(("finished", None))
+
+            assert fake_app._close_button_enabled is True
+            mock_set_native.assert_called_once_with(True)
+
+    def test_on_report_modal_closed_re_enables_close_button(self, fake_app):
+        """Dismissing report modal explicitly re-enables the title bar close button."""
+        fake_app.is_running = False
+        fake_app._close_button_enabled = False
+        fake_app.report_modal = MagicMock()
+
+        with patch.object(fake_app, "_set_native_close_button_enabled") as mock_set_native:
+            fake_app._on_report_modal_closed()
+
+            assert fake_app.report_modal is None
+            assert fake_app._close_button_enabled is True
+            mock_set_native.assert_called_once_with(True)
+
+    def test_stop_automation_when_idle_ensures_close_button_clickable(self, fake_app):
+        """stop_automation when not running ensures close button is clickable."""
+        fake_app.is_running = False
+        fake_app._close_button_enabled = False
+
+        with patch.object(fake_app, "_set_native_close_button_enabled") as mock_set_native:
+            fake_app.stop_automation()
+
+            assert fake_app._close_button_enabled is True
+            mock_set_native.assert_called_once_with(True)

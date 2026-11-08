@@ -900,14 +900,20 @@ class YTBotApp(tk.Tk):
             except Exception as exc:
                 logging.debug(f"Could not open completed ReportProgressModal: {exc}")
 
+        if not is_closing:
+            self._update_close_button_state()
+
     def _on_report_modal_closed(self) -> None:
         """Callback when report modal is dismissed."""
         self.report_modal = None
         if self.__dict__.get("is_closing", False):
             self.on_closing()
+        else:
+            self._update_close_button_state()
 
     def stop_automation(self):
         if not self.is_running:
+            self._update_close_button_state()
             return
         mode_label = "browsing" if getattr(self, "current_mode", "automation") == "watching" else "automation"
         emit(self.log_queue, f"Stopping {mode_label} session... Please wait for workers to cleanup.")
@@ -1039,6 +1045,7 @@ class YTBotApp(tk.Tk):
             ok = event[1] if len(event) > 1 else True
             msg = event[2] if len(event) > 2 else ""
             self.update_report_modal_completed(ok, msg)
+            self._update_close_button_state()
         elif kind == "finished":
             error_msg = event[1] if len(event) > 1 else None
             if self.__dict__.get("report_modal", None) is not None and getattr(self.report_modal, "is_generating", False):
@@ -1058,6 +1065,7 @@ class YTBotApp(tk.Tk):
                 self.refresh_watch_stats()
             except Exception:
                 pass
+            self._update_close_button_state()
 
     def _poll_log_queue(self):
         if self.__dict__.get("is_closing", False):
@@ -1095,6 +1103,12 @@ class YTBotApp(tk.Tk):
                 self._handle_worker_event(event)
             except Exception:
                 logging.exception("Failed to apply worker event")
+
+        # 3. Synchronize native window close (X) button state with active task status
+        try:
+            self._update_close_button_state()
+        except Exception:
+            pass
 
         self._poll_job = self.after(50, self._poll_log_queue)
 
@@ -1174,6 +1188,12 @@ class YTBotApp(tk.Tk):
             MF_ENABLED = 0x00000000
             MF_GRAYED = 0x00000001
             MF_DISABLED = 0x00000002
+
+            if enabled:
+                try:
+                    user32.GetSystemMenu(hwnd, True)
+                except Exception:
+                    pass
 
             hmenu = user32.GetSystemMenu(hwnd, False)
             if hmenu:
