@@ -43,6 +43,17 @@ EMAIL_METHOD_OPTIONS: List[str] = [
     "Active Browser Gmail",
     "SMTP Connection",
 ]
+NO_TARGET_SLEEP_OPTIONS: List[str] = [
+    "1 Hour",
+    "2 Hours",
+    "3 Hours",
+    "4 Hours",
+    "6 Hours",
+    "8 Hours",
+    "12 Hours",
+    "24 Hours",
+    "Disabled",
+]
 
 
 class SmoothScrollableFrame(ScrollableFrame):
@@ -286,6 +297,40 @@ class SettingsView(Frame):
         )
         self.default_video_max_views_entry.insert(0, str(initial_video_max))
         self.default_video_max_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_playback, text="Sleep Duration When No Target Found:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_playback,
+            text="If browsing and shorts search finds no video from targeted channels, the bot closes YouTube, sends the session report, and sleeps for this duration before waking up to retry.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+
+        initial_sleep = self.config_mgr.get_setting("NoTargetFoundSleepHours", "2 Hours") if self.config_mgr else "2 Hours"
+        initial_sleep_opt = "2 Hours"
+        if isinstance(initial_sleep, str) and initial_sleep in NO_TARGET_SLEEP_OPTIONS:
+            initial_sleep_opt = initial_sleep
+        else:
+            try:
+                hrs = float(str(initial_sleep).split()[0])
+                if hrs <= 0:
+                    initial_sleep_opt = "Disabled"
+                else:
+                    int_h = int(hrs)
+                    cand = f"{int_h} Hour" if int_h == 1 else f"{int_h} Hours"
+                    initial_sleep_opt = cand if cand in NO_TARGET_SLEEP_OPTIONS else "2 Hours"
+            except Exception:
+                initial_sleep_opt = "2 Hours"
+
+        self.no_target_sleep_menu = OptionMenu(
+            scroll_playback,
+            values=NO_TARGET_SLEEP_OPTIONS,
+            width=200,
+        )
+        self.no_target_sleep_menu.set(initial_sleep_opt)
+        self.no_target_sleep_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
         # Tab 3: Shorts
@@ -692,6 +737,13 @@ class SettingsView(Frame):
             except (ValueError, TypeError):
                 self._notify_result(False, "Default Max Views Cap per Video must be a valid integer >= 0 (0 = unlimited).")
                 return
+
+        # 8a-3. Sleep Duration When No Target Found
+        if hasattr(self, "no_target_sleep_menu"):
+            selected_sleep = self.no_target_sleep_menu.get()
+            if selected_sleep not in NO_TARGET_SLEEP_OPTIONS:
+                selected_sleep = "2 Hours"
+            validated["NoTargetFoundSleepHours"] = selected_sleep
 
         # 8b. Shorts limits
         if hasattr(self, "target_shorts_cycle_entry"):

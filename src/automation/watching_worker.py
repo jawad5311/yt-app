@@ -1064,6 +1064,8 @@ class WatchingWorker:
         self.reporting_driver: Optional[Any] = None
         self.reporting_thread: Optional[threading.Thread] = None
         self.has_started_browsing = False
+        self.is_sleeping: bool = False
+        self.cycle_report_dispatched: bool = False
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -4378,6 +4380,217 @@ class WatchingWorker:
         emit(self.log_queue, "[YouTube Search] No video found in search results across candidates and channels.", logging.WARNING)
         return None
 
+    def _check_and_play_target_shorts_before_sleep(self, session_watched_keys: Set[str]) -> int:
+        """Search for and play any available targeted Shorts before concluding no content was found."""
+        try:
+            target_shorts = self.get_target_shorts(filter_cooldown=True)
+            if not target_shorts:
+                return 0
+
+            # 1. Check suggested shelf if on a watch page or shelf exists
+            matched_short = None
+            cur_url = getattr(self.driver, "current_url", "") or ""
+            if "/watch" in cur_url or self._has_suggested_shorts_shelf():
+                matched_short = self.find_target_short_on_suggested_shelf(
+                    session_watched_keys=session_watched_keys,
+                    max_arrow_clicks=3,
+                )
+
+            # 2. Check YouTube Home feed shorts shelf
+            if not matched_short:
+                if not is_clean_youtube_home_url(cur_url):
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(1.5, 2.5)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                matched_short = self.find_target_short_on_home(
+                    session_watched_keys=session_watched_keys,
+                    max_scrolls=3,
+                )
+
+            if matched_short:
+                short_item, short_task = matched_short
+                played_ok = self._play_target_short(
+                    short_info=short_item,
+                    task=short_task,
+                    session_watched_keys=session_watched_keys,
+                    enter_reel=False,
+                    source=short_item.get("source_type", "home"),
+                )
+                if played_ok:
+                    self.target_attempts += 1
+                    self.watched_count = self.target_attempts
+                    prog_total = self.target_limit if not self.is_unlimited else 0
+                    self._emit_event(("progress", 0, self.target_attempts, prog_total))
+                    return 1
+
+            # 3. If no targeted short directly visible on shelf, execute shorts cycle
+            shorts_watched = self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+            return int(shorts_watched or 0)
+        except Exception as exc:
+            emit(self.log_queue, f"Notice during shorts search: {exc}", logging.DEBUG)
+            return 0
+
+    def _enter_no_target_sleep_cycle(self, session_watched_keys: Set[str]) -> bool:
+        """Handle sleep & wake-up cycle when no target videos or shorts are found.
+
+        If sleep is disabled (<= 0), stops the watching session immediately.
+        Otherwise:
+        1. Closes the YouTube browser session.
+        2. Delivers the session watch report to email.
+        3. Enters an interruptible sleep loop for the configured duration.
+        4. Updates status with live countdown on the dashboard.
+        5. Wakes up, relaunches browser, and resumes searching for new videos.
+        Returns True if successfully woke up and ready to continue, False if stopped.
+        """
+        raw_sleep = self.config_mgr.get_setting("NoTargetFoundSleepHours", "2 Hours") if self.config_mgr else "2 Hours"
+        sleep_hours = 2.0
+        try:
+            if isinstance(raw_sleep, str):
+                parts = raw_sleep.strip().split()
+                if not parts or parts[0].lower() in ("disabled", "none", "off", "0"):
+                    sleep_hours = 0.0
+                else:
+                    sleep_hours = float(parts[0])
+            else:
+                sleep_hours = float(raw_sleep)
+        except Exception:
+            sleep_hours = 2.0
+
+        if sleep_hours <= 0:
+            stop_msg = "No video of targeted channel found on YouTube Home or via YouTube Search. Stopping watching session."
+            emit(self.log_queue, stop_msg, logging.WARNING)
+            self._report_status("Stopped: No target videos found", "warning")
+            self.stop_event.set()
+            return False
+
+        stop_msg = "No video of targeted channel found on YouTube Home or via YouTube Search."
+        emit(self.log_queue, stop_msg, logging.WARNING)
+        hours_str = f"{int(sleep_hours)} hour{'s' if int(sleep_hours) != 1 else ''}" if sleep_hours.is_integer() else f"{sleep_hours:.1f} hours"
+        emit(
+            self.log_queue,
+            f"No targeted channel videos found in current browsing pass. Entering sleep mode for {hours_str}...",
+            logging.INFO,
+        )
+        self._report_status("No target videos found. Closing browser & sending session report...", "info")
+
+        # 1. Close main visible YouTube browser tab
+        if self.driver:
+            try:
+                emit(self.log_queue, "Closing YouTube browser session before sleep mode...", logging.INFO)
+                close_driver(self.driver, log_queue=self.log_queue)
+            except Exception as e:
+                emit(self.log_queue, f"Notice while closing browser before sleep: {e}", logging.DEBUG)
+            self.driver = None
+
+        # 2. Deliver session watch report to email
+        try:
+            emit(self.log_queue, "Sending session report to email before entering sleep mode...", logging.INFO)
+            self._send_session_report(status="No Target Found - Sleeping")
+            self.cycle_report_dispatched = True
+        except Exception as e:
+            emit(self.log_queue, f"Error sending session report before sleep: {e}", logging.WARNING)
+
+        # Close reporting driver as well so no background Chrome processes linger during sleep
+        if getattr(self, "reporting_driver", None):
+            try:
+                close_driver(self.reporting_driver, log_queue=self.log_queue)
+            except Exception:
+                pass
+            self.reporting_driver = None
+
+        # 3. Enter interruptible sleep loop
+        sleep_seconds = sleep_hours * 3600.0
+        sleep_start = time.monotonic()
+        self.is_sleeping = True
+
+        emit(
+            self.log_queue,
+            f"Bot is now sleeping for {hours_str}. YouTube tab is closed. The bot will automatically wake up and search for new videos when the sleep timer expires.",
+            logging.INFO,
+        )
+
+        last_logged_m = -1
+        while not self.stop_event.is_set():
+            elapsed = time.monotonic() - sleep_start
+            remaining = sleep_seconds - elapsed
+            if remaining <= 0:
+                break
+
+            rem_m, rem_s = divmod(int(remaining), 60)
+            rem_h, rem_m = divmod(rem_m, 60)
+
+            if rem_h == 0 and rem_m < 5:
+                countdown = f"Sleeping (no target videos) · Wakes in {rem_m}m {rem_s:02d}s"
+            else:
+                countdown = f"Sleeping (no target videos) · Wakes in {rem_h}h {rem_m:02d}m"
+
+            self._report_status(countdown, "info")
+
+            total_rem_m = int(remaining // 60)
+            if total_rem_m % 30 == 0 and total_rem_m != last_logged_m:
+                emit(self.log_queue, f"[Sleep Mode] {countdown}", logging.INFO)
+                last_logged_m = total_rem_m
+
+            self.stop_event.wait(timeout=min(5.0, max(0.2, remaining)))
+            if getattr(self, "pause_event", None) and self.pause_event.is_set():
+                self.check_pause()
+
+        self.is_sleeping = False
+
+        # 4. Check if interrupted by user stop
+        if self.stop_event.is_set():
+            emit(self.log_queue, "Watching session stopped by user during sleep mode.", logging.INFO)
+            self._report_status("Stopped by user", "info")
+            return False
+
+        # 5. Wake-up! Relaunch browser and reset cycle counters
+        emit(
+            self.log_queue,
+            f"=== Wake-up timer completed ({hours_str})! Relaunching browser to check for new videos and shorts... ===",
+            logging.INFO,
+        )
+        self._report_status("Waking up... Relaunching browser to check for new videos", "info")
+
+        session_watched_keys.clear()
+        self.cycle_report_dispatched = False
+
+        if hasattr(self, "channel_tracker") and self.channel_tracker:
+            self.channel_tracker = SessionChannelTracker(
+                config_mgr=self.config_mgr,
+                stats_store=self.stats_store,
+                channels=self.channels,
+                emit_event=self._emit_event,
+                log_queue=self.log_queue,
+            )
+
+        self.reporting_thread = threading.Thread(
+            target=self._async_init_and_send_start_notification,
+            name="ReportingStartNotificationThread",
+            daemon=True,
+        )
+        self.reporting_thread.start()
+
+        known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
+        known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
+        self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
+        self.has_started_browsing = True
+
+        if self.stop_event.is_set():
+            return False
+
+        login_ok = perform_google_login(
+            self.driver,
+            self.account,
+            log_queue=self.log_queue,
+            stop_event=self.stop_event,
+        )
+        if not login_ok and not self.stop_event.is_set():
+            emit(self.log_queue, f"Notice: Google sign-in verification check after wake-up for {self.account.email}.", logging.WARNING)
+
+        emit(self.log_queue, "Browser relaunched successfully. Starting search for new videos and shorts...", logging.INFO)
+        self._report_status("Browsing YouTube Home feed...", "info")
+        return True
+
     def run(self) -> None:
         """Main watching loop: home discovery -> watch -> repeat."""
         emit(self.log_queue, f"=== Starting Watch Session for {self.account.email} ===")
@@ -4885,11 +5098,29 @@ class WatchingWorker:
                         )
                         continue
                     else:
-                        stop_msg = "No video of targeted channel found on YouTube Home or via YouTube Search. Stopping watching session."
-                        emit(self.log_queue, stop_msg, logging.WARNING)
-                        self._report_status("Stopped: No target videos found", "warning")
-                        self.stop_event.set()
-                        break
+                        emit(
+                            self.log_queue,
+                            "No long-form video found on Home feed or via Search. Checking YouTube Shorts for targeted channels...",
+                            logging.INFO,
+                        )
+                        target_shorts_found = self._check_and_play_target_shorts_before_sleep(
+                            session_watched_keys=session_watched_keys
+                        )
+                        if target_shorts_found > 0:
+                            cycle_long_vids_watched = 0
+                            suggested_miss_count = 0
+                            continue
+
+                        # Both long-form videos and shorts checks yielded no target content
+                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                        if woke_up:
+                            cycle_long_vids_watched = 0
+                            suggested_miss_count = 0
+                            consecutive_target_watched = 0
+                            channel_buffer_counts.clear()
+                            continue
+                        else:
+                            break
 
             summary = f"Browsing session finished: attempted {target_attempts} target video(s)."
             emit(self.log_queue, summary)
@@ -4933,7 +5164,7 @@ class WatchingWorker:
 
             # Deliver session report via the persistent headless browser parked on the email thread
             # ONLY if browsing successfully started and was not aborted during setup/driver launch
-            if getattr(self, "has_started_browsing", False):
+            if getattr(self, "has_started_browsing", False) and not getattr(self, "cycle_report_dispatched", False):
                 self._send_session_report(status=session_status, error=session_err)
 
             # Wait briefly if background start notification thread is still finishing

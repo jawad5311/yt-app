@@ -38,7 +38,13 @@ def safe_float(val: Any, default: float = 0.0, min_val: Optional[float] = None, 
     if val is None:
         return default
     try:
-        f = float(val)
+        if isinstance(val, str):
+            parts = val.strip().split()
+            if not parts or parts[0].lower() in ("disabled", "none", "off", "false"):
+                return 0.0
+            f = float(parts[0])
+        else:
+            f = float(val)
         if not math.isfinite(f):
             return default
         if min_val is not None and f < min_val:
@@ -86,6 +92,7 @@ class ConfigManager:
             "DefaultVideoTargetViews": 3,
             "DefaultVideoMaxViews": 5,
             "DefaultShortsMaxViews": 5,
+            "NoTargetFoundSleepHours": "2 Hours",
             "AccountsFile": "accounts.txt",
             "DirectLinkFallback": False,
             "WatchtimeDuration": DEFAULT_WATCHTIME_DURATION,
@@ -298,7 +305,7 @@ class ConfigManager:
             if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0:
                     return default
-            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews", "NoTargetFoundSleepHours"):
                 if res < 0:
                     return default
             return res
@@ -310,10 +317,14 @@ class ConfigManager:
             if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0.0:
                     return default
-            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews", "NoTargetFoundSleepHours"):
                 if res < 0.0:
                     return default
             return res
+
+    def get_no_target_sleep_hours(self, default: float = 2.0) -> float:
+        """Return configured hours to sleep when no target videos/shorts are found (0.0 if disabled)."""
+        return self.get_float("NoTargetFoundSleepHours", default=default)
 
     def update_settings(self, new_settings: Dict[str, Any]) -> None:
         """Atomically update multiple settings in a single disk-persisted transaction.

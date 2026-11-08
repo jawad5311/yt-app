@@ -775,6 +775,7 @@ class TestWatchingWorker:
         ]
         mock_driver.execute_script.return_value = unrelated_videos
 
+        worker.config_mgr.set_setting("NoTargetFoundSleepHours", "Disabled")
         worker.open_videos = True
         worker.run()
 
