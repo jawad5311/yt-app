@@ -1273,15 +1273,14 @@ class WatchingWorker:
         is_short: bool = False,
         is_home: bool = True,
     ) -> bool:
-        """Attempt multiple in-page click strategies on a DOM element and verify navigation.
+        """Attempt authentic, organic in-page OS-level pointer clicks on a DOM element and verify navigation.
 
-        Strategies executed in sequence without lingering hover preview overlays:
-        1. Native element.click()
-        2. Synthetic JavaScript event sequence (pointerdown, mousedown, pointerup, mouseup, click)
-        3. ActionChains direct click (instant, without hover pause)
-        4. click_element helper fallback
+        Uses strictly real human-like OS pointer interactions:
+        1. Native element.click() (OS-level driver event, isTrusted: true)
+        2. Selenium ActionChains physical mouse movement and coordinate click (isTrusted: true)
 
-        Checks current_url after each strategy to return immediately upon navigation.
+        Synthetic JavaScript dispatchEvent and direct script clicks are removed to ensure
+        all clicks are genuine, organic, and pass YouTube's isTrusted telemetry.
         Never navigates via the browser address bar.
         """
         if not element:
@@ -1305,7 +1304,7 @@ class WatchingWorker:
         if _is_navigated():
             return True
 
-        # Center element in viewport immediately (avoiding ongoing smooth animation drift)
+        # Center element in viewport immediately so it is in view for physical OS click
         try:
             self.driver.execute_script(
                 "arguments[0].scrollIntoView({behavior: 'instant', block: 'center', inline: 'center'});",
@@ -1315,7 +1314,7 @@ class WatchingWorker:
         except Exception:
             pass
 
-        # Strategy 1: Native element click
+        # Strategy 1: Native element click (OS-level browser event with isTrusted: true)
         try:
             element.click()
             for _ in range(5):
@@ -1329,41 +1328,7 @@ class WatchingWorker:
         if _is_navigated():
             return True
 
-        # Strategy 2: Synthetic in-page JavaScript event chain (dispatches full mouse/pointer events)
-        try:
-            self.driver.execute_script(r"""
-                var el = arguments[0];
-                if (!el) return;
-                try { if (el.focus) el.focus(); } catch (e) {}
-                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function(evtType) {
-                    try {
-                        var evt = new MouseEvent(evtType, {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window,
-                            buttons: 1
-                        });
-                        el.dispatchEvent(evt);
-                    } catch (e) {}
-                });
-                try {
-                    if (typeof el.click === 'function') {
-                        el.click();
-                    }
-                } catch (e) {}
-            """, element)
-            for _ in range(6):
-                time.sleep(0.2)
-                if _is_navigated():
-                    return True
-        except Exception as exc:
-            err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
-            emit(self.log_queue, f"JavaScript synthetic click attempt bypassed ({err_line})", logging.DEBUG)
-
-        if _is_navigated():
-            return True
-
-        # Strategy 3: ActionChains direct click (instant, without hover pause)
+        # Strategy 2: Selenium ActionChains physical mouse movement and coordinate click (isTrusted: true)
         try:
             ActionChains(self.driver).move_to_element(element).click().perform()
             for _ in range(5):
@@ -1373,20 +1338,6 @@ class WatchingWorker:
         except Exception as exc:
             err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
             emit(self.log_queue, f"ActionChains click attempt bypassed ({err_line})", logging.DEBUG)
-
-        if _is_navigated():
-            return True
-
-        # Strategy 4: click_element helper fallback
-        try:
-            click_element(self.driver, element)
-            for _ in range(4):
-                time.sleep(0.2)
-                if _is_navigated():
-                    return True
-        except Exception as exc:
-            err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
-            emit(self.log_queue, f"click_element helper attempt bypassed ({err_line})", logging.DEBUG)
 
         return _is_navigated()
 

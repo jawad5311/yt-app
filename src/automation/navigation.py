@@ -79,7 +79,7 @@ def safe_get(driver: Any, url: str, timeout: int = 45, log_queue: Optional[queue
 def navigate_to_video_organically(
     driver: Any,
     task: VideoTask,
-    direct_link_fallback: bool = True,
+    direct_link_fallback: bool = False,
     log_queue: Optional[queue.Queue] = None,
     search_query_override: Optional[str] = None,
 ) -> bool:
@@ -268,7 +268,11 @@ def navigate_to_video_organically(
                 try:
                     selected_link.click()
                 except Exception:
-                    driver.execute_script("arguments[0].click();", selected_link)
+                    try:
+                        from selenium.webdriver.common.action_chains import ActionChains
+                        ActionChains(driver).move_to_element(selected_link).click().perform()
+                    except Exception:
+                        pass
                 human_like_delay(2.0, 3.5)
 
                 # Confirm navigation actually occurred and identifies the selected video

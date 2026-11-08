@@ -1239,3 +1239,56 @@ class TestAdSlotFiltering:
             "channel_name": "Iamcarhacker",
         }
         assert is_candidate_ad(item) is False
+
+
+    def test_attempt_element_click_uses_only_organic_os_clicks(self):
+        worker = WatchingWorker(
+            account=MagicMock(),
+            channels=[],
+            config_mgr=MagicMock(),
+            stats_store=MagicMock(),
+        )
+        worker.driver = MagicMock()
+        worker.driver.current_url = "https://www.youtube.com/"
+        mock_el = MagicMock()
+
+        executed_scripts = []
+        def track_script(script, *args):
+            executed_scripts.append(script)
+            return None
+        worker.driver.execute_script.side_effect = track_script
+
+        with patch("src.automation.watching_worker.ActionChains") as mock_action_chains:
+            mock_ac_instance = MagicMock()
+            mock_action_chains.return_value = mock_ac_instance
+            mock_ac_instance.move_to_element.return_value = mock_ac_instance
+            mock_ac_instance.click.return_value = mock_ac_instance
+
+            # Simulate native click failing
+            mock_el.click.side_effect = Exception("Element not interactable")
+            # ActionChains then navigates
+            def nav_on_perform():
+                worker.driver.current_url = "https://www.youtube.com/watch?v=target12345"
+            mock_ac_instance.perform.side_effect = nav_on_perform
+
+            success = worker._attempt_element_click_and_verify(
+                mock_el,
+                vid_id="target12345",
+                is_short=False,
+                is_home=True,
+            )
+
+            assert success is True
+            # Verify native click was attempted
+            mock_el.click.assert_called_once()
+            # Verify ActionChains OS click was used as the fallback
+            mock_action_chains.assert_called_once_with(worker.driver)
+            mock_ac_instance.move_to_element.assert_called_once_with(mock_el)
+            mock_ac_instance.click.assert_called_once()
+            mock_ac_instance.perform.assert_called_once()
+
+            # Verify no synthetic mouse event JS or arguments[0].click() was injected
+            for s in executed_scripts:
+                assert "dispatchEvent" not in s
+                assert "new MouseEvent" not in s
+                assert "arguments[0].click()" not in s
