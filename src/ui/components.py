@@ -234,14 +234,17 @@ class Button(ttk.Button):
         if "width" in kwargs:
             w = kwargs.pop("width")
             if w is not None:
-                cur_text = getattr(self, "_text", "")
-                raw_len = len(cur_text)
-                for ch in cur_text:
-                    if ord(ch) > 127:
-                        raw_len += 1
-                char_w = max(raw_len + 2, int(w / 7.0)) if w > 20 else max(raw_len + 2, w)
-                self._min_width = char_w
-                kwargs["width"] = -char_w
+                if w < 0:
+                    kwargs["width"] = w
+                else:
+                    cur_text = getattr(self, "_text", "")
+                    raw_len = len(cur_text)
+                    for ch in cur_text:
+                        if ord(ch) > 127:
+                            raw_len += 1
+                    char_w = max(raw_len + 2, int(w / 7.0)) if w > 20 else max(raw_len + 2, w)
+                    self._min_width = char_w
+                    kwargs["width"] = -char_w
         super().configure(**kwargs)
 
     def cget(self, prop: str) -> Any:

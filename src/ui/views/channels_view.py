@@ -180,17 +180,18 @@ class ChannelsView(Frame):
         btn_frame.grid_columnconfigure(2, weight=1)
 
         # Row 0: Add Channel and Check New on left; Active / Archived on far right
-        add_btn = ctk.CTkButton(
+        self.add_btn = ctk.CTkButton(
             btn_frame,
             text="+ Add Channel",
-            font=ctk.CTkFont(size=9, weight="bold"),
+            width=140,
+            font=ctk.CTkFont(weight="bold"),
         )
-        add_btn.configure(
-            command=with_button_feedback(add_btn, "Adding Channel...", lambda: self.open_channel_modal())
+        self.add_btn.configure(
+            command=with_button_feedback(self.add_btn, "Adding Channel...", lambda: self.open_channel_modal())
         )
-        add_btn.grid(row=0, column=0, padx=(0, 10), pady=(0, 8), sticky="w")
+        self.add_btn.grid(row=0, column=0, padx=(0, 10), pady=(4, 10), sticky="w")
         add_tooltip(
-            add_btn,
+            self.add_btn,
             "Add a new channel to track and automate.\nOptionally configure target watch goals and fetch videos.",
         )
 
@@ -205,7 +206,7 @@ class ChannelsView(Frame):
         check_btn.configure(
             command=with_button_feedback(check_btn, "Checking New", self.sync_all_channel_data)
         )
-        check_btn.grid(row=0, column=1, padx=(0, 10), pady=(0, 8), sticky="w")
+        check_btn.grid(row=0, column=1, padx=(0, 10), pady=(4, 10), sticky="w")
         add_tooltip(
             check_btn,
             "Scan YouTube to check for newly published content\nacross all saved channels since the last check.",
@@ -218,7 +219,7 @@ class ChannelsView(Frame):
             command=self._on_tab_change,
         )
         self.tab_selector.set("Active")
-        self.tab_selector.grid(row=0, column=3, pady=(0, 8), sticky="e")
+        self.tab_selector.grid(row=0, column=3, pady=(4, 10), sticky="e")
         add_tooltip(
             self.tab_selector,
             "Switch between Active tracked channels\nand Archived (paused) channels.",
@@ -228,7 +229,7 @@ class ChannelsView(Frame):
         sync_data_btn = ctk.CTkButton(
             btn_frame,
             text="⚡ Sync Data All",
-            width=110,
+            width=140,
             fg_color="#2563EB",
             hover_color="#1D4ED8",
             font=ctk.CTkFont(weight="bold"),
@@ -237,7 +238,7 @@ class ChannelsView(Frame):
         sync_data_btn.configure(
             command=with_button_feedback(sync_data_btn, "Syncing Data", self.sync_data_all)
         )
-        sync_data_btn.grid(row=1, column=0, padx=(0, 10), sticky="w")
+        sync_data_btn.grid(row=1, column=0, padx=(0, 10), pady=(2, 6), sticky="w")
         add_tooltip(
             sync_data_btn,
             "Fetch and synchronize public videos and shorts\nacross all channels into your playback queue.",
@@ -254,7 +255,7 @@ class ChannelsView(Frame):
         self.sync_all_channels_shorts_btn.configure(
             command=with_button_feedback(self.sync_all_channels_shorts_btn, "Syncing all shorts...", self.sync_all_channels_shorts)
         )
-        self.sync_all_channels_shorts_btn.grid(row=1, column=1, padx=(0, 10), sticky="w")
+        self.sync_all_channels_shorts_btn.grid(row=1, column=1, padx=(0, 10), pady=(2, 6), sticky="w")
         add_tooltip(
             self.sync_all_channels_shorts_btn,
             "Fetch and synchronize all public shorts\nacross all channels into your playback queue.",
