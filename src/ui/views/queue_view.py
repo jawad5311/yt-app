@@ -270,15 +270,15 @@ class QueueView(Frame):
         self.sort_dir_btn = ctk.CTkButton(
             btn_frame,
             text="↓",
-            width=32,
+            width=36,
             fg_color="#374151",
             hover_color="#4B5563",
             command=self.toggle_sort_direction,
         )
         self.sort_dir_btn.pack(side="left", padx=(0, 10))
-        add_tooltip(
+        self.sort_dir_tooltip = add_tooltip(
             self.sort_dir_btn,
-            "Reverse sort direction (Ascending / Descending).",
+            "Sort Direction: Descending (Click to switch to Ascending)",
         )
         self._update_sort_buttons()
 
@@ -354,10 +354,21 @@ class QueueView(Frame):
         return restore
 
     def _update_sort_buttons(self):
-        dir_sym = "↓" if self.current_sort_reverse else "↑"
+        is_desc = bool(self.current_sort_reverse)
+        # Down arrow (↓) for Descending, Up arrow (↑) for Ascending
+        dir_sym = "↓" if is_desc else "↑"
+        dir_name = "Descending" if is_desc else "Ascending"
+        next_dir = "Ascending" if is_desc else "Descending"
+
         if hasattr(self, "sort_dir_btn") and hasattr(self.sort_dir_btn, "configure"):
             try:
                 self.sort_dir_btn.configure(text=dir_sym)
+            except Exception:
+                pass
+
+        if hasattr(self, "sort_dir_tooltip") and self.sort_dir_tooltip is not None:
+            try:
+                self.sort_dir_tooltip.text = f"Sort Direction: {dir_name} (Click to switch to {next_dir})"
             except Exception:
                 pass
 
@@ -401,7 +412,7 @@ class QueueView(Frame):
 
         def _label(key_id, name):
             if self.current_sort_key == key_id:
-                dir_str = "↓ Desc" if self.current_sort_reverse else "↑ Asc"
+                dir_str = "↓ Descending" if self.current_sort_reverse else "↑ Ascending"
                 return f"✓ {name} ({dir_str})"
             return f"   {name}"
 
@@ -447,8 +458,8 @@ class QueueView(Frame):
     def toggle_sort_direction(self):
         """Toggle ascending / descending direction for active sort."""
         if not self.current_sort_key:
-            self.current_sort_key = "published_date"
-            self.current_sort_reverse = True
+            self.current_sort_key = "watch_time"
+            self.current_sort_reverse = False  # Switch to ascending if clicked from default
         else:
             self.current_sort_reverse = not self.current_sort_reverse
         self._apply_current_sort(save=True)
@@ -464,6 +475,39 @@ class QueueView(Frame):
         self._update_sort_buttons()
         self.refresh_list()
 
+    def _channel_watch_time(self, channel_name: str) -> float:
+        """Calculate total watch time in seconds for a channel from stats store and current tasks."""
+        if not channel_name or channel_name == NO_CHANNEL_VALUE:
+            return -1.0
+        store = self._stats()
+        wt = 0.0
+        if store is not None:
+            try:
+                tot = store.channel_totals(channel_name)
+                wt = float(getattr(tot, "watch_seconds", 0.0) or 0.0)
+            except Exception:
+                wt = 0.0
+
+        for ch in self._channels():
+            if (ch.name or "").strip().lower() == channel_name.strip().lower():
+                wt = max(wt, float(getattr(ch, "watch_seconds", 0.0) or 0.0))
+                break
+
+        tasks_wt = sum(
+            _get_task_sort_val(t, "watch_time", store, reverse=True)
+            for t in self.video_tasks
+            if (t.channel or "").strip().lower() == channel_name.strip().lower()
+        )
+        return max(wt, tasks_wt)
+
+    def _get_display_channels(self) -> List[Channel]:
+        """Return channels in standard or watch-time sorted order based on active sort."""
+        channels = list(self._channels())
+        if getattr(self, "current_sort_key", None) == "watch_time":
+            # The channel with the most watch time should be on the top, whether ascending or descending
+            channels.sort(key=lambda ch: self._channel_watch_time(ch.name), reverse=True)
+        return channels
+
     def _apply_current_sort(self, save: bool = True, render: bool = True):
         key = getattr(self, "current_sort_key", None)
         if not key or not self.video_tasks:
@@ -473,7 +517,7 @@ class QueueView(Frame):
         store = self._stats()
         rev = getattr(self, "current_sort_reverse", True)
 
-        channels = self._channels()
+        ordered_channels = self._get_display_channels()
         by_channel: Dict[str, List[VideoTask]] = {}
         for t in self.video_tasks:
             ch_name = t.channel or ""
@@ -491,13 +535,21 @@ class QueueView(Frame):
                 result[idx] = task
             return result
 
-        for ch in channels:
+        for ch in ordered_channels:
             if ch.name in by_channel:
                 sorted_tasks.extend(_sort_group(by_channel[ch.name]))
                 del by_channel[ch.name]
 
-        for ch_name, group_tasks in by_channel.items():
-            sorted_tasks.extend(_sort_group(group_tasks))
+        if by_channel:
+            remaining_keys = list(by_channel.keys())
+            if key == "watch_time":
+                # Sort remaining channels by watch time descending as well, keeping uncategorized last
+                remaining_keys.sort(
+                    key=lambda k: (-1.0 if not k or k == NO_CHANNEL_VALUE else self._channel_watch_time(k)),
+                    reverse=True,
+                )
+            for ch_name in remaining_keys:
+                sorted_tasks.extend(_sort_group(by_channel[ch_name]))
 
         self.video_tasks = sorted_tasks
         if hasattr(self, "app_controller") and self.app_controller is not None:
@@ -1230,7 +1282,7 @@ class QueueView(Frame):
             ).pack(pady=30)
             return
 
-        for group in group_videos_by_channel(self.video_tasks, self._channels(), include_archived=False):
+        for group in group_videos_by_channel(self.video_tasks, self._get_display_channels(), include_archived=False):
             if getattr(self, "shorts_only", False):
                 filtered_videos = [(idx, t) for (idx, t) in group.videos if t.is_short]
             else:
