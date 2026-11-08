@@ -69,7 +69,7 @@ Feature inventory for the YouTube Playback Automation Tool (V2.1).
 
 - **Detection** (`src/automation/ads.py`): strict signals only — `ytp-showing-ad` class, a non-empty `.video-ads` container, `.ytp-ad-player-container`, or `adformat=` in the player source. The up-next countdown does **not** false-positive as an ad.
 - **`Auto-Skip Ads` ON (default)**: Uses script-based native detection to click YouTube's *Skip Ad* button when available (after 5–10s). Extension-based ad blockers have been removed.
-- **`Auto-Skip Ads` OFF**: ads are watched normally; when cumulative ad time reaches `MaxAdWatchSeconds` (default 32, clamped 0–3600, `0` = unlimited) an escape-skip fires as the safety net.
+- **`Auto-Skip Ads` OFF**: ads are watched normally; when cumulative ad time reaches `MaxAdWatchSeconds` (default 9, clamped 0–3600, `0` = unlimited) an escape-skip fires as the safety net.
 - **Ad time never counts** toward watch-time budgets or completion (`watched_elapsed = elapsed - total_ad_seconds`).
 
 ### Multi-Account Execution

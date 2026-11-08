@@ -59,7 +59,7 @@ class BrowsingWorker:
         self.stats_store = stats_store
         self.driver: Any = None
         self.skip_ads = True
-        self.max_ad_seconds = 32
+        self.max_ad_seconds = 9
 
     # ------------------------------------------------------------------ events
 
@@ -86,7 +86,7 @@ class BrowsingWorker:
 
     def _ad_settings(self) -> Tuple[bool, int]:
         skip_ads = self.config_mgr.get_bool("SkipAds", True)
-        max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 32)
+        max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 9)
         return skip_ads, max(0, max_ad_seconds)
 
     def _end_buffer_seconds(self) -> float:

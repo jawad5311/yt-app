@@ -1044,7 +1044,7 @@ class WatchingWorker:
         self.open_videos = open_videos
         self.driver: Any = None
         self.skip_ads = True
-        self.max_ad_seconds = 32
+        self.max_ad_seconds = 9
         self.channel_tracker = SessionChannelTracker(
             config_mgr=self.config_mgr,
             stats_store=self.stats_store,
@@ -1112,7 +1112,7 @@ class WatchingWorker:
 
     def _ad_settings(self) -> Tuple[bool, int]:
         skip_ads = self.config_mgr.get_bool("SkipAds", True) or self.config_mgr.get_bool("BlockAds", False)
-        max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 32)
+        max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 9)
         if max_ad_seconds < 0:
             max_ad_seconds = 0
         return skip_ads, max_ad_seconds

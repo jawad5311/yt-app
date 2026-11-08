@@ -29,7 +29,8 @@ def test_config_defaults_match_documented_settings():
     assert settings["BrowsingUnlimited"] is True
     assert settings["VideoCooldownHours"] == 12
     assert settings["SkipAds"] is True
-    assert settings["MaxAdWatchSeconds"] == 32
+    assert settings["MaxAdWatchSeconds"] == 9
+    assert settings["BlockAds"] is True
     assert settings["EnableHumanInteractivity"] is True
     assert settings["AppearanceMode"] == "Dark"
     assert settings["LikeVideo"] is True

@@ -18,7 +18,9 @@ def test_creates_default_file_when_missing(tmp_path):
     assert mgr.get_int("ParallelBrowsers", 1) == 1
     assert mgr.get_setting("WatchtimeDuration") == "Full Video"
     assert mgr.get_bool("DirectLinkFallback", False) is False
-    assert mgr.get_bool("BlockAds", False) is False
+    assert mgr.get_bool("BlockAds", True) is True
+    assert mgr.get_bool("SkipAds", True) is True
+    assert mgr.get_int("MaxAdWatchSeconds", 9) == 9
     assert mgr.get_int("FullVideoTimeoutMinutes", 0) == 0
     assert mgr.get_int("AutomationLoops", 1) == 1
 

@@ -648,7 +648,7 @@ def watch_video(
     log_queue: Optional[queue.Queue] = None,
     full_timeout_seconds: int = DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     skip_ads: bool = True,
-    max_ad_seconds: int = 32,
+    max_ad_seconds: int = 9,
     end_buffer_seconds: float = 0.0,
     enable_interactivity: bool = True,
     interactivity_config: Optional[Dict[str, Any]] = None,

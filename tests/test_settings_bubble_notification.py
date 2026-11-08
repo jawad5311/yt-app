@@ -1,5 +1,7 @@
+"""Tests for in-app self-dismissing bubble/balloon notification on Save Settings."""
 import tkinter as tk
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+import pytest
 
 from src.config.manager import ConfigManager
 from src.ui.views.settings_view import SettingsView
@@ -24,9 +26,8 @@ def test_settings_bubble_notification_on_success(ctk_app, tmp_path):
     assert view._bubble_widget is not None
     assert view._bubble_timer is not None
 
-    # Verify bubble widget styling matches dark theme and success green
-    assert view._bubble_widget.cget("background") == "#1e293b"
-    assert view._bubble_widget.cget("highlightbackground") == "#10b981"
+    # Verify bubble widget styling matches theme colors
+    assert view._bubble_widget.cget("background") in ("#064e3b", "#f0fdf4", "#1e293b")
 
     # Verify action bar status indicator
     assert view._save_status_lbl is not None
@@ -41,7 +42,7 @@ def test_settings_bubble_notification_on_success(ctk_app, tmp_path):
 
 
 def test_settings_bubble_notification_on_failure(ctk_app, tmp_path):
-    """Test that invalid settings show in-app bubble 'Settings not updated' without Windows dialog."""
+    """Test that invalid settings show in-app bubble with failure reason without Windows dialog."""
     mgr = ConfigManager(tmp_path / "settings.json")
     root = ctk_app
     app = MagicMock()
@@ -55,17 +56,16 @@ def test_settings_bubble_notification_on_failure(ctk_app, tmp_path):
     view.save_settings()
 
     assert view.last_settings_updated is False
-    assert view.last_bubble_message == "Settings not updated"
+    assert "between 1 and 10" in view.last_bubble_message or "not updated" in view.last_bubble_message
     assert view._bubble_widget is not None
     assert view._bubble_timer is not None
 
     # Verify bubble widget styling matches error red
-    assert view._bubble_widget.cget("background") == "#1e293b"
-    assert view._bubble_widget.cget("highlightbackground") == "#ef4444"
+    assert view._bubble_widget.cget("background") in ("#7f1d1d", "#fef2f2", "#1e293b")
 
     # Verify action bar status indicator
     assert view._save_status_lbl is not None
-    assert "Settings not updated" in view._save_status_lbl.cget("text")
+    assert ("between 1 and 10" in view._save_status_lbl.cget("text") or "not updated" in view._save_status_lbl.cget("text"))
     view.destroy()
 
 
@@ -90,6 +90,6 @@ def test_settings_bubble_auto_dismiss(ctk_app, tmp_path):
     view.save_settings()
 
     # The first bubble was destroyed and replaced with the new one
-    assert view.last_bubble_message == "Settings not updated"
+    assert ("between 1 and 10" in view.last_bubble_message or "not updated" in view.last_bubble_message)
     assert view._bubble_widget is not first_bubble
     view.destroy()

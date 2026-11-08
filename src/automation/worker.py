@@ -55,7 +55,7 @@ class AutomationWorker:
         self.dispatcher = dispatcher
         self.driver: Any = None
         self.skip_ads = True
-        self.max_ad_seconds = 32
+        self.max_ad_seconds = 9
         ch_objs = [Channel.from_dict(c) for c in self.config_mgr.get_channels()] if self.config_mgr else []
         self.channel_tracker = SessionChannelTracker(
             config_mgr=self.config_mgr,
@@ -106,7 +106,7 @@ class AutomationWorker:
     def _ad_settings(self) -> Tuple[bool, int]:
         """Read the Block Ads (Skip Ads) toggle and its cumulative ad-watch cap."""
         skip_ads = self.config_mgr.get_bool("BlockAds", self.config_mgr.get_bool("SkipAds", False))
-        max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 32)
+        max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 9)
         if max_ad_seconds < 0:
             max_ad_seconds = 0
         return skip_ads, max_ad_seconds

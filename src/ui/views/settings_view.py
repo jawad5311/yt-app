@@ -598,7 +598,7 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.max_ad_entry = Entry(scroll_ads, width=100)
-        initial_max_ad = self.config_mgr.get_int("MaxAdWatchSeconds", 0) if self.config_mgr else 0
+        initial_max_ad = self.config_mgr.get_int("MaxAdWatchSeconds", 9) if self.config_mgr else 9
         self.max_ad_entry.insert(0, str(initial_max_ad))
         self.max_ad_entry.pack(anchor="w", padx=15, pady=(0, 15))
 

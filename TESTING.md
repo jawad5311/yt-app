@@ -213,7 +213,7 @@ Uses the Stage 5 queue/account. Watch a video that serves ads (any popular monet
 
 **Auto-Skip Ads OFF**
 
-- [ ] Settings → Auto-Skip Ads off → run: Ads are watched normally up to `MaxAdWatchSeconds` (default 32s, `0` = unlimited).
+- [ ] Settings → Auto-Skip Ads off → run: Ads are watched normally up to `MaxAdWatchSeconds` (default 9s, `0` = unlimited).
 - [ ] Cumulative ad time reaches the cap → escape-skip fires (`Clicked Skip Ad - …`); if the ad is unskippable: `Ad cap reached but no Skip button found (unskippable ad). Waiting for it to finish.`
 - [ ] Set Max Ad Watch to `0` → ads run to completion with no escape skip.
 - [ ] Turn **Auto-Skip Ads** back on for the remaining stages.
