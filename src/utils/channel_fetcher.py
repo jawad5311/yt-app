@@ -1160,16 +1160,30 @@ def fetch_channel_data_api(
         fetched_videos_list.extend(v_items)
 
     # B. Fetch Shorts
+    if shorts_playlist_id:
+        # First query YouTube API to determine total shorts count for this channel
+        s_total = get_playlist_total_results(shorts_playlist_id, api_key=api_key, timeout=timeout)
+        if progress_callback:
+            try:
+                progress_callback(s_total or 0, "shorts_count")
+            except Exception:
+                pass
+
     if shorts_limit is not None and (shorts_limit >= 0) and shorts_playlist_id:
-        s_items, s_warn, s_err, s_trunc, s_intr, s_total = fetch_playlist_items_api(
-            playlist_id=shorts_playlist_id,
-            api_key=api_key,
-            limit=shorts_limit,
-            is_short=True,
-            timeout=timeout,
-            cancel_event=cancel_event,
-            progress_callback=progress_callback,
-        )
+        if s_total == 0:
+            s_items, s_warn, s_err, s_trunc, s_intr = [], None, None, False, False
+        else:
+            s_items, s_warn, s_err, s_trunc, s_intr, fetched_s_total = fetch_playlist_items_api(
+                playlist_id=shorts_playlist_id,
+                api_key=api_key,
+                limit=shorts_limit,
+                is_short=True,
+                timeout=timeout,
+                cancel_event=cancel_event,
+                progress_callback=progress_callback,
+            )
+            if fetched_s_total is not None:
+                s_total = fetched_s_total
         if s_err:
             if "404" in s_err:
                 s_items = []

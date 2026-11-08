@@ -2627,13 +2627,21 @@ class ChannelsView(Frame):
         def _bg_sync(report):
             results = []
             for i, (ch, name, url) in enumerate(snapshots, 1):
-                report((i, name))
+                report(("checking", i, name, None))
+
+                def _prog(count, kind):
+                    if kind == "shorts_count":
+                        report(("count_found", i, name, count))
+                    elif kind == "shorts":
+                        report(("fetching_items", i, name, count))
+
                 try:
                     res = fetch_channel_data(
                         url,
                         video_limit=None,
                         shorts_limit=0,
                         config_mgr=config_mgr,
+                        progress_callback=_prog,
                     )
                     results.append((ch, res))
                 except Exception as exc:
@@ -2759,8 +2767,17 @@ class ChannelsView(Frame):
             messagebox.showinfo("Sync All Channels Shorts Complete", msg, parent=self)
 
         def _progress(data):
-            idx, name = data
-            lbl.configure(text=f"Syncing shorts for '{name}' ({idx}/{len(channels_to_sync)})...")
+            if isinstance(data, tuple) and len(data) == 4:
+                stage, idx, name, count = data
+                if stage == "checking":
+                    lbl.configure(text=f"[{idx}/{len(channels_to_sync)}] Checking shorts count for '{name}'...")
+                elif stage == "count_found":
+                    lbl.configure(text=f"[{idx}/{len(channels_to_sync)}] Found {count} short(s) for '{name}'.\nNow fetching all shorts...")
+                elif stage == "fetching_items":
+                    lbl.configure(text=f"[{idx}/{len(channels_to_sync)}] Fetching shorts for '{name}'... ({count} retrieved)")
+            elif isinstance(data, tuple) and len(data) == 2:
+                idx, name = data
+                lbl.configure(text=f"Syncing shorts for '{name}' ({idx}/{len(channels_to_sync)})...")
 
         def _failed(exc):
             _close()
