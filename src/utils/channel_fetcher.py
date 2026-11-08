@@ -8,6 +8,7 @@ and standard HTML metadata.
 import json
 import os
 import re
+import socket
 import threading
 import urllib.error
 import urllib.parse
@@ -595,6 +596,57 @@ def get_configured_youtube_api_key(config_mgr: Optional[Any] = None) -> Optional
         if cfg_key:
             return cfg_key
     return None
+
+
+def validate_youtube_api_key(api_key: str, timeout: int = 10) -> Tuple[bool, str]:
+    """Test a YouTube Data API v3 key against Google's API endpoint.
+
+    Returns:
+        (True, human_readable_success_message) on HTTP 200, or
+        (False, human_readable_error_message) on failure.
+    """
+    key = (api_key or "").strip()
+    if not key:
+        return False, "API key cannot be empty."
+
+    # Use a minimal 1-quota call to videos endpoint with a known public video ID
+    url = f"https://www.googleapis.com/youtube/v3/videos?part=id&id=dQw4w9WgXcQ&key={key}"
+    req = urllib.request.Request(url, headers={"User-Agent": "yt-tool/2.1"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status_code = getattr(resp, "status", 200)
+            if status_code == 200:
+                return True, "API key is valid and working."
+            return False, f"Unexpected response status: {status_code}"
+    except urllib.error.HTTPError as err:
+        try:
+            raw_body = err.read().decode("utf-8", errors="replace")
+            err_json = json.loads(raw_body)
+            err_obj = err_json.get("error", {})
+            msg = err_obj.get("message", "")
+            errors_list = err_obj.get("errors", [])
+            reason = errors_list[0].get("reason", "") if errors_list else ""
+        except Exception:
+            msg = str(err)
+            reason = ""
+
+        if reason in ("keyInvalid", "badRequest") or "API key not valid" in msg:
+            return False, "Invalid API key. Please verify the key in Google Cloud Console."
+        elif reason == "accessNotConfigured" or "has not been used in project" in msg:
+            return False, "YouTube Data API v3 is not enabled in your Google Cloud project."
+        elif reason == "quotaExceeded" or "quota" in msg.lower():
+            return False, "API quota limit exceeded for this project."
+        elif reason in ("ipRefererBlocked", "requestsFromRefererBlocked"):
+            return False, "API key restrictions blocked request (check IP/HTTP restrictions)."
+        elif msg:
+            return False, f"API Error ({err.code}): {msg}"
+        return False, f"HTTP Error {err.code}: {err.reason}"
+    except urllib.error.URLError as err:
+        return False, f"Network connection failed: {err.reason}"
+    except (socket.timeout, TimeoutError):
+        return False, "Connection timed out connecting to Google API."
+    except Exception as exc:
+        return False, f"Error validating API key: {exc}"
 
 
 def parse_iso8601_duration(duration_str: str) -> int:

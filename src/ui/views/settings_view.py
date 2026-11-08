@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox
@@ -8,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from ...automation.email_reporter import DEFAULT_ADMIN_RECIPIENT_EMAIL, EmailReporter, SessionReport
 from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_SHORTS_MAX_RUNS
+from ...utils.channel_fetcher import validate_youtube_api_key
 from ..components import (
     Button,
     CheckBox,
@@ -218,11 +220,28 @@ class SettingsView(Frame):
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.youtube_api_key_entry = Entry(scroll_general, width=350, placeholder_text="YouTube API key here")
+        api_key_frame = Frame(scroll_general, style="Transparent.TFrame")
+        api_key_frame.pack(anchor="w", padx=15, pady=(0, 15))
+
+        self.youtube_api_key_entry = Entry(api_key_frame, width=320, placeholder_text="YouTube API key here")
         api_key = self.config_mgr.get_setting("YouTubeApiKey", "") if self.config_mgr else ""
         if api_key:
             self.youtube_api_key_entry.insert(0, api_key)
-        self.youtube_api_key_entry.pack(anchor="w", padx=15, pady=(0, 15))
+        self.youtube_api_key_entry.pack(side="left", padx=(0, 10))
+
+        self.btn_test_api = Button(
+            api_key_frame,
+            text="Test",
+            style="Primary.TButton",
+            width=70,
+            command=self.test_youtube_api_key,
+        )
+        self.btn_test_api.pack(side="left")
+        add_tooltip(
+            self.btn_test_api,
+            "Test YouTube Data API v3 key validity and connectivity.",
+        )
+        self.youtube_api_key_entry.bind("<KeyRelease>", self._on_api_key_modified)
 
         # ---------------------------------------------------------
         # Tab 2: Playback
@@ -1228,6 +1247,13 @@ class SettingsView(Frame):
 
     def dismiss_bubble(self) -> None:
         """Dismiss active in-app bubble notification immediately."""
+        if getattr(self, "_api_test_reset_timer", None) is not None:
+            try:
+                if callable(getattr(self, "after_cancel", None)):
+                    self.after_cancel(self._api_test_reset_timer)
+            except Exception:
+                pass
+            self._api_test_reset_timer = None
         if getattr(self, "_bubble_timer", None) is not None:
             try:
                 if callable(getattr(self, "after_cancel", None)):
@@ -1251,6 +1277,96 @@ class SettingsView(Frame):
     def _show_settings_saved_popup(self, duration_ms: int = 3000):
         """Backwards compatibility alias for _show_bubble_notification."""
         self._show_bubble_notification("Settings updated", success=True, duration_ms=duration_ms)
+
+    def _on_api_key_modified(self, event=None) -> None:
+        """Reset the API Test button if the user edits the API key entry."""
+        if getattr(self, "_api_test_reset_timer", None) is not None:
+            try:
+                if callable(getattr(self, "after_cancel", None)):
+                    self.after_cancel(self._api_test_reset_timer)
+            except Exception:
+                pass
+            self._api_test_reset_timer = None
+
+        if hasattr(self, "btn_test_api") and self.btn_test_api is not None:
+            try:
+                if self.btn_test_api.winfo_exists():
+                    current_text = str(self.btn_test_api.cget("text"))
+                    if current_text != "Test":
+                        self.btn_test_api.configure(text="Test", style="Primary.TButton", state="normal")
+            except Exception:
+                pass
+
+    def test_youtube_api_key(self) -> None:
+        """Test YouTube API key validity and connectivity asynchronously, providing dynamic button and balloon feedback."""
+        raw_key = self.youtube_api_key_entry.get().strip() if hasattr(self, "youtube_api_key_entry") else ""
+        if not raw_key:
+            if hasattr(self, "btn_test_api") and self.btn_test_api is not None:
+                try:
+                    self.btn_test_api.configure(text="⚠️ Enter Key", style="Warning.TButton")
+                except Exception:
+                    pass
+            self._show_bubble_notification("Please enter a YouTube API key first", success=False, duration_ms=3000)
+
+            def _reset():
+                try:
+                    if hasattr(self, "btn_test_api") and self.btn_test_api.winfo_exists():
+                        self.btn_test_api.configure(text="Test", style="Primary.TButton", state="normal")
+                except Exception:
+                    pass
+            if callable(getattr(self, "after", None)):
+                self._api_test_reset_timer = self.after(3000, _reset)
+            return
+
+        if getattr(self, "_api_test_reset_timer", None) is not None:
+            try:
+                if callable(getattr(self, "after_cancel", None)):
+                    self.after_cancel(self._api_test_reset_timer)
+            except Exception:
+                pass
+            self._api_test_reset_timer = None
+
+        # Update button to testing state
+        if hasattr(self, "btn_test_api") and self.btn_test_api is not None:
+            try:
+                self.btn_test_api.configure(text="Testing...", style="MutedAction.TButton", state="disabled")
+            except Exception:
+                pass
+
+        def _worker():
+            is_valid, msg = validate_youtube_api_key(raw_key, timeout=10)
+            if callable(getattr(self, "after", None)):
+                self.after(0, self._on_api_test_completed, is_valid, msg)
+
+        threading.Thread(target=_worker, daemon=True, name="test-youtube-api-key").start()
+
+    def _on_api_test_completed(self, is_valid: bool, message: str) -> None:
+        """Handle YouTube API test result on the Tkinter main thread."""
+        btn = getattr(self, "btn_test_api", None)
+        if btn is not None:
+            try:
+                if btn.winfo_exists():
+                    if is_valid:
+                        btn.configure(text="✓ Valid", style="Success.TButton", state="normal")
+                    else:
+                        btn.configure(text="✕ Invalid", style="Danger.TButton", state="normal")
+            except Exception:
+                pass
+
+        if is_valid:
+            self._show_bubble_notification(f"YouTube API Key is valid: {message}", success=True, duration_ms=4000)
+        else:
+            self._show_bubble_notification(f"YouTube API Test Failed: {message}", success=False, duration_ms=5000)
+
+        def _reset_btn():
+            try:
+                if hasattr(self, "btn_test_api") and self.btn_test_api.winfo_exists():
+                    self.btn_test_api.configure(text="Test", style="Primary.TButton", state="normal")
+            except Exception:
+                pass
+
+        if callable(getattr(self, "after", None)):
+            self._api_test_reset_timer = self.after(4000, _reset_btn)
 
     def send_test_report(self):
         """Send an immediate sample report to verify recipient and SMTP connection."""
