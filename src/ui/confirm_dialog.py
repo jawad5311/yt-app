@@ -321,6 +321,7 @@ class ThemedAlertDialog(tk.Toplevel):
             font=ctk.CTkFont(size=10, weight="bold"),
             command=self._on_close,
         )
+        self.btn_ok = ok_btn
         ok_btn.pack(side="right")
 
         # Key bindings

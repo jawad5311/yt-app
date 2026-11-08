@@ -97,6 +97,10 @@ class SettingsView(Frame):
         super().__init__(parent, style="TFrame")
         self.app_controller = app_controller
         self.config_mgr = app_controller.config_mgr if hasattr(app_controller, "config_mgr") else None
+        self._bubble_widget = None
+        self._bubble_timer = None
+        self._save_status_lbl = None
+        self.last_alert_dialog = None
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -1085,37 +1089,14 @@ class SettingsView(Frame):
         self._notify_result(True)
 
     def _notify_result(self, success: bool, reason: str = "") -> None:
-        """Handle save settings notification via Apple HIG themed pop-up dialog and in-app feedback."""
+        """Handle save settings notification via in-app self-dismissing bubble/balloon notification."""
         self.last_settings_updated = success
-        msg = "Settings updated" if success else "Settings not updated"
+        msg = "Settings updated" if success else (reason or "Settings not updated")
         self.last_bubble_message = msg
+        self.last_alert_dialog = None  # No modal confirmation dialog shown
 
-        # Display the in-app themed bubble notification for 3 seconds
+        # Display the in-app themed bubble/balloon notification for 3 seconds (disappears by itself)
         self._show_bubble_notification(msg, success=success, duration_ms=3000)
-
-        # Show prominent Apple HIG themed alert pop-up dialog
-        if success:
-            dialog_title = "Settings Saved"
-            dialog_heading = "Settings Saved Successfully"
-            dialog_body = "All configuration settings have been updated and applied."
-            dialog_icon = "✓"
-        else:
-            dialog_title = "Invalid Settings"
-            dialog_heading = "Settings Not Saved"
-            dialog_body = reason or "Please check your settings and correct any invalid inputs."
-            dialog_icon = "⚠️"
-
-        try:
-            self.last_alert_dialog = show_themed_alert_dialog(
-                parent=self,
-                title=dialog_title,
-                heading=dialog_heading,
-                message=dialog_body,
-                button_text="OK",
-                icon=dialog_icon,
-            )
-        except Exception:
-            pass
 
         # In testing environments where messagebox is mocked/monitored, record the call
         if success:
@@ -1160,12 +1141,22 @@ class SettingsView(Frame):
             self._save_status_lbl = None
 
         try:
-            border_color = "#10b981" if success else "#ef4444"
             colors = get_theme_colors()
-            icon = "✓" if success else "✕"
-            icon_color = "#10b981" if success else "#ef4444"
-            bg_color = "#1e293b"
-            fg_color = colors.get("fg", "#f8fafc")
+            is_light = colors.get("is_light", False) or str(colors.get("bg", "#000000")).lower() in ("#f8fafc", "#ffffff", "#f1f5f9", "#ffffff")
+            
+            # Balloon / Bubble styling according to theme
+            if success:
+                accent_color = "#10b981"  # Emerald green
+                icon = "✓"
+                bg_color = "#f0fdf4" if is_light else "#064e3b"
+                fg_color = "#065f46" if is_light else "#ecfdf5"
+                border_color = "#86efac" if is_light else "#059669"
+            else:
+                accent_color = "#ef4444"  # Red
+                icon = "✕"
+                bg_color = "#fef2f2" if is_light else "#7f1d1d"
+                fg_color = "#991b1b" if is_light else "#fef2f2"
+                border_color = "#fca5a5" if is_light else "#dc2626"
 
             # Create floating in-app notification bubble
             bubble = tk.Frame(
@@ -1174,8 +1165,8 @@ class SettingsView(Frame):
                 highlightbackground=border_color,
                 highlightcolor=border_color,
                 highlightthickness=1,
-                padx=20,
-                pady=10,
+                padx=22,
+                pady=11,
                 cursor="hand2",
             )
             self._bubble_widget = bubble
@@ -1187,7 +1178,7 @@ class SettingsView(Frame):
                 msg_frame,
                 text=icon,
                 font=("Segoe UI", 13, "bold"),
-                foreground=icon_color,
+                foreground=accent_color,
                 background=bg_color,
                 cursor="hand2",
             )
@@ -1215,7 +1206,7 @@ class SettingsView(Frame):
                     self.action_bar,
                     text=f"{icon} {message}",
                     font=("Segoe UI", 11, "bold"),
-                    foreground=icon_color,
+                    foreground=accent_color,
                     background=colors.get("bg", "#131316"),
                 )
                 status_lbl.pack(side="left", padx=(15, 0))
