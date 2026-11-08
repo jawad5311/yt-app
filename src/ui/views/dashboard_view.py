@@ -368,6 +368,8 @@ class DashboardView(Frame):
         self.progress_label.configure(text="Starting...")
 
     def _on_browsing_unlimited_toggle(self):
+        if getattr(self, "is_running", False) or (hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True):
+            return
         if hasattr(self, "browsing_unlimited_cb") and hasattr(self, "browsing_limit_entry"):
             if self.browsing_unlimited_cb.get():
                 self.browsing_limit_entry.configure(state="disabled")
@@ -450,7 +452,8 @@ class DashboardView(Frame):
             if hasattr(self, "browsing_limit_entry"):
                 self.browsing_limit_entry.configure(state="disabled")
             if hasattr(self, "browsing_unlimited_cb"):
-                self.browsing_unlimited_cb.configure(state="disabled")
+                # Do not gray out the unlimited switch; keep its visual state and disable interaction while browsing
+                self.browsing_unlimited_cb.configure(interactive=False)
             self.card_status.configure(text="Browsing", text_color="#1F6AA5")
             if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
                 try:
@@ -483,24 +486,12 @@ class DashboardView(Frame):
                 except Exception:
                     pass
             if hasattr(self, "browsing_unlimited_cb"):
-                self.browsing_unlimited_cb.configure(state="normal")
+                self.browsing_unlimited_cb.configure(interactive=True, state="normal")
                 if not self.browsing_unlimited_cb.get() and hasattr(self, "browsing_limit_entry"):
                     self.browsing_limit_entry.configure(state="normal")
             elif hasattr(self, "browsing_limit_entry"):
                 self.browsing_limit_entry.configure(state="normal")
             self.card_status.configure(text="Idle", text_color="white")
-            if hasattr(self, "loop_entry"):
-                try:
-                    self.loop_entry.configure(state="normal")
-                except Exception:
-                    pass
-            if hasattr(self, "browsing_unlimited_cb"):
-                self.browsing_unlimited_cb.configure(state="normal")
-                if not self.browsing_unlimited_cb.get() and hasattr(self, "browsing_limit_entry"):
-                    self.browsing_limit_entry.configure(state="normal")
-            elif hasattr(self, "browsing_limit_entry"):
-                self.browsing_limit_entry.configure(state="normal")
-            self.card_status.configure(text="Idle")
             if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
                 try:
                     self.system_pill_dot.configure(text_color="#30D158")

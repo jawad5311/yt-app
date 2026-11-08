@@ -370,6 +370,7 @@ class AppleToggleSwitch(ttk.Frame):
 
         self._command = command
         self._state = state
+        self._interactive = bool(kwargs.pop("interactive", True))
         self._text = text
         self._width = max(34, width if width and width < 60 else 38)
         self._height = max(18, height if height and height < 40 else 22)
@@ -397,7 +398,7 @@ class AppleToggleSwitch(ttk.Frame):
             highlightthickness=0,
             borderwidth=0,
             background=parent_bg,
-            cursor="hand2" if self._state == "normal" else "arrow",
+            cursor="hand2" if (self._state == "normal" and getattr(self, "_interactive", True)) else "arrow",
         )
         self._canvas.pack(side="left")
         self._canvas.bind("<Button-1>", self._on_click)
@@ -476,7 +477,7 @@ class AppleToggleSwitch(ttk.Frame):
         )
 
     def _on_click(self, event=None):
-        if self._state == "disabled":
+        if self._state == "disabled" or not getattr(self, "_interactive", True):
             return
         self.toggle()
 
@@ -492,6 +493,8 @@ class AppleToggleSwitch(ttk.Frame):
                 pass
 
     def invoke(self):
+        if self._state == "disabled" or not getattr(self, "_interactive", True):
+            return None
         return self.toggle()
 
     def select(self):
@@ -518,10 +521,17 @@ class AppleToggleSwitch(ttk.Frame):
         ):
             kwargs.pop(k, None)
 
+        if "interactive" in kwargs:
+            self._interactive = bool(kwargs.pop("interactive"))
+            cursor = "hand2" if (self._state == "normal" and self._interactive) else "arrow"
+            if hasattr(self, "_canvas") and self._canvas.winfo_exists():
+                self._canvas.configure(cursor=cursor)
+
         if "state" in kwargs:
             self._state = kwargs.pop("state")
-            cursor = "hand2" if self._state == "normal" else "arrow"
-            self._canvas.configure(cursor=cursor)
+            cursor = "hand2" if (self._state == "normal" and getattr(self, "_interactive", True)) else "arrow"
+            if hasattr(self, "_canvas") and self._canvas.winfo_exists():
+                self._canvas.configure(cursor=cursor)
             if self._label:
                 self._label.configure(state=self._state)
 
@@ -551,6 +561,8 @@ class AppleToggleSwitch(ttk.Frame):
     def cget(self, prop: str) -> Any:
         if prop == "state":
             return self._state
+        if prop == "interactive":
+            return getattr(self, "_interactive", True)
         if prop == "text":
             return self._text
         if prop == "variable":
