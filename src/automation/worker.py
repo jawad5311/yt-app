@@ -74,6 +74,7 @@ class AutomationWorker:
         self.session_thread_url: Optional[str] = None
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
+        EmailReporter.reset_session_thread()
         self.reporting_driver: Optional[Any] = None
         self.reporting_thread: Optional[threading.Thread] = None
         self.has_started_automation = False
@@ -681,6 +682,11 @@ class AutomationWorker:
                 thread_message_id=getattr(self, "session_thread_message_id", None),
                 thread_info=getattr(self, "session_thread_info", None),
             )
+            if getattr(self, "session_thread_info", None) and isinstance(self.session_thread_info, dict):
+                if self.session_thread_info.get("thread_url"):
+                    self.session_thread_url = self.session_thread_info["thread_url"]
+                if self.session_thread_info.get("message_id"):
+                    self.session_thread_message_id = self.session_thread_info["message_id"]
         except Exception as exc:
             logging.debug(f"Failed dispatching critical alert email: {exc}")
 
@@ -717,8 +723,10 @@ class AutomationWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
-                thread_url=getattr(self, "session_thread_url", None),
-                thread_message_id=getattr(self, "session_thread_message_id", None),
+                thread_url=getattr(self, "session_thread_url", None) or (self.session_thread_info.get("thread_url") if getattr(self, "session_thread_info", None) else None),
+                thread_message_id=getattr(self, "session_thread_message_id", None) or (self.session_thread_info.get("message_id") if getattr(self, "session_thread_info", None) else None),
+                thread_references=list(self.session_thread_info.get("references", [])) if getattr(self, "session_thread_info", None) else None,
+                root_message_id=self.session_thread_info.get("root_message_id") if getattr(self, "session_thread_info", None) else None,
                 suggested_videos_count=report_data.get("suggested_videos_count", 0),
                 search_videos_count=report_data.get("search_videos_count", 0),
                 home_videos_count=report_data.get("home_videos_count", 0),
@@ -746,11 +754,17 @@ class AutomationWorker:
                 driver=chosen_driver,
                 account=self.account,
                 log_queue=self.log_queue,
+                thread_info=getattr(self, "session_thread_info", None),
             )
             if not ok:
                 emit(self.log_queue, "Session report email delivery could not be completed.", logging.WARNING)
                 self._emit_event(("report_sent", False, "Session report email delivery could not be completed."))
             else:
+                if getattr(self, "session_thread_info", None) and isinstance(self.session_thread_info, dict):
+                    if self.session_thread_info.get("thread_url"):
+                        self.session_thread_url = self.session_thread_info["thread_url"]
+                    if self.session_thread_info.get("message_id"):
+                        self.session_thread_message_id = self.session_thread_info["message_id"]
                 self._emit_event(("report_sent", True, "Session report sent successfully!"))
         except Exception as exc:
             emit(self.log_queue, f"Failed dispatching session email report: {exc}", logging.WARNING)

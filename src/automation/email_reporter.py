@@ -78,6 +78,8 @@ class SessionReport:
     search_queries_count: int = 0
     thread_url: Optional[str] = None
     thread_message_id: Optional[str] = None
+    thread_references: Optional[List[str]] = None
+    root_message_id: Optional[str] = None
     system_name: str = ""
     sleep_cycle_number: Optional[int] = None
     sleep_duration_hours: Optional[float] = None
@@ -477,6 +479,12 @@ class EmailReporter:
     last_message_id: Optional[str] = None
 
     @classmethod
+    def reset_session_thread(cls) -> None:
+        """Reset cached class-level thread IDs and URLs when a new session starts."""
+        cls.last_message_id = None
+        cls.last_thread_url = None
+
+    @classmethod
     def send_via_smtp(
         cls,
         report: SessionReport,
@@ -519,13 +527,35 @@ class EmailReporter:
         domain = sender.split("@")[-1] if "@" in sender else "yttool.app"
         msg_id = make_msgid(domain=domain)
         msg["Message-ID"] = msg_id
-        actual_thread_id = getattr(report, "thread_message_id", None) or cls.last_message_id
+
+        actual_thread_id = (
+            getattr(report, "thread_message_id", None)
+            or (thread_info.get("message_id") if isinstance(thread_info, dict) else None)
+            or cls.last_message_id
+        )
+
+        refs_list: List[str] = []
+        if isinstance(thread_info, dict) and thread_info.get("references"):
+            refs_list = list(thread_info["references"])
+        elif getattr(report, "thread_references", None):
+            refs_list = list(report.thread_references)
+        elif actual_thread_id:
+            refs_list = [actual_thread_id]
+
         if actual_thread_id:
             msg["In-Reply-To"] = actual_thread_id
-            msg["References"] = actual_thread_id
+            if actual_thread_id not in refs_list:
+                refs_list.append(actual_thread_id)
+            msg["References"] = " ".join(refs_list)
 
         cls.last_message_id = msg_id
         if thread_info is not None and isinstance(thread_info, dict):
+            if not thread_info.get("root_message_id"):
+                thread_info["root_message_id"] = actual_thread_id or msg_id
+            if "references" not in thread_info or not isinstance(thread_info["references"], list):
+                thread_info["references"] = list(refs_list)
+            if msg_id not in thread_info["references"]:
+                thread_info["references"].append(msg_id)
             thread_info["message_id"] = msg_id
         msg.attach(MIMEText(plain_text, "plain", "utf-8"))
         msg.attach(MIMEText(html_content, "html", "utf-8"))
@@ -924,6 +954,8 @@ class EmailReporter:
                 cls.last_thread_url = captured_thread_url
                 if thread_info is not None and isinstance(thread_info, dict):
                     thread_info["thread_url"] = captured_thread_url
+                    if not thread_info.get("root_thread_url"):
+                        thread_info["root_thread_url"] = captured_thread_url
                 if log_queue and is_valid_thread and not is_start:
                     emit(log_queue, f"Parked on session email thread: {captured_thread_url}")
 
@@ -1279,6 +1311,8 @@ class EmailReporter:
                 cls.last_thread_url = driver.current_url
                 if thread_info is not None and isinstance(thread_info, dict):
                     thread_info["thread_url"] = driver.current_url
+                    if not thread_info.get("root_thread_url"):
+                        thread_info["root_thread_url"] = driver.current_url
 
             time.sleep(3.0)
             if log_queue:
@@ -1518,6 +1552,17 @@ class EmailReporter:
         has_smtp = bool(smtp_pass)
 
         # 1. Prefer SMTP if configured (fast and independent of browser state)
+        target_thread_id = (
+            thread_message_id
+            or (thread_info.get("message_id") if isinstance(thread_info, dict) else None)
+            or cls.last_message_id
+        )
+        target_thread_url = (
+            thread_url
+            or (thread_info.get("thread_url") if isinstance(thread_info, dict) else None)
+            or cls.last_thread_url
+        )
+
         if has_smtp:
             ok = cls._send_plain_smtp(
                 recipient=recipient,
@@ -1527,7 +1572,7 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 account=account,
                 log_queue=None,
-                thread_message_id=thread_message_id or cls.last_message_id,
+                thread_message_id=target_thread_id,
                 thread_info=thread_info,
             )
             if ok:
@@ -1537,6 +1582,20 @@ class EmailReporter:
 
         # 2. If browser driver is active and visible
         if driver is not None and "active" in method.lower():
+            if target_thread_url:
+                reply_ok = cls._deliver_via_gmail_thread_reply(
+                    driver=driver,
+                    plain_text=plain_text,
+                    thread_url=target_thread_url,
+                    subject=subject,
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=None,
+                    email_description=f"alert ({alert_type})",
+                    thread_info=thread_info,
+                )
+                if reply_ok:
+                    return True
             return cls._deliver_via_gmail_compose(
                 driver=driver,
                 subject=subject,
@@ -1545,6 +1604,7 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 log_queue=None,
                 email_description=f"alert ({alert_type})",
+                thread_info=thread_info,
             )
 
         # 3. Headless Browser Gmail
@@ -1557,7 +1617,7 @@ class EmailReporter:
                 bcc_email=bcc_email,
                 log_queue=None,
                 email_description=f"alert ({alert_type})",
-                thread_url=thread_url or cls.last_thread_url,
+                thread_url=target_thread_url,
                 thread_info=thread_info,
             )
 
@@ -1578,6 +1638,9 @@ class EmailReporter:
         driver: Optional[Any] = None,
     ) -> bool:
         """Send a simple email notification when automation starts."""
+        cls.reset_session_thread()
+        if thread_info is not None and isinstance(thread_info, dict):
+            thread_info.clear()
         recipient, bcc_email = resolve_report_recipients(config_mgr)
 
         start_dt = start_time or datetime.now()
@@ -1687,13 +1750,33 @@ class EmailReporter:
         domain = sender.split("@")[-1] if "@" in sender else "yttool.app"
         msg_id = make_msgid(domain=domain)
         msg["Message-ID"] = msg_id
-        actual_thread_id = thread_message_id or cls.last_message_id
+
+        actual_thread_id = (
+            thread_message_id
+            or (thread_info.get("message_id") if isinstance(thread_info, dict) else None)
+            or cls.last_message_id
+        )
+
+        refs_list: List[str] = []
+        if isinstance(thread_info, dict) and thread_info.get("references"):
+            refs_list = list(thread_info["references"])
+        elif actual_thread_id:
+            refs_list = [actual_thread_id]
+
         if actual_thread_id:
             msg["In-Reply-To"] = actual_thread_id
-            msg["References"] = actual_thread_id
+            if actual_thread_id not in refs_list:
+                refs_list.append(actual_thread_id)
+            msg["References"] = " ".join(refs_list)
 
         cls.last_message_id = msg_id
         if thread_info is not None and isinstance(thread_info, dict):
+            if not thread_info.get("root_message_id"):
+                thread_info["root_message_id"] = actual_thread_id or msg_id
+            if "references" not in thread_info or not isinstance(thread_info["references"], list):
+                thread_info["references"] = list(refs_list)
+            if msg_id not in thread_info["references"]:
+                thread_info["references"].append(msg_id)
             thread_info["message_id"] = msg_id
 
         try:
@@ -1798,7 +1881,7 @@ class EmailReporter:
         if driver is not None:
             from .driver import is_driver_alive
             if is_driver_alive(driver):
-                return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
+                return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue, thread_info=thread_info)
 
         # Fallback to SMTP if creds available
         if has_smtp_creds:
@@ -1812,6 +1895,7 @@ class EmailReporter:
                 password=smtp_pass,
                 sender_email=sender,
                 log_queue=log_queue,
+                thread_info=thread_info,
             )
 
         if log_queue:

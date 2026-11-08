@@ -1062,6 +1062,7 @@ class WatchingWorker:
         self.session_thread_url: Optional[str] = None
         self.session_thread_message_id: Optional[str] = None
         self.session_thread_info: Dict[str, Any] = {}
+        EmailReporter.reset_session_thread()
         self.reporting_driver: Optional[Any] = None
         self.reporting_thread: Optional[threading.Thread] = None
         self.has_started_browsing = False
@@ -5251,7 +5252,12 @@ class WatchingWorker:
 
             # Deliver session report via the persistent headless browser parked on the email thread
             # ONLY if browsing successfully started and was not aborted during setup/driver launch
-            if getattr(self, "has_started_browsing", False) and not getattr(self, "cycle_report_dispatched", False):
+            should_send_final_report = getattr(self, "has_started_browsing", False) and (
+                not getattr(self, "cycle_report_dispatched", False)
+                or self.stop_event.is_set()
+                or (session_status and session_status not in ("Completed", "Long Sleep (Night Mode)", "Short Sleep (Nap Mode)"))
+            )
+            if should_send_final_report:
                 self._send_session_report(status=session_status, error=session_err)
 
             # Wait briefly if background start notification thread is still finishing
@@ -5329,6 +5335,11 @@ class WatchingWorker:
                 thread_info=getattr(self, "session_thread_info", None),
                 driver=self.reporting_driver or self.driver,
             )
+            if getattr(self, "session_thread_info", None) and isinstance(self.session_thread_info, dict):
+                if self.session_thread_info.get("thread_url"):
+                    self.session_thread_url = self.session_thread_info["thread_url"]
+                if self.session_thread_info.get("message_id"):
+                    self.session_thread_message_id = self.session_thread_info["message_id"]
         except Exception as exc:
             logging.debug(f"Failed dispatching critical alert email: {exc}")
 
@@ -5381,8 +5392,10 @@ class WatchingWorker:
                 regular_videos_count=report_data.get("regular_videos_count", 0),
                 shorts_count=report_data.get("shorts_count", 0),
                 custom_subject=getattr(self, "session_thread_subject", None),
-                thread_url=getattr(self, "session_thread_url", None),
-                thread_message_id=getattr(self, "session_thread_message_id", None),
+                thread_url=getattr(self, "session_thread_url", None) or (self.session_thread_info.get("thread_url") if getattr(self, "session_thread_info", None) else None),
+                thread_message_id=getattr(self, "session_thread_message_id", None) or (self.session_thread_info.get("message_id") if getattr(self, "session_thread_info", None) else None),
+                thread_references=list(self.session_thread_info.get("references", [])) if getattr(self, "session_thread_info", None) else None,
+                root_message_id=self.session_thread_info.get("root_message_id") if getattr(self, "session_thread_info", None) else None,
                 suggested_videos_count=report_data.get("suggested_videos_count", 0),
                 search_videos_count=report_data.get("search_videos_count", 0),
                 home_videos_count=report_data.get("home_videos_count", 0),
