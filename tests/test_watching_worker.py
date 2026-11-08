@@ -1000,8 +1000,15 @@ class TestDashboardButtonsAndState:
             # Test running state: watching mode
             view.set_running_state(True, mode="watching")
             view.start_btn.configure.assert_called_with(state="disabled", cursor="arrow")
-            view.start_watching_btn.configure.assert_called_with(state="disabled", cursor="arrow")
-            view.stop_btn.configure.assert_called_with(state="normal", text="⏹ Stop Browsing", cursor="hand2")
+            view.start_watching_btn.configure.assert_called_with(
+                state="normal",
+                text="⏸ Pause",
+                cursor="hand2",
+                style="AppleWarning.TButton",
+                fg_color="#D97706",
+                hover_color="#B45309",
+            )
+            view.stop_btn.configure.assert_called_with(state="normal", text="⏹ Stop", cursor="hand2")
             view.pause_btn.configure.assert_called_with(state="normal", text="⏸ Pause", cursor="hand2", fg_color="#D97706", hover_color="#B45309")
 
             # Test pause toggling
@@ -1013,7 +1020,14 @@ class TestDashboardButtonsAndState:
             # Test idle state
             view.set_running_state(False)
             view.start_btn.configure.assert_called_with(state="normal", cursor="hand2")
-            view.start_watching_btn.configure.assert_called_with(state="normal", cursor="hand2")
+            view.start_watching_btn.configure.assert_called_with(
+                state="normal",
+                text="▶ Start Browsing",
+                cursor="hand2",
+                style="ApplePrimary.TButton",
+                fg_color="#2563EB",
+                hover_color="#1D4ED8",
+            )
             view.stop_btn.configure.assert_called_with(state="disabled", text="⏹ Stop", cursor="arrow")
             view.pause_btn.configure.assert_called_with(state="disabled", text="⏸ Pause", cursor="arrow", fg_color="#D97706")
 

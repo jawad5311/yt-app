@@ -9,19 +9,18 @@ from src.ui.views.dashboard_view import DashboardView
 
 
 @pytest.fixture
-def tk_root():
-    root = tk.Tk()
-    root.withdraw()
-    setup_ttk_styles(root, mode="Dark")
-    yield root
-    try:
-        root.destroy()
-    except Exception:
-        pass
+def tk_root(ctk_app):
+    setup_ttk_styles(ctk_app, mode="Dark")
+    for child in list(ctk_app.winfo_children()):
+        try:
+            child.destroy()
+        except Exception:
+            pass
+    yield ctk_app
 
 
 def test_dashboard_buttons_idle_state_clickability(tk_root):
-    """When browsing has not started, only Start Browsing is clickable, and Stop/Pause are unclickable."""
+    """When browsing has not started, unified Start Browsing is clickable, and Stop is unclickable."""
     controller = MagicMock()
     controller.is_running = False
     controller.config_mgr.get_int.return_value = 1
@@ -29,7 +28,7 @@ def test_dashboard_buttons_idle_state_clickability(tk_root):
 
     view = DashboardView(tk_root, controller)
 
-    # 1. Verify Start Browsing is enabled and clickable
+    # 1. Verify unified Start Browsing is enabled and clickable
     assert str(view.start_watching_btn.cget("state")) == "normal"
     assert view.start_watching_btn.cget("cursor") == "hand2"
     assert "Start Browsing" in view.start_watching_btn.cget("text")
@@ -38,21 +37,14 @@ def test_dashboard_buttons_idle_state_clickability(tk_root):
     assert str(view.stop_btn.cget("state")) == "disabled"
     assert view.stop_btn.cget("cursor") == "arrow"
 
-    # 3. Verify Pause is disabled and unclickable
-    assert str(view.pause_btn.cget("state")) == "disabled"
-    assert view.pause_btn.cget("cursor") == "arrow"
-
-    # 4. Triggering Stop or Pause while idle must do nothing
+    # 3. Triggering Stop while idle must do nothing
     view.stop_btn.invoke()
     controller.stop_automation.assert_not_called()
     assert getattr(view.stop_btn, "_feedback_timer_id", None) is None
 
-    view.pause_btn.invoke()
-    controller.toggle_pause_watching.assert_not_called()
-
 
 def test_dashboard_buttons_running_state_transitions(tk_root):
-    """When browsing starts, Start Browsing becomes unclickable, while Stop and Pause become clickable."""
+    """When browsing starts, unified button switches to Pause, and Stop becomes clickable."""
     controller = MagicMock()
     controller.is_running = False
     controller.config_mgr.get_int.return_value = 1
@@ -69,23 +61,26 @@ def test_dashboard_buttons_running_state_transitions(tk_root):
     view.start_watching_btn.invoke()
     controller.start_watching.assert_called_once()
 
-    # Now in running state
-    assert str(view.start_watching_btn.cget("state")) == "disabled"
-    assert view.start_watching_btn.cget("cursor") == "arrow"
-    assert "Browsing started" in view.start_watching_btn.cget("text")
+    # Now in running state: Unified button becomes Pause
+    assert str(view.start_watching_btn.cget("state")) == "normal"
+    assert view.start_watching_btn.cget("cursor") == "hand2"
+    assert "Pause" in view.start_watching_btn.cget("text")
 
     assert str(view.stop_btn.cget("state")) == "normal"
     assert view.stop_btn.cget("cursor") == "hand2"
     assert "Stop" in view.stop_btn.cget("text")
 
-    assert str(view.pause_btn.cget("state")) == "normal"
-    assert view.pause_btn.cget("cursor") == "hand2"
-    assert "Pause" in view.pause_btn.cget("text")
-
-    # Clicking Start Browsing while running must not re-trigger
-    controller.start_watching.reset_mock()
+    # Clicking unified button while running invokes toggle_pause_watching
     view.start_watching_btn.invoke()
-    controller.start_watching.assert_not_called()
+    controller.toggle_pause_watching.assert_called_once()
+
+    # When paused, updates to Resume
+    view.set_paused_state(True)
+    assert view.start_watching_btn.cget("text") == "▶ Resume"
+
+    # When resumed, updates to Pause
+    view.set_paused_state(False)
+    assert view.start_watching_btn.cget("text") == "⏸ Pause"
 
     # Stop browsing returns to idle state
     view.set_running_state(False)
@@ -97,9 +92,6 @@ def test_dashboard_buttons_running_state_transitions(tk_root):
 
     assert str(view.stop_btn.cget("state")) == "disabled"
     assert view.stop_btn.cget("cursor") == "arrow"
-
-    assert str(view.pause_btn.cget("state")) == "disabled"
-    assert view.pause_btn.cget("cursor") == "arrow"
 
 
 def test_apple_button_disabled_styles_lookup(tk_root):
@@ -126,3 +118,27 @@ def test_apple_button_disabled_styles_lookup(tk_root):
         assert disabled_bg != normal_bg
         assert disabled_bg == "#e5e5ea"
         assert disabled_fg == "#aeaeb2"
+
+
+def test_dashboard_buttons_normal_size_not_stretched(tk_root):
+    """Verify that Start Browsing and Stop buttons have normal dimensions and are not stretched out."""
+    controller = MagicMock()
+    controller.is_running = False
+    controller.config_mgr = MagicMock()
+    controller.config_mgr.get_int.return_value = 1
+    controller.stats_store = MagicMock()
+    controller.stats_store.lifetime_totals.return_value = MagicMock(watch_seconds=0)
+
+    tk_root.geometry("1180x740")
+    view = DashboardView(tk_root, controller)
+    view.pack(fill="both", expand=True)
+    tk_root.update()
+
+    start_w = view.start_watching_btn.winfo_width()
+    stop_w = view.stop_btn.winfo_width()
+
+    # Normal buttons are around 150-200px, not 400px-600px stretched across the card
+    assert 100 <= start_w <= 220, f"Start button width {start_w} is not a normal button size"
+    assert 100 <= stop_w <= 220, f"Stop button width {stop_w} is not a normal button size"
+
+    view.destroy()

@@ -7,15 +7,14 @@ from src.ui.views.dashboard_view import DashboardView
 
 
 @pytest.fixture
-def tk_root():
-    root = tk.Tk()
-    root.withdraw()
-    setup_ttk_styles(root, mode="Dark")
-    yield root
-    try:
-        root.destroy()
-    except Exception:
-        pass
+def tk_root(ctk_app):
+    setup_ttk_styles(ctk_app, mode="Dark")
+    for child in list(ctk_app.winfo_children()):
+        try:
+            child.destroy()
+        except Exception:
+            pass
+    yield ctk_app
 
 
 def test_apple_ui_styles_registered(tk_root):
@@ -70,7 +69,6 @@ def test_dashboard_view_apple_layout_and_widget_structure(tk_root):
     # 5. Buttons with Apple styles
     assert "ApplePrimary" in view.start_watching_btn.cget("style")
     assert "AppleDanger" in view.stop_btn.cget("style")
-    assert "AppleWarning" in view.pause_btn.cget("style")
 
     # 6. Progress bar
     assert "Apple" in view.progress_bar.cget("style")
@@ -87,34 +85,34 @@ def test_dashboard_apple_view_state_transitions(tk_root):
     assert view.system_pill_text.cget("text") == "System Ready"
     assert view.card_status.cget("text") == "Idle"
     assert str(view.start_watching_btn.cget("state")) == "normal"
+    assert view.start_watching_btn.cget("text") == "▶ Start Browsing"
     assert str(view.stop_btn.cget("state")) == "disabled"
-    assert str(view.pause_btn.cget("state")) == "disabled"
 
     # Transition to Running
     view.set_running_state(True)
-    assert str(view.start_watching_btn.cget("state")) == "disabled"
+    assert str(view.start_watching_btn.cget("state")) == "normal"
+    assert view.start_watching_btn.cget("text") == "⏸ Pause"
     assert str(view.stop_btn.cget("state")) == "normal"
-    assert str(view.pause_btn.cget("state")) == "normal"
     assert view.card_status.cget("text") == "Browsing"
     assert view.system_pill_text.cget("text") == "Browsing Active"
 
     # Transition to Paused
     view.set_paused_state(True)
-    assert view.pause_btn.cget("text") == "▶ Resume"
+    assert view.start_watching_btn.cget("text") == "▶ Resume"
     assert view.card_status.cget("text") == "Paused"
     assert view.system_pill_text.cget("text") == "Session Paused"
 
     # Resume from Paused
     view.set_paused_state(False)
-    assert view.pause_btn.cget("text") == "⏸ Pause"
+    assert view.start_watching_btn.cget("text") == "⏸ Pause"
     assert view.card_status.cget("text") == "Browsing"
     assert view.system_pill_text.cget("text") == "Browsing Active"
 
     # Stop back to Idle
     view.set_running_state(False)
     assert str(view.start_watching_btn.cget("state")) == "normal"
+    assert view.start_watching_btn.cget("text") == "▶ Start Browsing"
     assert str(view.stop_btn.cget("state")) == "disabled"
-    assert str(view.pause_btn.cget("state")) == "disabled"
     assert view.card_status.cget("text") == "Idle"
     assert view.system_pill_text.cget("text") == "System Ready"
 
