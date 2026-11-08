@@ -242,3 +242,98 @@ def test_shorts_queue_sorting_and_card_display():
         stats_lbl_call = mock_label_cls.call_args_list[1]
         line3_text = stats_lbl_call[1].get("text")
         assert "watched · Last Played: Just now" in line3_text
+
+
+def test_default_sort_configuration():
+    assert QueueView.current_sort_key == "last_played"
+    assert QueueView.current_sort_reverse is True
+
+
+def test_default_sort_applied_on_initial_load_videos():
+    mock_app = MagicMock()
+    mock_app.config_mgr = MagicMock()
+    t1 = VideoTask(title="Played 10d ago", url="https://youtube.com/watch?v=10d", is_short_override=False)
+    t2 = VideoTask(title="Played 1h ago", url="https://youtube.com/watch?v=1h", is_short_override=False)
+    t3 = VideoTask(title="Never Played", url="https://youtube.com/watch?v=never", is_short_override=False)
+    raw_tasks = [t1, t2, t3]
+    mock_app.queued_video_tasks = list(raw_tasks)
+    mock_app.config_mgr.get_channels.return_value = []
+
+    store = MagicMock()
+    store.find_for_task.side_effect = lambda t: {
+        "https://youtube.com/watch?v=10d": StatRecord(last_run="2026-10-25T10:00:00"),
+        "https://youtube.com/watch?v=1h": StatRecord(last_run="2026-11-04T10:00:00"),
+        "https://youtube.com/watch?v=never": StatRecord(last_run=""),
+    }.get(t.url)
+    mock_app.stats_store = store
+
+    view = QueueView.__new__(QueueView)
+    view.shorts_only = False
+    view.current_sort_key = "last_played"
+    view.current_sort_reverse = True
+    view.app_controller = mock_app
+    view._channels = MagicMock(return_value=[])
+    view._stats = MagicMock(return_value=store)
+    view.save_queue = MagicMock()
+    view.refresh_list = MagicMock()
+    view.sort_btn = MagicMock()
+    view.sort_dir_btn = MagicMock()
+
+    view.load_initial_queue()
+
+    # Regular videos should be sorted descending by last_played: 1h ago, 10d ago, Never
+    assert [t.title for t in view.video_tasks] == ["Played 1h ago", "Played 10d ago", "Never Played"]
+    assert view.current_sort_key == "last_played"
+    assert view.current_sort_reverse is True
+
+
+def test_default_sort_applied_on_initial_load_shorts():
+    mock_app = MagicMock()
+    mock_app.config_mgr = MagicMock()
+    s1 = VideoTask(title="Short Never", url="https://youtube.com/shorts/never", is_short_override=True)
+    s2 = VideoTask(title="Short Yesterday", url="https://youtube.com/shorts/yesterday", is_short_override=True)
+    s3 = VideoTask(title="Short Today", url="https://youtube.com/shorts/today", is_short_override=True)
+    raw_tasks = [s1, s2, s3]
+    mock_app.queued_video_tasks = list(raw_tasks)
+    mock_app.config_mgr.get_channels.return_value = []
+
+    store = MagicMock()
+    store.find_for_task.side_effect = lambda t: {
+        "https://youtube.com/shorts/never": StatRecord(last_run=""),
+        "https://youtube.com/shorts/yesterday": StatRecord(last_run="2026-11-03T10:00:00"),
+        "https://youtube.com/shorts/today": StatRecord(last_run="2026-11-04T10:00:00"),
+    }.get(t.url)
+    mock_app.stats_store = store
+
+    view = QueueView.__new__(QueueView)
+    view.shorts_only = True
+    view.current_sort_key = "last_played"
+    view.current_sort_reverse = True
+    view.app_controller = mock_app
+    view._channels = MagicMock(return_value=[])
+    view._stats = MagicMock(return_value=store)
+    view.save_queue = MagicMock()
+    view.refresh_list = MagicMock()
+    view.sort_btn = MagicMock()
+    view.sort_dir_btn = MagicMock()
+
+    view.load_initial_queue()
+
+    # Shorts should be sorted descending by last_played: Today, Yesterday, Never
+    assert [t.title for t in view.video_tasks] == ["Short Today", "Short Yesterday", "Short Never"]
+    assert view.current_sort_key == "last_played"
+    assert view.current_sort_reverse is True
+
+
+def test_default_sort_buttons_visual_state():
+    view = QueueView.__new__(QueueView)
+    view.shorts_only = False
+    view.current_sort_key = "last_played"
+    view.current_sort_reverse = True
+    view.sort_btn = MagicMock()
+    view.sort_dir_btn = MagicMock()
+
+    view._update_sort_buttons()
+
+    view.sort_btn.configure.assert_called_with(text="Sort: Recently Played ↓ ▾", fg_color="#2563EB")
+    view.sort_dir_btn.configure.assert_called_with(text="↓")

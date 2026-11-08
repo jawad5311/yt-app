@@ -173,6 +173,8 @@ def _get_cfg_float(mgr: Any, key: str, default: float) -> float:
 
 class QueueView(Frame):
     shorts_only: bool = False
+    current_sort_key: Optional[str] = "last_played"
+    current_sort_reverse: bool = True
 
     @property
     def config_mgr(self) -> Any:
@@ -187,7 +189,7 @@ class QueueView(Frame):
         self._pending_card_queue: List[Any] = []
         self._render_job: Optional[str] = None
         self._loading_indicator: Optional[Any] = None
-        self.current_sort_key: Optional[str] = None
+        self.current_sort_key: Optional[str] = "last_played"
         self.current_sort_reverse: bool = True
         self._original_task_order: List[str] = []
 
@@ -278,6 +280,7 @@ class QueueView(Frame):
             self.sort_dir_btn,
             "Reverse sort direction (Ascending / Descending).",
         )
+        self._update_sort_buttons()
 
         reset_btn = ctk.CTkButton(
             btn_frame,
@@ -461,14 +464,14 @@ class QueueView(Frame):
         self._update_sort_buttons()
         self.refresh_list()
 
-    def _apply_current_sort(self, save: bool = True):
-        if not self.current_sort_key or not self.video_tasks:
+    def _apply_current_sort(self, save: bool = True, render: bool = True):
+        key = getattr(self, "current_sort_key", None)
+        if not key or not self.video_tasks:
             self._update_sort_buttons()
             return
 
         store = self._stats()
-        key = self.current_sort_key
-        rev = self.current_sort_reverse
+        rev = getattr(self, "current_sort_reverse", True)
 
         channels = self._channels()
         by_channel: Dict[str, List[VideoTask]] = {}
@@ -480,10 +483,13 @@ class QueueView(Frame):
         is_shorts = getattr(self, "shorts_only", False)
 
         def _sort_group(tasks: List[VideoTask]) -> List[VideoTask]:
-            matching = [t for t in tasks if (t.is_short if is_shorts else not t.is_short)]
-            non_matching = [t for t in tasks if not (t.is_short if is_shorts else not t.is_short)]
-            matching.sort(key=lambda t: _get_task_sort_val(t, key, store, reverse=rev), reverse=rev)
-            return matching + non_matching
+            matching_indices = [i for i, t in enumerate(tasks) if (t.is_short if is_shorts else not t.is_short)]
+            matching_tasks = [tasks[i] for i in matching_indices]
+            matching_tasks.sort(key=lambda t: _get_task_sort_val(t, key, store, reverse=rev), reverse=rev)
+            result = list(tasks)
+            for idx, task in zip(matching_indices, matching_tasks):
+                result[idx] = task
+            return result
 
         for ch in channels:
             if ch.name in by_channel:
@@ -494,10 +500,19 @@ class QueueView(Frame):
             sorted_tasks.extend(_sort_group(group_tasks))
 
         self.video_tasks = sorted_tasks
+        if hasattr(self, "app_controller") and self.app_controller is not None:
+            if hasattr(self.app_controller, "queued_video_tasks"):
+                self.app_controller.queued_video_tasks = sorted_tasks
+            views = getattr(self.app_controller, "views", {})
+            if isinstance(views, dict):
+                for v in views.values():
+                    if isinstance(v, QueueView) and v is not self:
+                        v.video_tasks = sorted_tasks
         if save:
             self.save_queue()
         self._update_sort_buttons()
-        self.refresh_list()
+        if render:
+            self.refresh_list()
 
     def load_initial_queue(self):
         cur_view = getattr(self.app_controller, "current_view_name", "")
@@ -507,14 +522,18 @@ class QueueView(Frame):
             self.video_tasks = self.app_controller.queued_video_tasks
             if not getattr(self, "_original_task_order", None):
                 self._original_task_order = [t.url or t.title for t in self.video_tasks]
-            if should_render:
+            if getattr(self, "current_sort_key", None) and self.video_tasks:
+                self._apply_current_sort(save=False, render=should_render)
+            elif should_render:
                 self.refresh_list()
             return
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
         if not getattr(self, "_original_task_order", None):
             self._original_task_order = [t.url or t.title for t in self.video_tasks]
-        if should_render:
+        if getattr(self, "current_sort_key", None) and self.video_tasks:
+            self._apply_current_sort(save=False, render=should_render)
+        elif should_render:
             self.refresh_list()
         self.app_controller.on_queue_changed(self.video_tasks)
 
