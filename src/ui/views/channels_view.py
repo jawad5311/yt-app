@@ -183,7 +183,7 @@ class ChannelsView(Frame):
         self.add_btn = ctk.CTkButton(
             btn_frame,
             text="+ Add Channel",
-            width=140,
+            width=150,
             font=ctk.CTkFont(weight="bold"),
         )
         self.add_btn.configure(
@@ -225,18 +225,18 @@ class ChannelsView(Frame):
             "Switch between Active tracked channels\nand Archived (paused) channels.",
         )
 
-        # Row 1: Sync Data All and Sync All Channels Shorts below
+        # Row 1: Sync All Content and Sync All Channels Shorts below
         sync_data_btn = ctk.CTkButton(
             btn_frame,
-            text="⚡ Sync Data All",
-            width=140,
+            text="⚡ Sync All Content",
+            width=150,
             fg_color="#2563EB",
             hover_color="#1D4ED8",
             font=ctk.CTkFont(weight="bold"),
         )
         self.sync_data_btn = sync_data_btn
         sync_data_btn.configure(
-            command=with_button_feedback(sync_data_btn, "Syncing Data", self.sync_data_all)
+            command=with_button_feedback(sync_data_btn, "Syncing Content...", self.sync_data_all)
         )
         sync_data_btn.grid(row=1, column=0, padx=(0, 10), pady=(2, 6), sticky="w")
         add_tooltip(
@@ -2393,14 +2393,157 @@ class ChannelsView(Frame):
         else:
             messagebox.showinfo("Notice", "This channel has no URL saved.")
 
-    def sync_data_all(self) -> None:
+    def _pre_check_channel_counts(self, channels_to_sync: List[Channel], check_shorts_only: bool = False) -> None:
+        """Perform a fast live pre-check to query real-time shorts and videos count for each channel without freezing the UI."""
+        config_mgr = getattr(self.app_controller, "config_mgr", None)
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        toast = None
+        lbl = None
+        prog = None
+        if hasattr(self, "winfo_exists") and self.winfo_exists() and hasattr(self, "winfo_ismapped") and self.winfo_ismapped():
+            try:
+                toast = ctk.CTkToplevel(self)
+                toast.title("Checking Channel Content...")
+                toast.geometry("380x130")
+                toast.attributes("-topmost", True)
+                lbl = ctk.CTkLabel(
+                    toast,
+                    text=f"Connecting to YouTube to check {len(channels_to_sync)} channels...",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    wraplength=340,
+                )
+                lbl.pack(pady=(20, 10))
+                prog = ctk.CTkProgressBar(toast, mode="indeterminate", width=280)
+                prog.pack(pady=(0, 10))
+                prog.start()
+                if hasattr(self, "update_idletasks"):
+                    self.update_idletasks()
+                if hasattr(self, "update"):
+                    self.update()
+            except Exception:
+                toast = None
+
+        def _check_channel(ch: Channel):
+            try:
+                res = fetch_channel_data(
+                    ch.url,
+                    video_limit=None,
+                    shorts_limit=None,
+                    config_mgr=config_mgr,
+                )
+                ts = getattr(res, "total_shorts", None)
+                if ts is not None and isinstance(ts, (int, float)):
+                    ch.total_shorts = int(ts)
+                tv = getattr(res, "total_videos", None)
+                if not check_shorts_only and tv is not None and isinstance(tv, (int, float)):
+                    ch.total_videos = int(tv)
+            except Exception:
+                pass
+
+        if channels_to_sync:
+            max_workers = min(8, len(channels_to_sync))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(_check_channel, ch) for ch in channels_to_sync]
+                completed = 0
+                while not all(f.done() for f in futures):
+                    done_cnt = sum(1 for f in futures if f.done())
+                    if done_cnt != completed and lbl is not None and toast is not None and self._widget_exists(toast):
+                        completed = done_cnt
+                        try:
+                            lbl.configure(text=f"Checking content on YouTube ({completed}/{len(channels_to_sync)} channels checked)...")
+                        except Exception:
+                            pass
+                    try:
+                        if hasattr(self, "update_idletasks"):
+                            self.update_idletasks()
+                        if hasattr(self, "update"):
+                            self.update()
+                    except Exception:
+                        pass
+                    time.sleep(0.02)
+                for f in futures:
+                    try:
+                        f.result()
+                    except Exception:
+                        pass
+
+        if toast is not None and self._widget_exists(toast):
+            try:
+                if prog is not None:
+                    prog.stop()
+                toast.destroy()
+            except Exception:
+                pass
+
+        try:
+            self.app_controller.config_mgr.set_channels([ch.to_dict() for ch in self.channels], preserve_counters=True)
+        except Exception:
+            pass
+
+    def sync_data_all(self, confirm: bool = True) -> None:
         """Sync new available videos and shorts for all configured channels directly into the queue."""
         channels_to_sync = [ch for ch in self.channels if ch.url and not ch.archived]
         if not channels_to_sync:
             channels_to_sync = [ch for ch in self.channels if ch.url]
         if not channels_to_sync:
-            messagebox.showinfo("Sync Data All", "No channels with URLs configured to sync.", parent=self)
+            messagebox.showinfo("Sync All Content", "No channels with URLs configured to sync.", parent=self)
             return
+
+        if confirm and hasattr(self, "_w") and hasattr(self, "tk"):
+            import math
+            # Perform live pre-check to query real-time content counts
+            self._pre_check_channel_counts(channels_to_sync, check_shorts_only=False)
+
+            total_vids = 0
+            total_shorts = 0
+            download_quota = 0
+            for ch in channels_to_sync:
+                try:
+                    raw_v = int(ch.total_videos) if ch.total_videos is not None else 0
+                except (TypeError, ValueError):
+                    raw_v = 0
+                v_cnt = max(0, raw_v)
+
+                try:
+                    raw_s = int(ch.total_shorts) if ch.total_shorts is not None else 0
+                except (TypeError, ValueError):
+                    raw_s = 0
+                s_cnt = max(0, raw_s)
+
+                ch_q = 0
+                if v_cnt > 0:
+                    ch_q += math.ceil(v_cnt / 50.0)
+                if s_cnt > 0:
+                    ch_q += math.ceil(s_cnt / 50.0)
+
+                total_vids += v_cnt
+                total_shorts += s_cnt
+                download_quota += ch_q
+
+            total_items = total_vids + total_shorts
+            n_ch = len(channels_to_sync)
+            ch_word = "channel" if n_ch == 1 else "channels"
+            ch_label = "Channel" if n_ch == 1 else "Channels"
+            msg = (
+                f"Ready to synchronize content across {n_ch} {ch_word}:\n\n"
+                f"• Up to {total_items:,} items found across {n_ch} {ch_label} ({total_vids:,} regular videos, {total_shorts:,} shorts).\n"
+                f"• Approximately {download_quota:,} YouTube API quota units will be consumed.\n\n"
+                f"Do you want to confirm and start fetching this content into your queue?"
+            )
+            if not show_themed_confirm_dialog(
+                self,
+                title="Confirm Sync All Content",
+                heading=f"Sync Content for {n_ch} {ch_word.capitalize()}?",
+                message=msg,
+                confirm_text="⚡ Sync Content",
+                cancel_text="Cancel",
+                confirm_color="#2563EB",
+                confirm_hover="#1D4ED8",
+                icon="⚡",
+            ):
+                return
 
         toast = ctk.CTkToplevel(self)
         toast.title("Syncing All Channels...")
@@ -2419,27 +2562,25 @@ class ChannelsView(Frame):
         prog.pack(pady=(0, 15))
         prog.start()
 
-        snapshots = [(ch, ch.name, ch.url, getattr(ch, "has_new_videos", False), getattr(ch, "has_new_shorts", False)) for ch in channels_to_sync]
+        snapshots = [(ch, ch.name, ch.url) for ch in channels_to_sync]
 
         config_mgr = getattr(self.app_controller, "config_mgr", None)
 
         def _bg_sync(report):
             results = []
-            for i, (ch, name, url, has_v, has_s) in enumerate(snapshots, 1):
-                report((i, name))
-                if has_v and not has_s:
-                    v_lim, s_lim = 50, None
-                elif has_s and not has_v:
-                    v_lim, s_lim = None, 50
-                else:
-                    v_lim, s_lim = 50, 50
+            for i, (ch, name, url) in enumerate(snapshots, 1):
+                report((i, name, "starting", 0))
+
+                def _prog(count, kind):
+                    report((i, name, kind, count))
 
                 try:
                     res = fetch_channel_data(
                         url,
-                        video_limit=v_lim,
-                        shorts_limit=s_lim,
+                        video_limit=0,
+                        shorts_limit=0,
                         config_mgr=config_mgr,
+                        progress_callback=_prog,
                     )
                     results.append((ch, res))
                 except Exception as exc:
@@ -2564,7 +2705,7 @@ class ChannelsView(Frame):
             added_shorts = sum(1 for t in all_added_tasks if "/shorts/" in (t.url or ""))
             added_vids = len(all_added_tasks) - added_shorts
 
-            msg = f"Sync Data All completed for {len(channels_to_sync)} channel(s):"
+            msg = f"Sync All Content completed for {len(channels_to_sync)} channel(s):"
             if all_added_tasks:
                 msg += f"\n• Added {len(all_added_tasks)} new item(s) to queue ({added_vids} video(s), {added_shorts} short(s))."
             else:
@@ -2572,11 +2713,20 @@ class ChannelsView(Frame):
             if total_updated > 0:
                 msg += f"\n• Updated metadata for {total_updated} existing item(s)."
 
-            messagebox.showinfo("Sync Data All Complete", msg, parent=self)
+            messagebox.showinfo("Sync All Content Complete", msg, parent=self)
 
         def _progress(data):
-            idx, name = data
-            lbl.configure(text=f"Syncing '{name}' ({idx}/{len(channels_to_sync)})...")
+            if isinstance(data, tuple) and len(data) == 4:
+                idx, name, kind, count = data
+                if kind == "starting":
+                    lbl.configure(text=f"Syncing '{name}' ({idx}/{len(channels_to_sync)})...")
+                elif kind == "shorts_count":
+                    lbl.configure(text=f"[{idx}/{len(channels_to_sync)}] Found {count} short(s) for '{name}'...")
+                elif count > 0:
+                    lbl.configure(text=f"[{idx}/{len(channels_to_sync)}] '{name}': fetched {count} {kind}...")
+            elif isinstance(data, tuple) and len(data) == 2:
+                idx, name = data
+                lbl.configure(text=f"Syncing '{name}' ({idx}/{len(channels_to_sync)})...")
 
         def _failed(exc):
             _close()
@@ -2591,7 +2741,7 @@ class ChannelsView(Frame):
             discard=_close,
         )
 
-    def sync_all_channels_shorts(self) -> None:
+    def sync_all_channels_shorts(self, confirm: bool = True) -> None:
         """Sync all available shorts across all configured channels directly into the queue."""
         for ch in self.channels:
             if not ch.url and ch.name:
@@ -2603,6 +2753,45 @@ class ChannelsView(Frame):
         if not channels_to_sync:
             messagebox.showinfo("Sync All Channels Shorts", "No channels with URLs configured to sync.", parent=self)
             return
+
+        if confirm and hasattr(self, "_w") and hasattr(self, "tk"):
+            import math
+            # Perform live pre-check to retrieve live shorts counts
+            self._pre_check_channel_counts(channels_to_sync, check_shorts_only=True)
+
+            total_shorts = 0
+            download_quota = 0
+            for ch in channels_to_sync:
+                try:
+                    s_cnt = int(ch.total_shorts) if ch.total_shorts is not None else 0
+                except (TypeError, ValueError):
+                    s_cnt = 0
+                total_shorts += s_cnt
+                if s_cnt > 0:
+                    download_quota += math.ceil(s_cnt / 50.0)
+
+            n_ch = len(channels_to_sync)
+            ch_word = "channel" if n_ch == 1 else "channels"
+
+            ch_label = "Channel" if n_ch == 1 else "Channels"
+            msg = (
+                f"Ready to synchronize all YouTube Shorts across {n_ch} {ch_word}:\n\n"
+                f"• {total_shorts:,} Shorts found across {n_ch} {ch_label}.\n"
+                f"• Approximately {download_quota:,} YouTube API quota units will be consumed.\n\n"
+                f"Do you want to confirm and start fetching all {total_shorts:,} shorts into your queue?"
+            )
+            if not show_themed_confirm_dialog(
+                self,
+                title="Confirm Sync All Channels Shorts",
+                heading=f"Sync All Shorts for {n_ch} {ch_word.capitalize()}?",
+                message=msg,
+                confirm_text="⚡ Sync Shorts",
+                cancel_text="Cancel",
+                confirm_color="#0284C7",
+                confirm_hover="#0369A1",
+                icon="⚡",
+            ):
+                return
 
         toast = ctk.CTkToplevel(self)
         toast.title("Syncing All Channels Shorts...")

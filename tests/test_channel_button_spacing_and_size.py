@@ -1,4 +1,4 @@
-"""Unit tests verifying Add Channel and Sync Data All buttons have identical length and proper spacing."""
+"""Unit tests verifying Add Channel and Sync All Content buttons have identical length and proper spacing."""
 import tkinter as tk
 from unittest.mock import MagicMock
 
@@ -23,7 +23,7 @@ def tk_root():
 
 
 def test_add_channel_and_sync_data_all_same_size_and_spacing(tk_root):
-    """Verify Add Channel and Sync Data All buttons have the same width and proper vertical spacing."""
+    """Verify Add Channel and Sync All Content buttons have the same width and proper vertical spacing."""
     app = MagicMock()
     app.current_view_name = "channels"
     app.appearance_mode = "Dark"
@@ -57,12 +57,12 @@ def test_add_channel_and_sync_data_all_same_size_and_spacing(tk_root):
             assert add_pady[0] >= 4, f"Expected top padding >= 4 on add_btn, got {add_pady[0]}"
             assert add_pady[1] >= 10, f"Expected bottom padding >= 10 on add_btn, got {add_pady[1]}"
 
-        # Sync Data All should have spacing from Add Channel above
+        # Sync All Content should have spacing from Add Channel above
         sync_pady = sync_grid.get("pady", (0, 0))
         if isinstance(sync_pady, tuple):
             assert sync_pady[0] >= 2, f"Expected top padding >= 2 on sync_data_btn, got {sync_pady[0]}"
 
-        # Total vertical spacing between Add Channel and Sync Data All must be at least 12px
+        # Total vertical spacing between Add Channel and Sync All Content must be at least 12px
         total_v_gap = (add_pady[1] if isinstance(add_pady, tuple) else int(add_pady)) + \
                       (sync_pady[0] if isinstance(sync_pady, tuple) else int(sync_pady))
         assert total_v_gap >= 12, f"Expected vertical gap >= 12px between buttons, got {total_v_gap}px"

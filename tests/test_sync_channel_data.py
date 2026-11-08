@@ -1,6 +1,6 @@
 """Unit tests for Check New button, New Videos/Shorts badge detection, and Sync Data logic."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import customtkinter as ctk
 
@@ -291,7 +291,7 @@ def test_channels_view_has_sync_data_all_button(ctk_app):
                 if isinstance(child, ctk.CTkButton):
                     buttons.append(child.cget("text"))
 
-    assert "⚡ Sync Data All" in buttons
+    assert "⚡ Sync All Content" in buttons
     assert "🔍 Check New" in buttons
     assert "+ Add Channel" in buttons
 
@@ -328,7 +328,8 @@ def test_sync_data_all_syncs_all_channels(ctk_app):
 
     app.config_mgr.append_video_tasks.side_effect = lambda tasks, deduplicate=True: tasks
 
-    with patch("src.ui.views.channels_view.fetch_channel_data", side_effect=_fetch_side_effect) as mock_fetch, \
+    with patch("src.ui.views.channels_view.show_themed_confirm_dialog", return_value=True), \
+         patch("src.ui.views.channels_view.fetch_channel_data", side_effect=_fetch_side_effect) as mock_fetch, \
          patch("src.ui.views.channels_view.messagebox.showinfo"):
         view.sync_data_all()
 
@@ -336,11 +337,10 @@ def test_sync_data_all_syncs_all_channels(ctk_app):
         time.sleep(0.1)
         app.background_jobs.drain()
 
-        assert mock_fetch.call_count == 2
-        # ch1 only has new videos: video_limit=50, shorts_limit=None
-        mock_fetch.assert_any_call(ch1.url, video_limit=50, shorts_limit=None, config_mgr=app.config_mgr)
-        # ch2 only has new shorts: video_limit=None, shorts_limit=50
-        mock_fetch.assert_any_call(ch2.url, video_limit=None, shorts_limit=50, config_mgr=app.config_mgr)
+        # 2 calls for live pre-check + 2 calls for actual sync (uncapped: video_limit=0, shorts_limit=0)
+        assert mock_fetch.call_count == 4
+        mock_fetch.assert_any_call(ch1.url, video_limit=0, shorts_limit=0, config_mgr=app.config_mgr, progress_callback=ANY)
+        mock_fetch.assert_any_call(ch2.url, video_limit=0, shorts_limit=0, config_mgr=app.config_mgr, progress_callback=ANY)
 
     app.config_mgr.append_video_tasks.assert_called_once()
     appended = app.config_mgr.append_video_tasks.call_args[0][0]

@@ -286,7 +286,8 @@ def test_sync_all_channels_shorts_execution_syncs_all_channel_shorts(ctk_app):
         assert kwargs.get("shorts_limit") == 0
         return fetch_map[url]
 
-    with patch("src.ui.views.channels_view.fetch_channel_data", side_effect=mock_fetch), \
+    with patch("src.ui.views.channels_view.show_themed_confirm_dialog", return_value=True), \
+         patch("src.ui.views.channels_view.fetch_channel_data", side_effect=mock_fetch), \
          patch("tkinter.messagebox.showinfo") as mock_info:
         view.sync_all_channels_shorts()
         app.background_jobs.drain()
