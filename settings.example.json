@@ -26,7 +26,8 @@
     "AdjustQuality": true,
     "QualityLevel": "360p",
     "RandomMicroPauses": true,
-    "NonTargetShortsLimit": 5
+    "NonTargetShortsLimit": 5,
+    "FullscreenTheaterMode": true
   },
   "accounts": [],
   "videos": [],

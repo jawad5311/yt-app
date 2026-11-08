@@ -11,7 +11,7 @@ from ..models.watch_stats import WatchResult
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .ads import PLAYER_STATE_JS, AdWatchState
-from .interactivity import HumanInteractivitySimulator, like_active_short
+from .interactivity import HumanInteractivitySimulator, exit_fullscreen_mode, is_in_fullscreen, like_active_short
 from .playback_meter import PlaybackMeter
 
 # Abort the watch loop when no <video> element is present for this many seconds.
@@ -684,6 +684,7 @@ def watch_video(
         quality_chance=cfg.get("quality_chance", 0.85),
         caption_chance=cfg.get("caption_chance", 0.65),
         pause_chance=cfg.get("pause_chance", 0.40),
+        fullscreen_theater_mode=cfg.get("fullscreen_theater_mode", True),
     )
 
     initial_video_id: Optional[str] = None
@@ -726,6 +727,11 @@ def watch_video(
         interrupted: bool = False,
         playback_finished: bool = False,
     ) -> WatchResult:
+        if is_in_fullscreen(driver):
+            try:
+                exit_fullscreen_mode(driver, log_queue=log_queue)
+            except Exception:
+                pass
         return WatchResult(
             completed=completed,
             interrupted=interrupted,
@@ -1017,17 +1023,29 @@ def watch_video(
         if now - last_heartbeat_log >= 60.0:
             last_heartbeat_log = now
 
-        effective_buffer = calculate_end_buffer(video_duration, target_buffer)
-        threshold_time = video_duration - effective_buffer
-        if completion_ratio is not None and completion_ratio > 0:
-            threshold_time = min(threshold_time, video_duration * min(1.0, completion_ratio))
+        if simulator.fullscreen_theater_mode and video_duration > 0:
+            threshold_time = min(video_duration * 0.94, max(0.0, video_duration - 1.0))
+            if completion_ratio is not None and completion_ratio > 0:
+                threshold_time = min(threshold_time, video_duration * min(1.0, completion_ratio))
+        else:
+            effective_buffer = calculate_end_buffer(video_duration, target_buffer)
+            threshold_time = video_duration - effective_buffer
+            if completion_ratio is not None and completion_ratio > 0:
+                threshold_time = min(threshold_time, video_duration * min(1.0, completion_ratio))
         if is_full_mode and video_duration > 0 and logged_cutoff != threshold_time:
             logged_cutoff = threshold_time
-            emit(
-                log_queue,
-                f"Full-video cutoff: {_format_clock(threshold_time)} / {_format_clock(video_duration)} "
-                f"(stop buffer: {effective_buffer:g}s).",
-            )
+            if simulator.fullscreen_theater_mode:
+                emit(
+                    log_queue,
+                    f"Full-video cutoff: {_format_clock(threshold_time)} / {_format_clock(video_duration)} "
+                    f"(target progress: 94%).",
+                )
+            else:
+                emit(
+                    log_queue,
+                    f"Full-video cutoff: {_format_clock(threshold_time)} / {_format_clock(video_duration)} "
+                    f"(stop buffer: {effective_buffer:g}s).",
+                )
 
         if ended:
             return _result(True, "ended", playback_finished=True)
@@ -1082,6 +1100,9 @@ def watch_video(
         if interactive_event.get("micro_paused"):
             last_tick = time.monotonic()
             started_at += float(interactive_event["micro_paused"])
+
+        if is_full_mode and interactive_event.get("target_cutoff_reached"):
+            return _result(True, "completion_cutoff")
 
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Watchtime interrupted by user.")

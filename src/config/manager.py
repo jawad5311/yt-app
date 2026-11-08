@@ -198,6 +198,7 @@ class ConfigManager:
             "AdjustQuality": True,
             "QualityLevel": "360p",
             "RandomMicroPauses": True,
+            "FullscreenTheaterMode": True,
             "EmailReportingEnabled": True,
             "ReportRecipientEmail": "",
             "ReportEmailMethod": "Headless Browser Gmail (Recommended)",

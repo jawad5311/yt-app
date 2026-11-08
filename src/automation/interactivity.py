@@ -40,6 +40,133 @@ try {
 return ok;
 """
 
+ENTER_FULLSCREEN_JS = r"""
+return (function() {
+    try {
+        var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        var isFs = !!(document.fullscreenElement || (player && player.classList.contains('ytp-fullscreen')));
+        if (isFs) return { success: true, already: true, mode: 'fullscreen' };
+        
+        var btn = document.querySelector('button.ytp-fullscreen-button, .ytp-fullscreen-button');
+        if (btn) {
+            btn.click();
+            return { success: true, method: 'button_click', mode: 'fullscreen' };
+        }
+        if (player) {
+            var ev = new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', keyCode: 70, which: 70, bubbles: true });
+            player.dispatchEvent(ev);
+            return { success: true, method: 'key_f', mode: 'fullscreen' };
+        }
+        return { success: false, reason: 'no_player_or_button' };
+    } catch(e) {
+        return { success: false, error: e.toString() };
+    }
+})();
+"""
+
+EXIT_FULLSCREEN_JS = r"""
+return (function() {
+    try {
+        var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        var isFs = !!(document.fullscreenElement || (player && player.classList.contains('ytp-fullscreen')));
+        if (!isFs) return { success: true, already: true, mode: 'standard' };
+
+        if (document.fullscreenElement) {
+            if (document.exitFullscreen) document.exitFullscreen();
+            else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        }
+
+        var btn = document.querySelector('button.ytp-fullscreen-button, .ytp-fullscreen-button');
+        if (btn && (player && player.classList.contains('ytp-fullscreen'))) {
+            btn.click();
+            return { success: true, method: 'button_click', mode: 'standard' };
+        }
+        if (player && player.classList.contains('ytp-fullscreen')) {
+            var evEsc = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true });
+            player.dispatchEvent(evEsc);
+            var evF = new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', keyCode: 70, which: 70, bubbles: true });
+            player.dispatchEvent(evF);
+            return { success: true, method: 'key_esc', mode: 'standard' };
+        }
+        return { success: true, method: 'exit_fullscreen', mode: 'standard' };
+    } catch(e) {
+        return { success: false, error: e.toString() };
+    }
+})();
+"""
+
+IS_FULLSCREEN_JS = r"""
+return (function() {
+    try {
+        var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        return !!(document.fullscreenElement || (player && player.classList.contains('ytp-fullscreen')));
+    } catch(e) {
+        return false;
+    }
+})();
+"""
+
+ENTER_THEATER_JS = r"""
+return (function() {
+    try {
+        var watchEl = document.querySelector('ytd-watch-flexy, ytd-watch-grid');
+        var isTheater = !!(watchEl && (watchEl.hasAttribute('theater') || watchEl.theater === true));
+        if (isTheater) return { success: true, already: true, mode: 'theater' };
+
+        var btn = document.querySelector('button.ytp-size-button, .ytp-size-button');
+        if (btn) {
+            btn.click();
+            return { success: true, method: 'button_click', mode: 'theater' };
+        }
+        var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        if (player) {
+            var ev = new KeyboardEvent('keydown', { key: 't', code: 'KeyT', keyCode: 84, which: 84, bubbles: true });
+            player.dispatchEvent(ev);
+            return { success: true, method: 'key_t', mode: 'theater' };
+        }
+        return { success: false, reason: 'no_player_or_button' };
+    } catch(e) {
+        return { success: false, error: e.toString() };
+    }
+})();
+"""
+
+EXIT_THEATER_JS = r"""
+return (function() {
+    try {
+        var watchEl = document.querySelector('ytd-watch-flexy, ytd-watch-grid');
+        var isTheater = !!(watchEl && (watchEl.hasAttribute('theater') || watchEl.theater === true));
+        if (!isTheater) return { success: true, already: true, mode: 'standard' };
+
+        var btn = document.querySelector('button.ytp-size-button, .ytp-size-button');
+        if (btn) {
+            btn.click();
+            return { success: true, method: 'button_click', mode: 'standard' };
+        }
+        var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        if (player) {
+            var ev = new KeyboardEvent('keydown', { key: 't', code: 'KeyT', keyCode: 84, which: 84, bubbles: true });
+            player.dispatchEvent(ev);
+            return { success: true, method: 'key_t', mode: 'standard' };
+        }
+        return { success: true, mode: 'standard' };
+    } catch(e) {
+        return { success: false, error: e.toString() };
+    }
+})();
+"""
+
+IS_THEATER_JS = r"""
+return (function() {
+    try {
+        var watchEl = document.querySelector('ytd-watch-flexy, ytd-watch-grid');
+        return !!(watchEl && (watchEl.hasAttribute('theater') || watchEl.theater === true));
+    } catch(e) {
+        return false;
+    }
+})();
+"""
+
 GET_SPEED_JS = """
 try {
     var player = document.getElementById('movie_player');
@@ -1086,6 +1213,104 @@ def simulate_micro_pause(
     return pause_duration
 
 
+def _format_time(seconds: float) -> str:
+    secs = int(max(0, seconds))
+    m, s = divmod(secs, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def is_in_fullscreen(driver: Any) -> bool:
+    """Check if YouTube player is currently in full screen mode."""
+    try:
+        return bool(driver.execute_script(IS_FULLSCREEN_JS))
+    except Exception:
+        return False
+
+
+def is_in_theater(driver: Any) -> bool:
+    """Check if YouTube watch page is currently in theater mode."""
+    try:
+        return bool(driver.execute_script(IS_THEATER_JS))
+    except Exception:
+        return False
+
+
+def enter_fullscreen_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
+    """Make the video full screen using YouTube player controls."""
+    try:
+        driver.execute_script(ENTER_FULLSCREEN_JS)
+        if not is_in_fullscreen(driver):
+            try:
+                from selenium.webdriver import ActionChains
+                from selenium.webdriver.common.by import By
+                btns = driver.find_elements(By.CSS_SELECTOR, "button.ytp-fullscreen-button, .ytp-fullscreen-button")
+                if btns and btns[0].is_displayed():
+                    ActionChains(driver).move_to_element(btns[0]).click().perform()
+                else:
+                    ActionChains(driver).send_keys("f").perform()
+            except Exception:
+                pass
+        emit(log_queue, "Natural interaction: switched video to full screen mode.")
+        return True
+    except Exception as exc:
+        logging.debug(f"Could not enter full screen: {exc}")
+        return False
+
+
+def exit_fullscreen_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
+    """Exit full screen mode back to standard view."""
+    try:
+        driver.execute_script(EXIT_FULLSCREEN_JS)
+        if is_in_fullscreen(driver):
+            try:
+                from selenium.webdriver import ActionChains
+                from selenium.webdriver.common.keys import Keys
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            except Exception:
+                pass
+        emit(log_queue, "Natural interaction: exited full screen mode.")
+        return True
+    except Exception as exc:
+        logging.debug(f"Could not exit full screen: {exc}")
+        return False
+
+
+def enter_theater_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
+    """Switch video to theater mode using YouTube controls."""
+    try:
+        driver.execute_script(ENTER_THEATER_JS)
+        if not is_in_theater(driver):
+            try:
+                from selenium.webdriver import ActionChains
+                from selenium.webdriver.common.by import By
+                btns = driver.find_elements(By.CSS_SELECTOR, "button.ytp-size-button, .ytp-size-button")
+                if btns and btns[0].is_displayed():
+                    ActionChains(driver).move_to_element(btns[0]).click().perform()
+                else:
+                    ActionChains(driver).send_keys("t").perform()
+            except Exception:
+                pass
+        emit(log_queue, "Natural interaction: switched video to theater mode.")
+        return True
+    except Exception as exc:
+        logging.debug(f"Could not enter theater mode: {exc}")
+        return False
+
+
+def exit_theater_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
+    """Exit theater mode back to standard view."""
+    try:
+        driver.execute_script(EXIT_THEATER_JS)
+        emit(log_queue, "Natural interaction: exited theater mode.")
+        return True
+    except Exception as exc:
+        logging.debug(f"Could not exit theater mode: {exc}")
+        return False
+
+
 class HumanInteractivitySimulator:
     """Orchestrates natural human-like interactivity during video playback."""
 
@@ -1105,6 +1330,10 @@ class HumanInteractivitySimulator:
         quality_chance: float = 0.85,
         caption_chance: float = 0.65,
         pause_chance: float = 0.40,
+        fullscreen_theater_mode: bool = True,
+        fullscreen_chance: float = 0.75,
+        cutoff_progress: float = 0.94,
+        screen_mode_enter_delay: Optional[float] = None,
     ):
         self.enabled = enabled
         self.scroll_comments = scroll_comments
@@ -1120,6 +1349,14 @@ class HumanInteractivitySimulator:
         self.quality_chance = quality_chance
         self.caption_chance = caption_chance
         self.pause_chance = pause_chance
+        self.fullscreen_theater_mode = bool(enabled and fullscreen_theater_mode)
+        self.fullscreen_chance = fullscreen_chance
+        self.cutoff_progress = cutoff_progress
+        self.screen_mode_enter_delay = screen_mode_enter_delay
+        self.screen_mode_chosen: Optional[str] = None
+        self.screen_mode_entered: bool = False
+        self.screen_mode_exited: bool = False
+        self.screen_mode_enter_time: float = 0.0
 
         # Session state
         self.planned = False
@@ -1201,6 +1438,23 @@ class HumanInteractivitySimulator:
         # Randomize order: sometimes like video then comments, sometimes comments then video
         self.interaction_order = random.choice(["video_then_comments", "comments_then_video"])
 
+        # Fullscreen & Theater mode simulation
+        if self.fullscreen_theater_mode:
+            # Most videos in full screen (~75%), some in theater mode (~25%)
+            self.screen_mode_chosen = "fullscreen" if random.random() < self.fullscreen_chance else "theater"
+            enter_delay = (
+                self.screen_mode_enter_delay
+                if self.screen_mode_enter_delay is not None
+                else random.uniform(4.0, 7.0)
+            )
+            self.screen_mode_enter_time = min(enter_delay, max(2.0, effective_duration * 0.25))
+        else:
+            self.screen_mode_chosen = None
+            self.screen_mode_enter_time = 0.0
+
+        self.screen_mode_entered = False
+        self.screen_mode_exited = False
+
         # Closed captions
         self.will_toggle_captions = bool(self.toggle_captions and (random.random() < self.caption_chance))
         if self.will_toggle_captions:
@@ -1274,6 +1528,50 @@ class HumanInteractivitySimulator:
 
         if not self.planned:
             return result
+
+        # ---------------- Screen mode enter: Fullscreen (most) or Theater (some) -
+        if (
+            self.fullscreen_theater_mode
+            and self.screen_mode_chosen
+            and not self.screen_mode_entered
+            and not paused
+            and not is_ad
+            and curr_time >= self.screen_mode_enter_time
+        ):
+            if self.screen_mode_chosen == "fullscreen":
+                enter_fullscreen_mode(driver, log_queue=log_queue)
+            else:
+                enter_theater_mode(driver, log_queue=log_queue)
+            self.screen_mode_entered = True
+            result["screen_mode"] = self.screen_mode_chosen
+
+        # ---------------- Screen mode cutoff: Exit fullscreen at 94% -----------
+        if (
+            self.fullscreen_theater_mode
+            and not self.screen_mode_exited
+            and not paused
+            and not is_ad
+            and video_duration > 0
+            and (curr_time / video_duration) >= self.cutoff_progress
+        ):
+            if self.screen_mode_chosen == "fullscreen":
+                exit_fullscreen_mode(driver, log_queue=log_queue)
+                self.screen_mode_exited = True
+                result["screen_mode_exited"] = True
+                emit(
+                    log_queue,
+                    f"Video reached {int(self.cutoff_progress * 100)}% progress ({_format_time(curr_time)} / {_format_time(video_duration)}). "
+                    f"Exited full screen to standard mode to find next suggested video.",
+                )
+            elif self.screen_mode_chosen == "theater":
+                self.screen_mode_exited = True
+                result["screen_mode_exited"] = False
+                emit(
+                    log_queue,
+                    f"Video reached {int(self.cutoff_progress * 100)}% progress ({_format_time(curr_time)} / {_format_time(video_duration)}). "
+                    f"Remaining in theater mode to find next suggested video.",
+                )
+            result["target_cutoff_reached"] = True
 
         # ---------------- Early playback: Quality adjustment & 1x speed lock
         if curr_time >= 5.0 and not paused:

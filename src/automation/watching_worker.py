@@ -1133,6 +1133,7 @@ class WatchingWorker:
             "adjust_quality": self.config_mgr.get_bool("AdjustQuality", True),
             "quality_level": self.config_mgr.get_setting("QualityLevel", "360p"),
             "micro_pauses": self.config_mgr.get_bool("RandomMicroPauses", True),
+            "fullscreen_theater_mode": self.config_mgr.get_bool("FullscreenTheaterMode", True),
         }
         return enabled, config
 

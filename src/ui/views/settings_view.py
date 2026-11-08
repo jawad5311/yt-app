@@ -625,6 +625,22 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
+        self.screen_mode_switch = Switch(
+            scroll_interactivity,
+            text="Fullscreen & Theater Mode Simulation",
+        )
+        if self.config_mgr and self.config_mgr.get_bool("FullscreenTheaterMode", True):
+            self.screen_mode_switch.select()
+        else:
+            self.screen_mode_switch.deselect()
+        self.screen_mode_switch.pack(anchor="w", padx=15, pady=(5, 2))
+        Label(
+            scroll_interactivity,
+            text="Watches most videos in full screen and some in theater mode after start/ad skip; exits full screen at 94% progress to navigate suggested videos.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 15))
+
         self.scroll_switch = Switch(
             scroll_interactivity,
             text="Random In-Video Scrolling (simulates reading comments / related)",
@@ -1035,6 +1051,8 @@ class SettingsView(Frame):
 
         # 11. Interactivity switches
         validated["EnableHumanInteractivity"] = bool(self.interactivity_switch.get())
+        if hasattr(self, "screen_mode_switch"):
+            validated["FullscreenTheaterMode"] = bool(self.screen_mode_switch.get())
         validated["RandomScrolling"] = bool(self.scroll_switch.get())
         validated["VariableSpeed"] = False
         validated["ToggleCaptions"] = bool(self.caption_switch.get())
