@@ -29,6 +29,8 @@ from .views.dashboard_view import DashboardView
 from .views.logs_view import LogsView
 from .views.queue_view import QueueView
 from .views.settings_view import SettingsView
+from ..utils.quota_tracker import get_quota_tracker
+from .tooltip import add_tooltip
 
 
 class SessionEventQueue:
@@ -108,6 +110,10 @@ class YTBotApp(tk.Tk):
         self._report_finish_time: Optional[float] = None
         self.report_modal: Optional[Any] = None
         self._close_button_enabled: Optional[bool] = None
+        self._quota_check_job: Optional[str] = None
+        self._quota_tooltip: Optional[Any] = None
+        self.quota_tracker = get_quota_tracker()
+        self.quota_tracker.register_listener(self._on_quota_updated)
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -115,6 +121,7 @@ class YTBotApp(tk.Tk):
         self._poll_job = self.after(50, self._poll_log_queue)
         self.after(50, self.maximize_window)
         self.after(100, self._update_close_button_state)
+        self._poll_quota_clock()
 
         # Pre-load accounts fallback if saved list is empty and accounts.txt exists
         if not self.loaded_accounts:
@@ -228,6 +235,55 @@ class YTBotApp(tk.Tk):
         self.update_dashboard_stats()
         self.refresh_watch_stats()
 
+        # Daily YouTube API Quota badge under the minimize button
+        self.quota_label = ttk.Label(
+            self,
+            text=f"Today's Quota: {self.quota_tracker.get_used():,}",
+            style="QuotaBadge.TLabel",
+            cursor="arrow",
+        )
+        self.quota_label.place(relx=1.0, x=-115, y=7, anchor="n")
+        self.quota_label.lift()
+        self._quota_tooltip = add_tooltip(
+            self.quota_label,
+            f"YouTube Data API quota used today ({self.quota_tracker.get_date()}): {self.quota_tracker.get_used():,} units.\nResets automatically when a new day starts.",
+        )
+
+    def _poll_quota_clock(self) -> None:
+        """Periodic check (every 1s) to detect system clock calendar day change and reset quota."""
+        if self.is_closing:
+            return
+        try:
+            self.quota_tracker.check_day_rollover()
+        except Exception as exc:
+            logging.getLogger("views_app").debug("Error in quota day rollover check: %s", exc)
+        finally:
+            if not self.is_closing:
+                self._quota_check_job = self.after(1000, self._poll_quota_clock)
+
+    def _on_quota_updated(self, used: int) -> None:
+        """Thread-safe callback from QuotaTracker on quota increments or day rollovers."""
+        try:
+            self.after(0, self._render_quota, used)
+        except Exception:
+            pass
+
+    def _render_quota(self, used: int) -> None:
+        """Update the quota label display and its tooltip."""
+        if not hasattr(self, "quota_label") or not self.quota_label:
+            return
+        try:
+            self.quota_label.configure(text=f"Today's Quota: {used:,}")
+            self.quota_label.lift()
+            if getattr(self, "_quota_tooltip", None):
+                today_str = self.quota_tracker.get_date()
+                self._quota_tooltip.text = (
+                    f"YouTube Data API quota used today ({today_str}): {used:,} units.\n"
+                    f"Resets automatically when a new day starts."
+                )
+        except Exception:
+            pass
+
     def get_runnable_video_count(self) -> int:
         """Count only the enabled, runnable video tasks that will be processed by automation."""
         channels = (
@@ -324,6 +380,8 @@ class YTBotApp(tk.Tk):
             else:
                 if view_name in self.nav_buttons:
                     self.nav_buttons[view_name].configure(style="Nav.TButton")
+        if hasattr(self, "quota_label") and self.quota_label:
+            self.quota_label.lift()
 
     def apply_appearance_mode(self, mode: str, persist: bool = True) -> None:
         """Apply and remember the appearance mode (Dark / Light / System)."""
@@ -343,6 +401,12 @@ class YTBotApp(tk.Tk):
             self.configure(background=colors["bg"])
         except Exception:
             pass
+
+        if hasattr(self, "quota_label") and self.quota_label:
+            try:
+                self.quota_label.configure(style="QuotaBadge.TLabel")
+            except Exception:
+                pass
 
         # Update all active ScrollableFrames and Switches
         try:
@@ -1148,6 +1212,17 @@ class YTBotApp(tk.Tk):
             except Exception:
                 pass
             self._close_check_job = None
+        if self.__dict__.get("_quota_check_job", None) is not None:
+            try:
+                self.after_cancel(self._quota_check_job)
+            except Exception:
+                pass
+            self._quota_check_job = None
+        if hasattr(self, "quota_tracker") and self.quota_tracker:
+            try:
+                self.quota_tracker.unregister_listener(self._on_quota_updated)
+            except Exception:
+                pass
 
     def is_any_task_running(self) -> bool:
         """Check whether any worker, browsing session, background job, or email report is active."""

@@ -733,6 +733,7 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
     style.configure("AppleCard.TLabel", background=apple["card_bg"], foreground=colors["fg"], font=(family, 9))
     style.configure("AppleCardMuted.TLabel", background=apple["card_bg"], foreground=apple["subtitle_fg"], font=(family, 8))
     style.configure("ApplePill.TLabel", background=apple["inset_bg"], foreground=apple["title_fg"], font=(family, 8, "bold"))
+    style.configure("QuotaBadge.TLabel", background=colors["bg"], foreground=apple["subtitle_fg"], font=(family, 8, "normal"))
 
     # Apple Buttons
     style.configure(

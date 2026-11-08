@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .helpers import extract_video_id
+from .quota_tracker import record_api_quota_usage
 
 
 @dataclass
@@ -616,6 +617,7 @@ def validate_youtube_api_key(api_key: str, timeout: int = 10) -> Tuple[bool, str
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status_code = getattr(resp, "status", 200)
             if status_code == 200:
+                record_api_quota_usage(1)
                 return True, "API key is valid and working."
             return False, f"Unexpected response status: {status_code}"
     except urllib.error.HTTPError as err:
@@ -719,6 +721,7 @@ def enrich_video_durations(
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
+            record_api_quota_usage(1)
             items = data.get("items", [])
             for item in items:
                 vid = item.get("id")
@@ -851,6 +854,7 @@ def get_playlist_total_results(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+            record_api_quota_usage(1)
             page_info = data.get("pageInfo", {})
             if "totalResults" in page_info:
                 return int(page_info["totalResults"])
@@ -908,6 +912,7 @@ def fetch_playlist_items_api(
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 page_data = json.loads(response.read().decode("utf-8"))
+                record_api_quota_usage(1)
                 if total_count is None:
                     p_info = page_data.get("pageInfo", {})
                     if "totalResults" in p_info:
@@ -1044,6 +1049,7 @@ def fetch_channel_data_api(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             meta_json = json.loads(response.read().decode("utf-8"))
+        record_api_quota_usage(1)
     except urllib.error.HTTPError as exc:
         err_msg = f"HTTP {exc.code}: {exc.reason}"
         try:

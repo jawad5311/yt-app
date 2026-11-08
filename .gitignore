@@ -54,6 +54,9 @@ settings.json
 # Per-video / per-channel watch statistics (created on first recorded run)
 stats.json
 
+# Daily API quota tracking state (created on first API use)
+quota.json
+
 # Configuration files with credentials and default accounts import (never commit)
 credentials.json
 accounts.txt
