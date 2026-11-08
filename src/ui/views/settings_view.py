@@ -124,14 +124,16 @@ class SettingsView(Frame):
         self.tabview.grid(row=1, column=0, padx=20, pady=(0, 10), sticky="nsew")
 
         tab_general = self.tabview.add("General")
-        tab_playback = self.tabview.add("Playback & Video")
-        # Compatibility alias for code checking "Playback & Queue"
-        self.tabview._tab_dict["Playback & Queue"] = tab_playback
-
+        tab_playback = self.tabview.add("Playback")
+        tab_video = self.tabview.add("Video")
         tab_shorts = self.tabview.add("Shorts")
         tab_ads = self.tabview.add("Ads")
         tab_interactivity = self.tabview.add("Interactivity")
         tab_email = self.tabview.add("Email & Reports")
+
+        # Compatibility aliases for code checking old tab names
+        self.tabview._tab_dict["Playback & Video"] = tab_playback
+        self.tabview._tab_dict["Playback & Queue"] = tab_playback
 
         # ---------------------------------------------------------
         # Tab 1: General
@@ -219,7 +221,7 @@ class SettingsView(Frame):
         self.youtube_api_key_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
-        # Tab 2: Playback & Video
+        # Tab 2: Playback
         # ---------------------------------------------------------
         scroll_playback = SmoothScrollableFrame(tab_playback)
         scroll_playback.pack(fill="both", expand=True, padx=5, pady=5)
@@ -276,58 +278,6 @@ class SettingsView(Frame):
         initial_buffer = self.config_mgr.get_int("AutoplayEndBufferSeconds", 0) if self.config_mgr else 0
         self.stop_buffer_entry.insert(0, str(initial_buffer))
         self.stop_buffer_entry.pack(anchor="w", padx=15, pady=(0, 15))
-
-        Label(scroll_playback, text="Video Rewatch Cooldown (hours; 0 = no cooldown):", font=Font(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
-        )
-        Label(
-            scroll_playback,
-            text="Hours before a completed video can run again. Decimal values like 1.5 are supported.",
-            font=Font(size=12),
-            style="Muted.TLabel",
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.cooldown_entry = Entry(scroll_playback, width=100)
-        cd_val = self.config_mgr.get_float("VideoCooldownHours", 0.0) if self.config_mgr else 0.0
-        self.cooldown_entry.insert(0, str(int(cd_val)) if cd_val.is_integer() else str(cd_val))
-        self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
-
-        Label(scroll_playback, text="Default Target Views per Video:", font=Font(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
-        )
-        Label(
-            scroll_playback,
-            text="Default target views / watch multiplier assigned to new long-form videos added to queue (0 = unlimited).",
-            font=Font(size=12),
-            style="Muted.TLabel",
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.default_video_views_entry = Entry(scroll_playback, width=100)
-        initial_video_views = (
-            self.config_mgr.get_float("DefaultVideoTargetViews", 3.0)
-            if self.config_mgr
-            else 3.0
-        )
-        self.default_video_views_entry.insert(
-            0, str(int(initial_video_views)) if initial_video_views.is_integer() else str(initial_video_views)
-        )
-        self.default_video_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
-
-        Label(scroll_playback, text="Default Max Views Cap per Video:", font=Font(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
-        )
-        Label(
-            scroll_playback,
-            text="Default max views cap assigned to new long-form videos added to queue (0 = unlimited).",
-            font=Font(size=12),
-            style="Muted.TLabel",
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.default_video_max_views_entry = Entry(scroll_playback, width=100)
-        initial_video_max = (
-            self.config_mgr.get_int("DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
-            if self.config_mgr
-            else DEFAULT_MAX_RUNS
-        )
-        self.default_video_max_views_entry.insert(0, str(initial_video_max))
-        self.default_video_max_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
         # Sleep Settings: Short Sleep / Nap & Long Sleep / Night
@@ -472,7 +422,65 @@ class SettingsView(Frame):
         self.night_duration_menu.pack(anchor="w", padx=25, pady=(0, 15))
 
         # ---------------------------------------------------------
-        # Tab 3: Shorts
+        # Tab 3: Video
+        # ---------------------------------------------------------
+        scroll_video = SmoothScrollableFrame(tab_video)
+        scroll_video.pack(fill="both", expand=True, padx=5, pady=5)
+
+        Label(scroll_video, text="Default Target Views per Video:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(10, 2)
+        )
+        Label(
+            scroll_video,
+            text="Default target views / watch multiplier assigned to new long-form videos added to queue (0 = unlimited).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.default_video_views_entry = Entry(scroll_video, width=100)
+        initial_video_views = (
+            self.config_mgr.get_float("DefaultVideoTargetViews", 3.0)
+            if self.config_mgr
+            else 3.0
+        )
+        self.default_video_views_entry.insert(
+            0, str(int(initial_video_views)) if initial_video_views.is_integer() else str(initial_video_views)
+        )
+        self.default_video_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_video, text="Default Max Views Cap per Video:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_video,
+            text="Default max views cap assigned to new long-form videos added to queue (0 = unlimited).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.default_video_max_views_entry = Entry(scroll_video, width=100)
+        initial_video_max = (
+            self.config_mgr.get_int("DefaultVideoMaxViews", DEFAULT_MAX_RUNS)
+            if self.config_mgr
+            else DEFAULT_MAX_RUNS
+        )
+        self.default_video_max_views_entry.insert(0, str(initial_video_max))
+        self.default_video_max_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_video, text="Video Rewatch Cooldown (hours; 0 = no cooldown):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_video,
+            text="Hours before a completed video can run again. Decimal values like 1.5 are supported.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.cooldown_entry = Entry(scroll_video, width=100)
+        cd_val = self.config_mgr.get_float("VideoCooldownHours", 0.0) if self.config_mgr else 0.0
+        self.cooldown_entry.insert(0, str(int(cd_val)) if cd_val.is_integer() else str(cd_val))
+        self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        # ---------------------------------------------------------
+        # Tab 4: Shorts
         # ---------------------------------------------------------
         scroll_shorts = SmoothScrollableFrame(tab_shorts)
         scroll_shorts.pack(fill="both", expand=True, padx=5, pady=5)
@@ -536,7 +544,7 @@ class SettingsView(Frame):
         self.default_shorts_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
-        # Tab 4: Ads
+        # Tab 5: Ads
         # ---------------------------------------------------------
         scroll_ads = SmoothScrollableFrame(tab_ads)
         scroll_ads.pack(fill="both", expand=True, padx=5, pady=5)
@@ -573,7 +581,7 @@ class SettingsView(Frame):
 
 
         # ---------------------------------------------------------
-        # Tab 5: Interactivity
+        # Tab 6: Interactivity
         # ---------------------------------------------------------
         scroll_interactivity = SmoothScrollableFrame(tab_interactivity)
         scroll_interactivity.pack(fill="both", expand=True, padx=5, pady=5)
@@ -675,7 +683,7 @@ class SettingsView(Frame):
         self.like_comments_switch.pack(anchor="w", padx=15, pady=(5, 15))
 
         # ---------------------------------------------------------
-        # Tab 6: Email & Reports
+        # Tab 7: Email & Reports
         # ---------------------------------------------------------
         scroll_email = SmoothScrollableFrame(tab_email)
         scroll_email.pack(fill="both", expand=True, padx=5, pady=5)
