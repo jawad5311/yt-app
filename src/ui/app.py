@@ -73,6 +73,7 @@ class YTBotApp(tk.Tk):
         self.title("YouTube Playback Automation Tool - V2.1 (Modular)")
         self.geometry("1180x740")
         self.minsize(1020, 620)
+        self.maximize_window()
 
         self.apply_appearance_mode(self.config_mgr.get_setting("AppearanceMode", "Dark"), persist=False)
 
@@ -112,6 +113,7 @@ class YTBotApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self._update_close_button_state()
         self._poll_job = self.after(50, self._poll_log_queue)
+        self.after(50, self.maximize_window)
         self.after(100, self._update_close_button_state)
 
         # Pre-load accounts fallback if saved list is empty and accounts.txt exists
@@ -1170,6 +1172,16 @@ class YTBotApp(tk.Tk):
         if getattr(self, "_close_button_enabled", None) is not should_enable:
             self._close_button_enabled = should_enable
             self._set_native_close_button_enabled(should_enable)
+
+    def maximize_window(self) -> None:
+        """Maximize the application window (like clicking the title bar maximize button)."""
+        try:
+            self.state("zoomed")
+        except Exception:
+            try:
+                self.attributes("-zoomed", True)
+            except Exception:
+                pass
 
     def _set_native_close_button_enabled(self, enabled: bool) -> None:
         """Gray out and disable, or re-enable the native Windows title bar close (X) button."""
