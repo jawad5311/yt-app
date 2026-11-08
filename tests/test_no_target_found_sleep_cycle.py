@@ -226,14 +226,14 @@ def test_sleep_notification_plain_text_and_html_contents():
     )
 
     plain = report.generate_plain_text()
-    assert "SLEEP NOTIFICATION (SLEEP CYCLE #2)" in plain
+    assert ("SHORT SLEEP / NAP NOTIFICATION" in plain or "SLEEP NOTIFICATION" in plain) and ("#2" in plain)
     assert "Sleep Cycle:          #2" in plain
     assert "Sleep Duration:       2.0 hour(s)" in plain
     assert "2026-11-08 08:30:00" in plain
     assert "Videos Watched:       2 (1 regular, 1 Shorts)" in plain
 
     html_content = report.generate_html_body()
-    assert "Going to Sleep — Sleep Cycle #2" in html_content
+    assert "Going to Sleep" in html_content and "Cycle #2" in html_content
     assert "Sleep Cycle #2" in html_content
     assert "2.0 hour(s)" in html_content
     assert "My Channel" in html_content

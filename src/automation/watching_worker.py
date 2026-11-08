@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from .email_reporter import EmailReporter, SessionReport
+from .night_sleep import NightSleepScheduler
 from .session_tracker import SessionChannelTracker
 
 """Watching Worker.
@@ -1067,6 +1068,8 @@ class WatchingWorker:
         self.is_sleeping: bool = False
         self.cycle_report_dispatched: bool = False
         self.sleep_cycle_count: int = 0
+        self.night_sleep_count: int = 0
+        self.night_scheduler = NightSleepScheduler(config_mgr=self.config_mgr)
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -4382,6 +4385,123 @@ class WatchingWorker:
             emit(self.log_queue, f"Notice during shorts search: {exc}", logging.DEBUG)
             return 0
 
+    def _check_and_enter_night_sleep(self, session_watched_keys: Set[str]) -> bool:
+        """Evaluate local system clock against night sleep settings and enter Long Sleep if triggered."""
+        if not hasattr(self, "night_scheduler") or not self.night_scheduler or not self.night_scheduler.is_enabled():
+            return False
+
+        sched = self.night_scheduler.evaluate()
+        if not sched.get("is_sleep_time"):
+            return False
+
+        return self._execute_night_sleep_cycle(sched, session_watched_keys)
+
+    def _execute_night_sleep_cycle(self, sched: Dict[str, Any], session_watched_keys: Set[str]) -> bool:
+        """Execute Long Sleep / Night Mode: closes browser, sends night notification, sleeps until morning, resets stats."""
+        if self.stop_event.is_set():
+            return False
+
+        self.night_sleep_count += 1
+        current_night_count = self.night_sleep_count
+        wake_up_time = sched["scheduled_sleep_end"]
+        sleep_duration_hours = sched.get("sleep_duration_hours", 8.0)
+        window_id = sched.get("window_id", "")
+
+        wake_str = wake_up_time.strftime("%I:%M %p")
+        emit(
+            self.log_queue,
+            f"🌙 [Night Mode] Scheduled nighttime sleep window reached! Entering Long Sleep for {sleep_duration_hours:.1f} hours (until {wake_str})...",
+            logging.INFO,
+        )
+        self._report_status(f"🌙 Night Mode: Sleeping until {wake_str}", "info")
+
+        # 1. Close main visible YouTube browser tab
+        if self.driver:
+            try:
+                emit(self.log_queue, "Closing YouTube browser session before Long Sleep...", logging.INFO)
+                close_driver(self.driver, log_queue=self.log_queue)
+            except Exception as e:
+                emit(self.log_queue, f"Notice while closing browser before night sleep: {e}", logging.DEBUG)
+            self.driver = None
+
+        # 2. Deliver session sleep notification report to email under the exact same session thread
+        try:
+            emit(
+                self.log_queue,
+                f"Sending Long Sleep / Night Mode notification email under thread '{self.session_thread_subject}'...",
+                logging.INFO,
+            )
+            self._send_session_report(
+                status="Long Sleep (Night Mode)",
+                is_sleep_notification=True,
+                sleep_mode_type="night",
+                sleep_cycle_number=current_night_count,
+                sleep_duration_hours=sleep_duration_hours,
+                wake_up_time=wake_up_time,
+            )
+            self.cycle_report_dispatched = True
+        except Exception as e:
+            emit(self.log_queue, f"Error sending night sleep notification email: {e}", logging.WARNING)
+
+        if getattr(self, "reporting_driver", None):
+            try:
+                close_driver(self.reporting_driver, log_queue=self.log_queue)
+            except Exception:
+                pass
+            self.reporting_driver = None
+
+        # 3. Enter interruptible sleep loop until wake_up_time
+        self.is_sleeping = True
+        emit(
+            self.log_queue,
+            f"Bot is now in Long Sleep / Night Mode until {wake_str} ({sleep_duration_hours:.1f} hours). YouTube tab is closed. The bot will automatically wake up and start daytime browsing with fresh stats.",
+            logging.INFO,
+        )
+
+        while not self.stop_event.is_set():
+            if datetime.now() >= wake_up_time:
+                break
+            time.sleep(0.5)
+
+        self.is_sleeping = False
+        if self.stop_event.is_set():
+            emit(self.log_queue, "Long Sleep / Night Mode interrupted by user stop.", logging.INFO)
+            self._report_status("Stopped by user", "info")
+            return False
+
+        # 4. Mark night window completed
+        if window_id:
+            self.night_scheduler.mark_completed(window_id)
+
+        # 5. Wake up in the morning! Reset cycle counters and start with fresh stats
+        emit(
+            self.log_queue,
+            f"=== ☀️ Good Morning! Long Sleep / Night Mode completed! Waking up now to start daytime browsing with fresh stats... ===",
+            logging.INFO,
+        )
+        self._report_status("☀️ Morning wake-up: Relaunching browser with fresh stats", "info")
+
+        session_watched_keys.clear()
+        self.cycle_report_dispatched = False
+        self.target_attempts = 0
+        self.watched_count = 0
+
+        if hasattr(self, "channel_tracker") and self.channel_tracker:
+            self.channel_tracker = SessionChannelTracker(
+                config_mgr=self.config_mgr,
+                stats_store=self.stats_store,
+                channels=self.channels,
+                emit_event=self._emit_event,
+                log_queue=self.log_queue,
+            )
+
+        known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
+        known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
+        self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
+        self.has_started_browsing = True
+        perform_google_login(self.driver, self.account, log_queue=self.log_queue, stop_event=self.stop_event)
+        return True
+
     def _enter_no_target_sleep_cycle(self, session_watched_keys: Set[str]) -> bool:
         """Handle sleep & wake-up cycle when no target videos or shorts are found.
 
@@ -4394,19 +4514,13 @@ class WatchingWorker:
         5. Wakes up, relaunches browser, and resumes searching for new videos.
         Returns True if successfully woke up and ready to continue, False if stopped.
         """
-        raw_sleep = self.config_mgr.get_setting("NoTargetFoundSleepHours", "2 Hours") if self.config_mgr else "2 Hours"
-        sleep_hours = 2.0
-        try:
-            if isinstance(raw_sleep, str):
-                parts = raw_sleep.strip().split()
-                if not parts or parts[0].lower() in ("disabled", "none", "off", "0"):
-                    sleep_hours = 0.0
-                else:
-                    sleep_hours = float(parts[0])
-            else:
-                sleep_hours = float(raw_sleep)
-        except Exception:
-            sleep_hours = 2.0
+        # If Long Sleep / Night Mode is triggered, prioritize night sleep
+        if hasattr(self, "night_scheduler") and self.night_scheduler and self.night_scheduler.is_enabled():
+            sched = self.night_scheduler.evaluate()
+            if sched.get("is_sleep_time"):
+                return self._execute_night_sleep_cycle(sched, session_watched_keys)
+
+        sleep_hours = self.config_mgr.get_short_sleep_hours(default=2.0) if self.config_mgr else 2.0
 
         if sleep_hours <= 0:
             stop_msg = "No video of targeted channel found on YouTube Home or via YouTube Search. Stopping watching session."
@@ -4423,10 +4537,10 @@ class WatchingWorker:
         hours_str = f"{int(sleep_hours)} hour{'s' if int(sleep_hours) != 1 else ''}" if sleep_hours.is_integer() else f"{sleep_hours:.1f} hours"
         emit(
             self.log_queue,
-            f"No targeted channel content found in current pass. Entering sleep mode for {hours_str} (Sleep Cycle #{current_sleep_cycle})...",
+            f"No targeted channel content found in current pass. Entering Short Sleep / Nap mode for {hours_str} (Nap Cycle #{current_sleep_cycle})...",
             logging.INFO,
         )
-        self._report_status(f"No target content. Sending sleep notification (Cycle #{current_sleep_cycle})...", "info")
+        self._report_status(f"No target content. Sending nap notification (Cycle #{current_sleep_cycle})...", "info")
 
         # 1. Close main visible YouTube browser tab
         if self.driver:
@@ -4449,6 +4563,7 @@ class WatchingWorker:
             self._send_session_report(
                 status="Going to Sleep",
                 is_sleep_notification=True,
+                sleep_mode_type="nap",
                 sleep_cycle_number=current_sleep_cycle,
                 sleep_duration_hours=sleep_hours,
                 wake_up_time=wake_up_time,
@@ -4720,6 +4835,15 @@ class WatchingWorker:
                 self.check_pause()
                 if self.stop_event.is_set():
                     break
+
+                # Check if local system time has reached scheduled Long Sleep / Night Mode
+                if self._check_and_enter_night_sleep(session_watched_keys=session_watched_keys):
+                    cycle_long_vids_watched = 0
+                    suggested_miss_count = 0
+                    consecutive_target_watched = 0
+                    channel_buffer_counts.clear()
+                    target_attempts = 0
+                    continue
 
                 if not is_driver_alive(self.driver):
                     emit(self.log_queue, "Browser session closed or disconnected. Exiting watch loop.", logging.WARNING)
@@ -5213,12 +5337,19 @@ class WatchingWorker:
         status: str = "Completed",
         error: Optional[str] = None,
         is_sleep_notification: bool = False,
+        sleep_mode_type: Optional[str] = None,
         sleep_cycle_number: Optional[int] = None,
         sleep_duration_hours: Optional[float] = None,
         wake_up_time: Optional[datetime] = None,
     ) -> None:
         """Deliver session watch time report or sleep notification email under the same thread."""
-        modal_msg = f"Sending sleep notification (Cycle #{sleep_cycle_number})... Please do not close the app." if is_sleep_notification else "Generating session report... Please do not close the app."
+        if sleep_mode_type == "night":
+            modal_msg = "Sending Long Sleep / Night notification... Please do not close the app."
+        elif is_sleep_notification:
+            c_str = f" (Cycle #{sleep_cycle_number})" if sleep_cycle_number else ""
+            modal_msg = f"Sending Short Sleep / Nap notification{c_str}... Please do not close the app."
+        else:
+            modal_msg = "Generating session report... Please do not close the app."
         self._emit_event(("report_generating", modal_msg))
         if not self.config_mgr:
             self._emit_event(("report_sent", False, "No configuration manager available."))
@@ -5261,6 +5392,7 @@ class WatchingWorker:
                 sleep_cycle_number=sleep_cycle_number,
                 sleep_duration_hours=sleep_duration_hours,
                 wake_up_time=wake_up_time,
+                sleep_mode_type=sleep_mode_type,
             )
             rep_driver = getattr(self, "reporting_driver", None)
             if rep_driver and not is_driver_alive(rep_driver):
@@ -5293,7 +5425,13 @@ class WatchingWorker:
                         self.session_thread_url = self.session_thread_info["thread_url"]
                     if self.session_thread_info.get("message_id"):
                         self.session_thread_message_id = self.session_thread_info["message_id"]
-                msg = f"Sleep notification (Cycle #{sleep_cycle_number}) sent successfully!" if is_sleep_notification else "Session report sent successfully!"
+                if sleep_mode_type == "night":
+                    msg = "Long Sleep / Night notification sent successfully!"
+                elif is_sleep_notification:
+                    c_str = f" (Cycle #{sleep_cycle_number})" if sleep_cycle_number else ""
+                    msg = f"Short Sleep / Nap notification{c_str} sent successfully!"
+                else:
+                    msg = "Session report sent successfully!"
                 self._emit_event(("report_sent", True, msg))
         except Exception as exc:
             emit(self.log_queue, f"Failed dispatching session email report: {exc}", logging.WARNING)

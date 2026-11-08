@@ -43,7 +43,8 @@ EMAIL_METHOD_OPTIONS: List[str] = [
     "Active Browser Gmail",
     "SMTP Connection",
 ]
-NO_TARGET_SLEEP_OPTIONS: List[str] = [
+SHORT_SLEEP_OPTIONS: List[str] = [
+    "30 Minutes",
     "1 Hour",
     "2 Hours",
     "3 Hours",
@@ -53,6 +54,36 @@ NO_TARGET_SLEEP_OPTIONS: List[str] = [
     "12 Hours",
     "24 Hours",
     "Disabled",
+]
+NO_TARGET_SLEEP_OPTIONS: List[str] = SHORT_SLEEP_OPTIONS
+
+NIGHT_START_TIME_OPTIONS: List[str] = [
+    f"{h:02d}:00 ({(h % 12) or 12}:00 {'AM' if h < 12 else 'PM'})" for h in range(24)
+]
+
+NIGHT_WINDOW_OPTIONS: List[str] = [
+    "8 Hours",
+    "9 Hours",
+    "10 Hours",
+    "11 Hours",
+    "12 Hours",
+    "13 Hours",
+    "14 Hours",
+    "15 Hours",
+    "16 Hours",
+]
+
+NIGHT_DURATION_OPTIONS: List[str] = [
+    "5 Hours",
+    "6 Hours",
+    "7 Hours",
+    "8 Hours",
+    "9 Hours",
+    "10 Hours",
+    "7 - 8 Hours (Random)",
+    "6 - 8 Hours (Random)",
+    "7 - 9 Hours (Random)",
+    "8 - 9 Hours (Random)",
 ]
 
 
@@ -298,39 +329,147 @@ class SettingsView(Frame):
         self.default_video_max_views_entry.insert(0, str(initial_video_max))
         self.default_video_max_views_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
-        Label(scroll_playback, text="Sleep Duration When No Target Found:", font=Font(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
+        # ---------------------------------------------------------
+        # Sleep Settings: Short Sleep / Nap & Long Sleep / Night
+        # ---------------------------------------------------------
+        Label(scroll_playback, text="Sleep Modes & Scheduling", font=Font(weight="bold", size=14)).pack(
+            anchor="w", padx=15, pady=(15, 2)
         )
         Label(
             scroll_playback,
-            text="If browsing and shorts search finds no video from targeted channels, the bot closes YouTube, sends the session report, and sleeps for this duration before waking up to retry.",
+            text="Configure automated sleep cycles: Short Sleep (Nap) when targeted videos/shorts are missing, and Long Sleep (Night) based on local system time.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
+        # 1. Short Sleep or Nap
+        Label(scroll_playback, text="1. Short Sleep / Nap (When No Target Found):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(4, 2)
+        )
+        Label(
+            scroll_playback,
+            text="When browsing and shorts search finds no video from targeted channels, the app goes into nap mode, closes YouTube, sends the session notification email, and wakes up after this duration to search for new videos.",
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
 
-        initial_sleep = self.config_mgr.get_setting("NoTargetFoundSleepHours", "2 Hours") if self.config_mgr else "2 Hours"
+        initial_sleep = (
+            (self.config_mgr.get_setting("ShortSleepHours") or self.config_mgr.get_setting("NoTargetFoundSleepHours", "2 Hours"))
+            if self.config_mgr else "2 Hours"
+        )
         initial_sleep_opt = "2 Hours"
-        if isinstance(initial_sleep, str) and initial_sleep in NO_TARGET_SLEEP_OPTIONS:
+        if isinstance(initial_sleep, str) and initial_sleep in SHORT_SLEEP_OPTIONS:
             initial_sleep_opt = initial_sleep
         else:
             try:
                 hrs = float(str(initial_sleep).split()[0])
                 if hrs <= 0:
                     initial_sleep_opt = "Disabled"
+                elif hrs == 0.5:
+                    initial_sleep_opt = "30 Minutes"
                 else:
                     int_h = int(hrs)
                     cand = f"{int_h} Hour" if int_h == 1 else f"{int_h} Hours"
-                    initial_sleep_opt = cand if cand in NO_TARGET_SLEEP_OPTIONS else "2 Hours"
+                    initial_sleep_opt = cand if cand in SHORT_SLEEP_OPTIONS else "2 Hours"
             except Exception:
                 initial_sleep_opt = "2 Hours"
 
-        self.no_target_sleep_menu = OptionMenu(
+        self.short_sleep_menu = OptionMenu(
             scroll_playback,
-            values=NO_TARGET_SLEEP_OPTIONS,
-            width=200,
+            values=SHORT_SLEEP_OPTIONS,
+            width=220,
         )
-        self.no_target_sleep_menu.set(initial_sleep_opt)
-        self.no_target_sleep_menu.pack(anchor="w", padx=15, pady=(0, 15))
+        self.short_sleep_menu.set(initial_sleep_opt)
+        self.short_sleep_menu.pack(anchor="w", padx=15, pady=(0, 15))
+        self.no_target_sleep_menu = self.short_sleep_menu  # Backward compatibility alias
+
+        # 2. Long Sleep or Night
+        Label(scroll_playback, text="2. Long Sleep / Night Mode (Human System Time Schedule):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(6, 2)
+        )
+        Label(
+            scroll_playback,
+            text="Simulates human sleeping habits. Reads local system time to determine nighttime. The app will randomly choose a sleep window during your configured night timeframe and enter Long Sleep.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+
+        initial_night_enabled = bool(self.config_mgr.get_setting("NightSleepEnabled", False)) if self.config_mgr else False
+        self.night_sleep_switch = Switch(
+            scroll_playback,
+            text="Enable Long Sleep / Night Mode",
+        )
+        if initial_night_enabled:
+            self.night_sleep_switch.select()
+        else:
+            self.night_sleep_switch.deselect()
+        self.night_sleep_switch.pack(anchor="w", padx=15, pady=(0, 8))
+
+        # Night Window Start Time
+        Label(scroll_playback, text="Night Window Start Time (System Time):", font=Font(size=12, weight="bold")).pack(
+            anchor="w", padx=25, pady=(3, 2)
+        )
+        Label(
+            scroll_playback,
+            text="The time of day when your system enters nighttime (e.g. 22:00 / 10:00 PM).",
+            font=Font(size=11),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=25, pady=(0, 4))
+
+        init_start = str(self.config_mgr.get_setting("NightSleepStartTime", "22:00 (10:00 PM)")) if self.config_mgr else "22:00 (10:00 PM)"
+        if init_start not in NIGHT_START_TIME_OPTIONS:
+            init_start = "22:00 (10:00 PM)"
+        self.night_start_menu = OptionMenu(
+            scroll_playback,
+            values=NIGHT_START_TIME_OPTIONS,
+            width=220,
+        )
+        self.night_start_menu.set(init_start)
+        self.night_start_menu.pack(anchor="w", padx=25, pady=(0, 10))
+
+        # Night Window Time Frame (Duration)
+        Label(scroll_playback, text="Night Window Time Frame (Total Duration):", font=Font(size=12, weight="bold")).pack(
+            anchor="w", padx=25, pady=(3, 2)
+        )
+        Label(
+            scroll_playback,
+            text="Total duration of the night window (e.g., 12 Hours means nighttime spans from 22:00 to 10:00).",
+            font=Font(size=11),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=25, pady=(0, 4))
+
+        init_window = str(self.config_mgr.get_setting("NightSleepWindowHours", "12 Hours")) if self.config_mgr else "12 Hours"
+        if init_window not in NIGHT_WINDOW_OPTIONS:
+            init_window = "12 Hours"
+        self.night_window_menu = OptionMenu(
+            scroll_playback,
+            values=NIGHT_WINDOW_OPTIONS,
+            width=220,
+        )
+        self.night_window_menu.set(init_window)
+        self.night_window_menu.pack(anchor="w", padx=25, pady=(0, 10))
+
+        # Night Sleep Duration
+        Label(scroll_playback, text="Night Sleep Duration (Randomized Within Window):", font=Font(size=12, weight="bold")).pack(
+            anchor="w", padx=25, pady=(3, 2)
+        )
+        Label(
+            scroll_playback,
+            text="Duration to sleep (e.g., 8 Hours or 7 - 8 Hours). The app randomly chooses the sleep window during the nighttime timeframe.",
+            font=Font(size=11),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=25, pady=(0, 4))
+
+        init_dur = str(self.config_mgr.get_setting("NightSleepDurationHours", "8 Hours")) if self.config_mgr else "8 Hours"
+        if init_dur not in NIGHT_DURATION_OPTIONS:
+            init_dur = "8 Hours"
+        self.night_duration_menu = OptionMenu(
+            scroll_playback,
+            values=NIGHT_DURATION_OPTIONS,
+            width=220,
+        )
+        self.night_duration_menu.set(init_dur)
+        self.night_duration_menu.pack(anchor="w", padx=25, pady=(0, 15))
 
         # ---------------------------------------------------------
         # Tab 3: Shorts
@@ -738,12 +877,32 @@ class SettingsView(Frame):
                 self._notify_result(False, "Default Max Views Cap per Video must be a valid integer >= 0 (0 = unlimited).")
                 return
 
-        # 8a-3. Sleep Duration When No Target Found
-        if hasattr(self, "no_target_sleep_menu"):
-            selected_sleep = self.no_target_sleep_menu.get()
-            if selected_sleep not in NO_TARGET_SLEEP_OPTIONS:
+        # 8a-3. Short Sleep / Nap (When No Target Found)
+        if hasattr(self, "short_sleep_menu"):
+            selected_sleep = self.short_sleep_menu.get()
+            if selected_sleep not in SHORT_SLEEP_OPTIONS:
                 selected_sleep = "2 Hours"
+            validated["ShortSleepHours"] = selected_sleep
             validated["NoTargetFoundSleepHours"] = selected_sleep
+        elif hasattr(self, "no_target_sleep_menu"):
+            selected_sleep = self.no_target_sleep_menu.get()
+            if selected_sleep not in SHORT_SLEEP_OPTIONS:
+                selected_sleep = "2 Hours"
+            validated["ShortSleepHours"] = selected_sleep
+            validated["NoTargetFoundSleepHours"] = selected_sleep
+
+        # 8a-4. Long Sleep / Night Mode
+        if hasattr(self, "night_sleep_switch"):
+            validated["NightSleepEnabled"] = bool(self.night_sleep_switch.get())
+        if hasattr(self, "night_start_menu"):
+            val_start = self.night_start_menu.get()
+            validated["NightSleepStartTime"] = val_start if val_start in NIGHT_START_TIME_OPTIONS else "22:00 (10:00 PM)"
+        if hasattr(self, "night_window_menu"):
+            val_win = self.night_window_menu.get()
+            validated["NightSleepWindowHours"] = val_win if val_win in NIGHT_WINDOW_OPTIONS else "12 Hours"
+        if hasattr(self, "night_duration_menu"):
+            val_dur = self.night_duration_menu.get()
+            validated["NightSleepDurationHours"] = val_dur if val_dur in NIGHT_DURATION_OPTIONS else "8 Hours" 
 
         # 8b. Shorts limits
         if hasattr(self, "target_shorts_cycle_entry"):

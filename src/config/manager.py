@@ -73,6 +73,82 @@ def safe_int(val: Any, default: int = 0, min_val: Optional[int] = None, max_val:
         return default
 
 
+def parse_sleep_hours(val: Any, default: float = 2.0) -> float:
+    """Parse a sleep duration string or numeric value into hours.
+    
+    Handles '30 Minutes' -> 0.5, '2 Hours' -> 2.0, 'Disabled' -> 0.0, etc.
+    """
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return float(val) if val >= 0 else default
+    s = str(val).strip()
+    if not s or s.lower() in ("disabled", "none", "off", "false", "0"):
+        return 0.0
+    parts = s.split()
+    try:
+        num = float(parts[0])
+        if len(parts) > 1 and "min" in parts[1].lower():
+            return num / 60.0
+        return num
+    except (ValueError, TypeError):
+        return default
+
+
+def parse_time_of_day(val: Any, default_hour: int = 22, default_minute: int = 0) -> tuple:
+    """Parse time string like '22:00 (10:00 PM)', '22:00', '10:00 PM', or '22' into (hour, minute)."""
+    if not val:
+        return default_hour, default_minute
+    s = str(val).strip()
+    if "(" in s:
+        s = s.split("(")[0].strip()
+    is_pm = "pm" in s.lower()
+    is_am = "am" in s.lower()
+    clean_s = s.lower().replace("pm", "").replace("am", "").strip()
+    try:
+        if ":" in clean_s:
+            h_str, m_str = clean_s.split(":", 1)
+            h = int(h_str)
+            m = int(m_str)
+        else:
+            h = int(clean_s)
+            m = 0
+        if is_pm and h < 12:
+            h += 12
+        elif is_am and h == 12:
+            h = 0
+        h = max(0, min(23, h))
+        m = max(0, min(59, m))
+        return h, m
+    except Exception:
+        return default_hour, default_minute
+
+
+def parse_duration_range(val: Any, default_min: float = 8.0, default_max: float = 8.0) -> tuple:
+    """Parse duration like '8 Hours', '7 - 8 Hours', '6 - 8 Hours (Random)' into (min_hours, max_hours)."""
+    if not val:
+        return default_min, default_max
+    if isinstance(val, (int, float)):
+        v = float(val)
+        return v, v
+    s = str(val).strip()
+    if "(" in s:
+        s = s.split("(")[0].strip()
+    if "-" in s:
+        parts = s.split("-")
+        try:
+            p1 = float(parts[0].strip().split()[0])
+            p2 = float(parts[1].strip().split()[0])
+            return min(p1, p2), max(p1, p2)
+        except Exception:
+            pass
+    try:
+        h = parse_sleep_hours(s, default=default_min)
+        return h, h
+    except Exception:
+        return default_min, default_max
+
+
 class ConfigManager:
     """Thread-safe configuration manager using settings.json for settings, accounts, and video queue persistence."""
 
@@ -93,6 +169,11 @@ class ConfigManager:
             "DefaultVideoMaxViews": 5,
             "DefaultShortsMaxViews": 5,
             "NoTargetFoundSleepHours": "2 Hours",
+            "ShortSleepHours": "2 Hours",
+            "NightSleepEnabled": False,
+            "NightSleepStartTime": "22:00 (10:00 PM)",
+            "NightSleepWindowHours": "12 Hours",
+            "NightSleepDurationHours": "8 Hours",
             "AccountsFile": "accounts.txt",
             "DirectLinkFallback": False,
             "WatchtimeDuration": DEFAULT_WATCHTIME_DURATION,
@@ -305,7 +386,7 @@ class ConfigManager:
             if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0:
                     return default
-            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews", "NoTargetFoundSleepHours"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews", "NoTargetFoundSleepHours", "ShortSleepHours", "NightSleepWindowHours"):
                 if res < 0:
                     return default
             return res
@@ -317,14 +398,42 @@ class ConfigManager:
             if key in ("ParallelBrowsers", "AutomationLoops", "BrowsingTargetLimit", "NonTargetShortsLimit", "TargetShortsPerCycle", "NonTargetReelsLimit", "TotalNonTargetShortsLimit"):
                 if res <= 0.0:
                     return default
-            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews", "NoTargetFoundSleepHours"):
+            elif key in ("FullVideoTimeoutMinutes", "VideoCooldownHours", "MaxAdWatchSeconds", "AutoplayEndBufferSeconds", "DefaultVideoTargetViews", "DefaultVideoMaxViews", "DefaultShortsMaxViews", "NoTargetFoundSleepHours", "ShortSleepHours", "NightSleepWindowHours"):
                 if res < 0.0:
                     return default
             return res
 
+    def get_short_sleep_hours(self, default: float = 2.0) -> float:
+        """Return configured hours to sleep when no target videos/shorts are found (Short Sleep / Nap)."""
+        with self._lock:
+            val = self.data.get("settings", {}).get("ShortSleepHours")
+            if val is None:
+                val = self.data.get("settings", {}).get("NoTargetFoundSleepHours")
+            return parse_sleep_hours(val, default=default)
+
     def get_no_target_sleep_hours(self, default: float = 2.0) -> float:
         """Return configured hours to sleep when no target videos/shorts are found (0.0 if disabled)."""
-        return self.get_float("NoTargetFoundSleepHours", default=default)
+        return self.get_short_sleep_hours(default=default)
+
+    def get_night_sleep_settings(self) -> Dict[str, Any]:
+        """Return configured settings for Long Sleep / Night Mode."""
+        enabled = self.get_bool("NightSleepEnabled", False)
+        start_raw = str(self.get_setting("NightSleepStartTime", "22:00 (10:00 PM)"))
+        sh, sm = parse_time_of_day(start_raw, default_hour=22, default_minute=0)
+        window_raw = str(self.get_setting("NightSleepWindowHours", "12 Hours"))
+        window_hours = parse_sleep_hours(window_raw, default=12.0)
+        dur_raw = str(self.get_setting("NightSleepDurationHours", "8 Hours"))
+        dur_min, dur_max = parse_duration_range(dur_raw, default_min=8.0, default_max=8.0)
+        return {
+            "enabled": enabled,
+            "start_time_str": start_raw,
+            "start_hour": sh,
+            "start_minute": sm,
+            "window_hours": max(1.0, window_hours),
+            "duration_str": dur_raw,
+            "duration_min": max(0.5, dur_min),
+            "duration_max": max(dur_min, dur_max),
+        }
 
     def update_settings(self, new_settings: Dict[str, Any]) -> None:
         """Atomically update multiple settings in a single disk-persisted transaction.
@@ -350,6 +459,10 @@ class ConfigManager:
                 self.data["settings"] = {}
             old_val = self.data["settings"].get(key)
             self.data["settings"][key] = value
+            if key == "NoTargetFoundSleepHours":
+                self.data["settings"]["ShortSleepHours"] = value
+            elif key == "ShortSleepHours":
+                self.data["settings"]["NoTargetFoundSleepHours"] = value
             try:
                 self._save_unlocked()
             except Exception:

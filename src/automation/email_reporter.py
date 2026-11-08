@@ -82,6 +82,7 @@ class SessionReport:
     sleep_cycle_number: Optional[int] = None
     sleep_duration_hours: Optional[float] = None
     wake_up_time: Optional[datetime] = None
+    sleep_mode_type: Optional[str] = None
 
     def generate_subject(self) -> str:
         """Produce a consistent subject line to ensure start and completion emails thread together in Gmail."""
@@ -105,11 +106,13 @@ class SessionReport:
 
         exit_reason = self.interruption_reason or ("Completed normally" if "complet" in self.status.lower() else self.status)
 
-        title_header = (
-            f"      ENTERTAINMENT HUB - SLEEP NOTIFICATION (SLEEP CYCLE #{self.sleep_cycle_number})      "
-            if self.sleep_cycle_number
-            else "                  ENTERTAINMENT HUB - SESSION REPORT                  "
-        )
+        if self.sleep_mode_type == "night":
+            title_header = "      ENTERTAINMENT HUB - LONG SLEEP / NIGHT NOTIFICATION      "
+        elif self.sleep_cycle_number or self.sleep_mode_type == "nap":
+            c_num = f" (NAP CYCLE #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            title_header = f"      ENTERTAINMENT HUB - SHORT SLEEP / NAP NOTIFICATION{c_num}      "
+        else:
+            title_header = "                  ENTERTAINMENT HUB - SESSION REPORT                  "
 
         lines = [
             "=" * 70,
@@ -121,16 +124,30 @@ class SessionReport:
             f"Status:               {self.status}",
         ]
 
-        if self.sleep_cycle_number:
+        if self.sleep_mode_type == "night":
             dur_str = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "N/A"
             wake_str = self.wake_up_time.strftime("%Y-%m-%d %H:%M:%S") if self.wake_up_time else "N/A"
             lines.extend([
-                f"Sleep Cycle:          #{self.sleep_cycle_number}",
+                f"Sleep Mode:           Long Sleep / Night Mode (Human System Time Schedule)",
+                f"Sleep Duration:       {dur_str}",
+                f"Estimated Wake-up:    {wake_str}",
+                f"Notice:               System nighttime schedule reached. Simulating natural human habits,",
+                f"                      the bot has gone to sleep for the night.",
+                f"                      Closed YouTube browser tab to save resources.",
+                f"                      The bot will wake up automatically in the morning.",
+            ])
+        elif self.sleep_cycle_number or self.sleep_mode_type == "nap":
+            dur_str = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "N/A"
+            wake_str = self.wake_up_time.strftime("%Y-%m-%d %H:%M:%S") if self.wake_up_time else "N/A"
+            cycle_str = f"#{self.sleep_cycle_number}" if self.sleep_cycle_number else "N/A"
+            lines.extend([
+                f"Sleep Mode:           Short Sleep / Nap Mode (No Target Content Found)",
+                f"Sleep Cycle:          {cycle_str}",
                 f"Sleep Duration:       {dur_str}",
                 f"Estimated Wake-up:    {wake_str}",
                 f"Notice:               No target channel content found in this pass.",
                 f"                      Closed YouTube browser tab to save resources.",
-                f"                      The bot is now sleeping and will wake up automatically.",
+                f"                      The bot is taking a nap and will wake up automatically.",
             ])
 
         lines.extend([
@@ -260,24 +277,56 @@ class SessionReport:
                 </tr>
             """)
 
-        status_color = "#2563eb" if self.sleep_cycle_number else ("#059669" if "complet" in self.status.lower() else "#d97706")
-        report_title = f"Sleep Notification (Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else "Session Entertainment Report"
-        activity_header = f"Sleep Cycle #{self.sleep_cycle_number} • Media Activity" if self.sleep_cycle_number else "Media Entertainment Activity"
-        kpi_label_1 = "Combined Entertainment Time (This Pass)" if self.sleep_cycle_number else "Combined Entertainment Time"
-        kpi_label_2 = "Pass Duration & Status" if self.sleep_cycle_number else "Session Duration & Status"
-        kpi_status_text = f"Going to Sleep (Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else f"Status: {html.escape(self.status)}"
+        is_night_sleep = (self.sleep_mode_type == "night")
+        is_nap_sleep = (self.sleep_mode_type == "nap" or (self.sleep_cycle_number is not None and not is_night_sleep))
 
-        
+        if is_night_sleep:
+            status_color = "#6366f1"
+            report_title = "Long Sleep / Night Notification"
+            activity_header = "Night Mode • Daytime Activity Summary"
+            kpi_label_1 = "Combined Entertainment Time (Daytime Pass)"
+            kpi_label_2 = "Pass Duration & Status"
+            kpi_status_text = "Going to Long Sleep (Night Mode)"
+        elif is_nap_sleep:
+            status_color = "#2563eb"
+            cycle_desc = f" (Nap Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            report_title = f"Short Sleep / Nap Notification{cycle_desc}"
+            activity_header = f"Sleep Cycle #{self.sleep_cycle_number} • Media Activity" if self.sleep_cycle_number else "Short Sleep / Nap • Media Activity"
+            kpi_label_1 = "Combined Entertainment Time (This Pass)"
+            kpi_label_2 = "Pass Duration & Status"
+            kpi_status_text = f"Going to Nap (Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else "Going to Nap"
+        else:
+            status_color = "#059669" if "complet" in self.status.lower() else "#d97706"
+            report_title = "Session Entertainment Report"
+            activity_header = "Media Entertainment Activity"
+            kpi_label_1 = "Combined Entertainment Time"
+            kpi_label_2 = "Session Duration & Status"
+            kpi_status_text = f"Status: {html.escape(self.status)}"
+
         sleep_banner = ""
-        if self.sleep_cycle_number:
+        if is_night_sleep:
             wake_str = self.wake_up_time.strftime("%d %b %Y - %I:%M %p") if self.wake_up_time else f"in {self.sleep_duration_hours:.1f} hours"
             dur_txt = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "configured duration"
             sleep_banner = f"""
+            <div style="background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); border: 1px solid #4338ca; border-left: 6px solid #818cf8; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="font-size: 16px; font-weight: 700; color: #e0e7ff; margin-bottom: 5px;">🌙 Going to Sleep — Long Sleep / Night Mode</div>
+                <div style="font-size: 13px; color: #c7d2fe; line-height: 1.5;">
+                    System nighttime window has been reached. Simulating natural human habits, the bot has gone to sleep for the night.<br>
+                    The YouTube browser tab has been closed. The bot is sleeping for <strong>{dur_txt}</strong> and will automatically wake up at approximately <strong>{wake_str}</strong> to start fresh daytime browsing.<br>
+                    <span style="font-size: 12px; color: #a5b4fc; margin-top: 4px; display: inline-block;">Below are the stats of what was completed during daytime browsing prior to sleeping.</span>
+                </div>
+            </div>
+            """
+        elif is_nap_sleep:
+            wake_str = self.wake_up_time.strftime("%d %b %Y - %I:%M %p") if self.wake_up_time else f"in {self.sleep_duration_hours:.1f} hours"
+            dur_txt = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "configured duration"
+            cycle_desc = f" (Nap Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            sleep_banner = f"""
             <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-left: 5px solid #2563eb; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                <div style="font-size: 15px; font-weight: 700; color: #1e40af; margin-bottom: 4px;">💤 Going to Sleep — Sleep Cycle #{self.sleep_cycle_number}</div>
+                <div style="font-size: 15px; font-weight: 700; color: #1e40af; margin-bottom: 4px;">💤 Going to Sleep — Short Sleep / Nap Mode{cycle_desc}</div>
                 <div style="font-size: 13px; color: #1e3a8a; line-height: 1.5;">
                     No new videos or shorts from targeted channels were found during this pass.<br>
-                    The YouTube browser tab has been closed. The bot is now sleeping for <strong>{dur_txt}</strong> and will automatically wake up at approximately <strong>{wake_str}</strong> to check for new videos and shorts with fresh stats.<br>
+                    The YouTube browser tab has been closed. The bot is taking a nap for <strong>{dur_txt}</strong> and will automatically wake up at approximately <strong>{wake_str}</strong> to check for new videos and shorts with fresh stats.<br>
                     <span style="font-size: 12px; color: #2563eb; margin-top: 4px; display: inline-block;">Below are the stats of what was completed during this pass prior to sleeping.</span>
                 </div>
             </div>
