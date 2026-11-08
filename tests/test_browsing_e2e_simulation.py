@@ -63,7 +63,7 @@ class TestBrowsingE2ESimulation(unittest.TestCase):
             {"title": "Alpha Video 1", "url": "https://www.youtube.com/watch?v=ALPHA111111", "channel": "AlphaChannel", "enabled": True},
             {"title": "Beta Video 1", "url": "https://www.youtube.com/watch?v=BETA1111111", "channel": "BetaChannel", "enabled": True},
         ]
-        mock_config.get_bool.return_value = True
+        mock_config.get_bool.side_effect = lambda key, default=False: False if ("Night" in key or "Sleep" in key) else True
         mock_config.get_int.return_value = 10
         mock_config.get_float.return_value = 12.0
         mock_config.get_setting.return_value = "5 Minutes"

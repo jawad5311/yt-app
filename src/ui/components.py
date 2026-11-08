@@ -693,6 +693,7 @@ class ScrollableFrame(ttk.Frame):
         self._parent_frame.grid_rowconfigure(1 if label_text else 0, weight=1)
 
         row_offset = 0
+        self._label_text = label_text
         if label_text:
             self._label = ttk.Label(self._parent_frame, text=label_text, style="Subheader.TLabel")
             self._label.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 4))
@@ -776,6 +777,37 @@ class ScrollableFrame(ttk.Frame):
             bbox = self._parent_canvas.bbox("all")
             if bbox:
                 self._parent_canvas.configure(scrollregion=bbox)
+
+    def configure(self, **kwargs):
+        if "label_text" in kwargs:
+            text = kwargs.pop("label_text")
+            self._label_text = text
+            if hasattr(self, "_label") and self._label and self._label.winfo_exists():
+                self._label.configure(text=text)
+            elif text and hasattr(self, "_parent_frame") and self._parent_frame.winfo_exists():
+                self._label = ttk.Label(self._parent_frame, text=text, style="Subheader.TLabel")
+                self._label.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 4))
+                self._parent_frame.grid_rowconfigure(0, weight=0)
+                self._parent_frame.grid_rowconfigure(1, weight=1)
+                if hasattr(self, "_parent_canvas"):
+                    self._parent_canvas.grid(row=1, column=0, sticky="nsew")
+                if hasattr(self, "_scrollbar"):
+                    self._scrollbar.grid(row=1, column=1, sticky="ns")
+        if kwargs:
+            super().configure(**kwargs)
+
+    def cget(self, prop: str) -> Any:
+        if prop == "label_text":
+            if hasattr(self, "_label") and self._label and self._label.winfo_exists():
+                return self._label.cget("text")
+            return getattr(self, "_label_text", "")
+        return super().cget(prop)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.cget(key)
+
+    def __setitem__(self, key: str, value: Any):
+        self.configure(**{key: value})
 
 
 class _DummySegmentedButton:

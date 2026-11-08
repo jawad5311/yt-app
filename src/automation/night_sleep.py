@@ -36,15 +36,21 @@ class NightSleepScheduler:
         Returns (window_start, window_end, is_currently_inside, window_id).
         """
         current_time = now if now is not None else datetime.now()
-        settings = self.config_mgr.get_night_sleep_settings() if self.config_mgr else {
-            "start_hour": 22,
-            "start_minute": 0,
-            "window_hours": 12.0,
-        }
+        raw_settings = self.config_mgr.get_night_sleep_settings() if self.config_mgr else {}
+        settings = raw_settings if isinstance(raw_settings, dict) else {}
 
-        sh = settings.get("start_hour", 22)
-        sm = settings.get("start_minute", 0)
-        wh = settings.get("window_hours", 12.0)
+        try:
+            sh = int(settings.get("start_hour", 22))
+        except (TypeError, ValueError):
+            sh = 22
+        try:
+            sm = int(settings.get("start_minute", 0))
+        except (TypeError, ValueError):
+            sm = 0
+        try:
+            wh = float(settings.get("window_hours", 12.0))
+        except (TypeError, ValueError):
+            wh = 12.0
 
         # Candidate 1: Window started yesterday
         w1_start = datetime(current_time.year, current_time.month, current_time.day, sh, sm) - timedelta(days=1)
@@ -77,14 +83,17 @@ class NightSleepScheduler:
     ) -> Tuple[datetime, datetime, float]:
         """Randomly choose a sleep window of configured duration fitting within [w_start, w_end]."""
         current_time = now if now is not None else datetime.now()
-        settings = self.config_mgr.get_night_sleep_settings() if self.config_mgr else {
-            "window_hours": 12.0,
-            "duration_min": 8.0,
-            "duration_max": 8.0,
-        }
+        raw_settings = self.config_mgr.get_night_sleep_settings() if self.config_mgr else {}
+        settings = raw_settings if isinstance(raw_settings, dict) else {}
 
-        d_min = settings.get("duration_min", 8.0)
-        d_max = settings.get("duration_max", 8.0)
+        try:
+            d_min = float(settings.get("duration_min", 8.0))
+        except (TypeError, ValueError):
+            d_min = 8.0
+        try:
+            d_max = float(settings.get("duration_max", 8.0))
+        except (TypeError, ValueError):
+            d_max = 8.0
         total_window_hours = (w_end - w_start).total_seconds() / 3600.0
 
         if forced_duration is not None:

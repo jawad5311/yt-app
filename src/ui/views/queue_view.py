@@ -318,6 +318,7 @@ class QueueView(Frame):
         self._setup_fast_scrolling()
 
         self.load_initial_queue()
+        self.update_queue_header_stats()
 
     def _setup_fast_scrolling(self):
         """Install smooth, responsive, animated mouse wheel scrolling on the scroll frame."""
@@ -352,6 +353,64 @@ class QueueView(Frame):
                 pass
 
         return restore
+
+    def get_queue_stats_summary(self) -> str:
+        """Return the formatted stats string for total and per-channel queued videos/shorts.
+        Format: 'Total Videos: X | Channel A: Y | Channel B: Z' (or 'Total Shorts: ...')
+        Order of channels strictly follows the active display order in the queue.
+        """
+        is_shorts = bool(getattr(self, "shorts_only", False))
+        total_prefix = "Total Shorts" if is_shorts else "Total Videos"
+
+        tasks = getattr(self, "video_tasks", []) or []
+        matching_tasks = [
+            t for t in tasks
+            if (t.is_short if is_shorts else not t.is_short)
+        ]
+        total_count = len(matching_tasks)
+
+        parts = [f"{total_prefix}: {total_count}"]
+
+        if total_count > 0:
+            groups = group_videos_by_channel(
+                tasks,
+                self._get_display_channels(),
+                include_archived=False,
+            )
+            for group in groups:
+                ch_matching = [
+                    t for _, t in group.videos
+                    if (t.is_short if is_shorts else not t.is_short)
+                ]
+                count = len(ch_matching)
+                if count > 0:
+                    parts.append(f"{group.name}: {count}")
+
+        return " | ".join(parts)
+
+    def get_queue_header_title(self) -> str:
+        """Return the section header title with total and per-channel stats.
+        Format: 'Queued Target Videos (Total Videos: X | Channel A: Y | Channel B: Z)'
+        """
+        is_shorts = bool(getattr(self, "shorts_only", False))
+        base_title = "Queued Target Shorts" if is_shorts else "Queued Target Videos"
+        summary = self.get_queue_stats_summary()
+        return f"{base_title} ({summary})"
+
+    def update_queue_header_stats(self) -> None:
+        """Update the scroll frame label with current queue stats."""
+        title = self.get_queue_header_title()
+        self.queue_stats_summary = self.get_queue_stats_summary()
+        if hasattr(self, "scroll_frame") and self.scroll_frame is not None:
+            try:
+                self.scroll_frame.configure(label_text=title)
+            except Exception:
+                pass
+            if hasattr(self.scroll_frame, "_label") and self.scroll_frame._label:
+                try:
+                    self.scroll_frame._label.configure(text=title)
+                except Exception:
+                    pass
 
     def _update_sort_buttons(self):
         is_desc = bool(self.current_sort_reverse)
@@ -563,6 +622,7 @@ class QueueView(Frame):
         if save:
             self.save_queue()
         self._update_sort_buttons()
+        self.update_queue_header_stats()
         if render:
             self.refresh_list()
 
@@ -578,6 +638,7 @@ class QueueView(Frame):
                 self._apply_current_sort(save=False, render=should_render)
             elif should_render:
                 self.refresh_list()
+            self.update_queue_header_stats()
             return
         raw_list = self.app_controller.config_mgr.get_video_queue()
         self.video_tasks = [VideoTask.from_dict(v) for v in raw_list]
@@ -588,11 +649,13 @@ class QueueView(Frame):
         elif should_render:
             self.refresh_list()
         self.app_controller.on_queue_changed(self.video_tasks)
+        self.update_queue_header_stats()
 
     def save_queue(self):
         dict_list = [v.to_dict() for v in self.video_tasks]
         self.app_controller.config_mgr.set_video_queue(dict_list)
         self.app_controller.on_queue_changed(self.video_tasks)
+        self.update_queue_header_stats()
 
     def show_popup_notification(self, title: str, message: str) -> None:
         """Display an in-app floating bubble notification for user updates."""
@@ -1263,6 +1326,8 @@ class QueueView(Frame):
         if hasattr(self, "app_controller") and getattr(self.app_controller, "queued_video_tasks", None) is not None:
             if self.app_controller.queued_video_tasks or not self.video_tasks:
                 self.video_tasks = self.app_controller.queued_video_tasks
+
+        self.update_queue_header_stats()
 
         matching_tasks = [
             t for t in self.video_tasks
