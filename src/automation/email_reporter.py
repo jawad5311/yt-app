@@ -79,6 +79,9 @@ class SessionReport:
     thread_url: Optional[str] = None
     thread_message_id: Optional[str] = None
     system_name: str = ""
+    sleep_cycle_number: Optional[int] = None
+    sleep_duration_hours: Optional[float] = None
+    wake_up_time: Optional[datetime] = None
 
     def generate_subject(self) -> str:
         """Produce a consistent subject line to ensure start and completion emails thread together in Gmail."""
@@ -102,14 +105,35 @@ class SessionReport:
 
         exit_reason = self.interruption_reason or ("Completed normally" if "complet" in self.status.lower() else self.status)
 
+        title_header = (
+            f"      ENTERTAINMENT HUB - SLEEP NOTIFICATION (SLEEP CYCLE #{self.sleep_cycle_number})      "
+            if self.sleep_cycle_number
+            else "                  ENTERTAINMENT HUB - SESSION REPORT                  "
+        )
+
         lines = [
             "=" * 70,
-            "                  ENTERTAINMENT HUB - SESSION REPORT                  ",
+            title_header,
             "=" * 70,
             f"System Name:          {self.system_name or 'N/A'}",
             f"Account:              {self.account_email or 'N/A'}",
             f"Session Mode:         {self.session_mode}",
             f"Status:               {self.status}",
+        ]
+
+        if self.sleep_cycle_number:
+            dur_str = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "N/A"
+            wake_str = self.wake_up_time.strftime("%Y-%m-%d %H:%M:%S") if self.wake_up_time else "N/A"
+            lines.extend([
+                f"Sleep Cycle:          #{self.sleep_cycle_number}",
+                f"Sleep Duration:       {dur_str}",
+                f"Estimated Wake-up:    {wake_str}",
+                f"Notice:               No target channel content found in this pass.",
+                f"                      Closed YouTube browser tab to save resources.",
+                f"                      The bot is now sleeping and will wake up automatically.",
+            ])
+
+        lines.extend([
             f"Interruption Reason:  {exit_reason}",
             f"Videos Watched:       {self.total_videos_watched} ({self.regular_videos_count} regular, {self.shorts_count} Shorts)",
             f"  • Suggested Section:   {self.suggested_videos_count} video(s)",
@@ -117,7 +141,7 @@ class SessionReport:
             f"  • Home Page Feed:      {self.home_videos_count} video(s)",
             f"  • YouTube Shorts:      {self.shorts_count} short(s)",
             f"  • Random / Other:      {self.random_videos_count} video(s) (non-target channels)",
-        ]
+        ])
         if self.error_message and self.error_message != self.interruption_reason:
             lines.append(f"Error Details:        {self.error_message}")
 
@@ -236,7 +260,29 @@ class SessionReport:
                 </tr>
             """)
 
-        status_color = "#059669" if "complet" in self.status.lower() else "#d97706"
+        status_color = "#2563eb" if self.sleep_cycle_number else ("#059669" if "complet" in self.status.lower() else "#d97706")
+        report_title = f"Sleep Notification (Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else "Session Entertainment Report"
+        activity_header = f"Sleep Cycle #{self.sleep_cycle_number} • Media Activity" if self.sleep_cycle_number else "Media Entertainment Activity"
+        kpi_label_1 = "Combined Entertainment Time (This Pass)" if self.sleep_cycle_number else "Combined Entertainment Time"
+        kpi_label_2 = "Pass Duration & Status" if self.sleep_cycle_number else "Session Duration & Status"
+        kpi_status_text = f"Going to Sleep (Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else f"Status: {html.escape(self.status)}"
+
+        
+        sleep_banner = ""
+        if self.sleep_cycle_number:
+            wake_str = self.wake_up_time.strftime("%d %b %Y - %I:%M %p") if self.wake_up_time else f"in {self.sleep_duration_hours:.1f} hours"
+            dur_txt = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "configured duration"
+            sleep_banner = f"""
+            <div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-left: 5px solid #2563eb; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="font-size: 15px; font-weight: 700; color: #1e40af; margin-bottom: 4px;">💤 Going to Sleep — Sleep Cycle #{self.sleep_cycle_number}</div>
+                <div style="font-size: 13px; color: #1e3a8a; line-height: 1.5;">
+                    No new videos or shorts from targeted channels were found during this pass.<br>
+                    The YouTube browser tab has been closed. The bot is now sleeping for <strong>{dur_txt}</strong> and will automatically wake up at approximately <strong>{wake_str}</strong> to check for new videos and shorts with fresh stats.<br>
+                    <span style="font-size: 12px; color: #2563eb; margin-top: 4px; display: inline-block;">Below are the stats of what was completed during this pass prior to sleeping.</span>
+                </div>
+            </div>
+            """
+
         error_box = ""
         if self.interruption_reason and ("error" in self.status.lower() or "bot" in self.status.lower() or "disconnect" in self.status.lower() or "proxy" in self.status.lower() or "stop" in self.status.lower()):
             error_box = f"""
@@ -258,8 +304,8 @@ class SessionReport:
         <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 26px 24px; color: #ffffff;">
             <div style="display: table; width: 100%;">
                 <div style="display: table-cell; vertical-align: middle;">
-                    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; font-weight: 700; margin-bottom: 4px;">Media Entertainment Activity</div>
-                    <h1 style="margin: 0; font-size: 22px; font-weight: 800; line-height: 1.3;">Session Entertainment Report</h1>
+                    <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; font-weight: 700; margin-bottom: 4px;">{activity_header}</div>
+                    <h1 style="margin: 0; font-size: 22px; font-weight: 800; line-height: 1.3;">{report_title}</h1>
                     <div style="margin-top: 8px; font-size: 13px; color: #94a3b8;">
                         <div style="margin-bottom: 4px; font-size: 14px;">System Name: <span style="color: #38bdf8; font-weight: 700;">{html.escape(self.system_name or 'N/A')}</span></div>
                         <div>Account: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.account_email or 'N/A')}</span> | Mode: <span style="color: #f1f5f9; font-weight: 600;">{html.escape(self.session_mode)}</span></div>
@@ -270,20 +316,21 @@ class SessionReport:
         </div>
 
         <div style="padding: 24px;">
+            {sleep_banner}
             {error_box}
 
             <!-- KPI Cards -->
             <div style="display: table; width: 100%; margin-bottom: 16px;">
                 <div style="display: table-cell; width: 48%; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; padding: 16px; vertical-align: top;">
-                    <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #047857; letter-spacing: 0.5px;">Combined Entertainment Time</div>
+                    <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #047857; letter-spacing: 0.5px;">{kpi_label_1}</div>
                     <div style="font-size: 24px; font-weight: 800; color: #065f46; margin-top: 4px;">{total_watch}</div>
                     <div style="font-size: 12px; color: #047857; margin-top: 2px;">{total_hours}</div>
                 </div>
                 <div style="display: table-cell; width: 4%;"></div>
                 <div style="display: table-cell; width: 48%; background-color: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 10px; padding: 16px; vertical-align: top;">
-                    <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #475569; letter-spacing: 0.5px;">Session Duration & Status</div>
+                    <div style="font-size: 11px; text-transform: uppercase; font-weight: 700; color: #475569; letter-spacing: 0.5px;">{kpi_label_2}</div>
                     <div style="font-size: 20px; font-weight: 700; color: #1e293b; margin-top: 4px;">{session_elapsed}</div>
-                    <div style="font-size: 12px; color: {status_color}; font-weight: 600; margin-top: 2px;">Status: {html.escape(self.status)}</div>
+                    <div style="font-size: 12px; color: {status_color}; font-weight: 600; margin-top: 2px;">{kpi_status_text}</div>
                 </div>
             </div>
 
@@ -1630,6 +1677,7 @@ class EmailReporter:
         driver: Optional[Any] = None,
         account: Optional[Account] = None,
         log_queue: Optional[queue.Queue] = None,
+        thread_info: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Route report delivery based on configuration and available transports."""
         if not config_mgr:
@@ -1663,13 +1711,14 @@ class EmailReporter:
                 password=smtp_pass,
                 sender_email=sender,
                 log_queue=log_queue,
+                thread_info=thread_info,
             )
 
         # 2. If a browser driver is already supplied and alive:
         if driver is not None:
             from .driver import is_driver_alive
             if is_driver_alive(driver):
-                browser_ok = cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue)
+                browser_ok = cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue, thread_info=thread_info)
                 if browser_ok:
                     return True
                 if log_queue:
@@ -1691,6 +1740,7 @@ class EmailReporter:
                 log_queue=log_queue,
                 email_description="session watch time report",
                 thread_url=report.thread_url or cls.last_thread_url,
+                thread_info=thread_info,
             )
             if headless_ok:
                 return True

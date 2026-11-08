@@ -3,10 +3,13 @@
 import queue
 import threading
 import time
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.automation.email_reporter import EmailReporter, SessionReport
+from src.automation.session_tracker import SessionChannelTracker
 from src.automation.watching_worker import WatchingWorker
 from src.config.manager import ConfigManager, safe_float
 from src.config.stats_store import StatsStore
@@ -113,7 +116,7 @@ def test_enter_no_target_sleep_cycle_disabled_stops_session(test_worker):
 
 
 def test_enter_no_target_sleep_cycle_closes_driver_and_sends_report(test_worker):
-    """Worker closes YouTube driver and dispatches session report before sleeping."""
+    """Worker closes YouTube driver and dispatches sleep notification report under session thread before sleeping."""
     test_worker.config_mgr.set_setting("NoTargetFoundSleepHours", "2 Hours")
     mock_driver = MagicMock()
     test_worker.driver = mock_driver
@@ -121,7 +124,6 @@ def test_enter_no_target_sleep_cycle_closes_driver_and_sends_report(test_worker)
     with patch.object(test_worker, "_send_session_report") as mock_report, \
          patch("src.automation.watching_worker.close_driver") as mock_close:
 
-        # Set stop_event in advance so the sleep loop exits immediately
         test_worker.stop_event.set()
 
         session_keys = {"v1", "v2"}
@@ -130,8 +132,141 @@ def test_enter_no_target_sleep_cycle_closes_driver_and_sends_report(test_worker)
         assert result is False
         mock_close.assert_called_with(mock_driver, log_queue=test_worker.log_queue)
         assert test_worker.driver is None
-        mock_report.assert_called_once_with(status="No Target Found - Sleeping")
+        assert test_worker.sleep_cycle_count == 1
+        mock_report.assert_called_once()
+        kwargs = mock_report.call_args[1]
+        assert kwargs["status"] == "Going to Sleep"
+        assert kwargs["is_sleep_notification"] is True
+        assert kwargs["sleep_cycle_number"] == 1
+        assert kwargs["sleep_duration_hours"] == 2.0
         assert test_worker.cycle_report_dispatched is True
+
+
+def test_enter_no_target_sleep_cycle_increments_cycle_count(test_worker):
+    """Every sleep notification increments the sleep cycle counter by one."""
+    test_worker.config_mgr.set_setting("NoTargetFoundSleepHours", "0.00005 Hours")
+
+    with patch.object(test_worker, "_send_session_report") as mock_report, \
+         patch("src.automation.watching_worker.setup_driver", return_value=MagicMock()), \
+         patch("src.automation.watching_worker.perform_google_login", return_value=True):
+
+        # First sleep cycle
+        res1 = test_worker._enter_no_target_sleep_cycle(session_watched_keys=set())
+        assert res1 is True
+        assert test_worker.sleep_cycle_count == 1
+        assert mock_report.call_args[1]["sleep_cycle_number"] == 1
+
+        # Second sleep cycle
+        res2 = test_worker._enter_no_target_sleep_cycle(session_watched_keys=set())
+        assert res2 is True
+        assert test_worker.sleep_cycle_count == 2
+        assert mock_report.call_args[1]["sleep_cycle_number"] == 2
+
+        # Third sleep cycle
+        res3 = test_worker._enter_no_target_sleep_cycle(session_watched_keys=set())
+        assert res3 is True
+        assert test_worker.sleep_cycle_count == 3
+        assert mock_report.call_args[1]["sleep_cycle_number"] == 3
+
+
+def test_sleep_notification_maintains_exact_same_subject_for_threading(test_worker):
+    """Verify that every sleep notification email uses the exact same subject as the initial start email."""
+    initial_subject = test_worker.session_thread_subject
+    assert initial_subject is not None
+    assert "Entertainment Hub Session" in initial_subject
+
+    # Create sleep notification report
+    report_data = test_worker.channel_tracker.get_session_report_data()
+    wake_time = datetime.now() + timedelta(hours=2)
+    report = SessionReport(
+        account_email=test_worker.account.email,
+        session_mode="Continuous Browsing",
+        start_time=report_data["start_time"],
+        end_time=report_data["end_time"],
+        duration_seconds=report_data["duration_seconds"],
+        total_session_watch_seconds=report_data["total_session_watch_seconds"],
+        channel_reports=report_data["channels"],
+        status="Going to Sleep",
+        custom_subject=test_worker.session_thread_subject,
+        sleep_cycle_number=1,
+        sleep_duration_hours=2.0,
+        wake_up_time=wake_time,
+    )
+
+    # Subject must match initial_subject exactly so Gmail threads all emails together
+    assert report.generate_subject() == initial_subject
+
+
+def test_sleep_notification_plain_text_and_html_contents():
+    """Verify that the sleep notification email body presents sleep cycle stats, wake-up time, and activity summary."""
+    wake_time = datetime(2026, 11, 8, 8, 30, 0)
+    report = SessionReport(
+        account_email="test@gmail.com",
+        session_mode="Continuous Browsing",
+        start_time=datetime(2026, 11, 8, 6, 30, 0),
+        end_time=datetime(2026, 11, 8, 7, 0, 0),
+        duration_seconds=1800.0,
+        total_session_watch_seconds=1500.0,
+        channel_reports=[{
+            "name": "My Channel",
+            "session_watch_seconds": 1500.0,
+            "final_watch_seconds": 5000.0,
+            "target_goal_text": "Goal: 10 hrs",
+            "total_videos_count": 2,
+            "regular_videos_count": 1,
+            "shorts_count": 1,
+        }],
+        status="Going to Sleep",
+        total_videos_watched=2,
+        regular_videos_count=1,
+        shorts_count=1,
+        sleep_cycle_number=2,
+        sleep_duration_hours=2.0,
+        wake_up_time=wake_time,
+    )
+
+    plain = report.generate_plain_text()
+    assert "SLEEP NOTIFICATION (SLEEP CYCLE #2)" in plain
+    assert "Sleep Cycle:          #2" in plain
+    assert "Sleep Duration:       2.0 hour(s)" in plain
+    assert "2026-11-08 08:30:00" in plain
+    assert "Videos Watched:       2 (1 regular, 1 Shorts)" in plain
+
+    html_content = report.generate_html_body()
+    assert "Going to Sleep — Sleep Cycle #2" in html_content
+    assert "Sleep Cycle #2" in html_content
+    assert "2.0 hour(s)" in html_content
+    assert "My Channel" in html_content
+
+
+def test_waking_up_resets_fresh_stats_and_clears_keys(test_worker):
+    """Upon wake-up, the channel tracker and session metrics start from fresh stats while preserving thread subject."""
+    test_worker.config_mgr.set_setting("NoTargetFoundSleepHours", "0.00005 Hours")
+    initial_subject = test_worker.session_thread_subject
+
+    # Simulate accumulated stats in the pass before sleeping
+    test_worker.watched_count = 5
+    test_worker.target_attempts = 5
+    test_worker.channel_tracker.set_active_channel("Target Channel")
+    test_worker.channel_tracker.add_watch_delta("Target Channel", 600.0)
+
+    session_keys = {"video_key_1", "video_key_2"}
+
+    with patch.object(test_worker, "_send_session_report"), \
+         patch("src.automation.watching_worker.setup_driver", return_value=MagicMock()), \
+         patch("src.automation.watching_worker.perform_google_login", return_value=True):
+
+        res = test_worker._enter_no_target_sleep_cycle(session_watched_keys=session_keys)
+
+        assert res is True
+        # Fresh stats verification
+        assert test_worker.watched_count == 0
+        assert test_worker.target_attempts == 0
+        assert len(session_keys) == 0  # Cleared for fresh discovery
+        assert test_worker.channel_tracker.session_watch_seconds["target channel"] == 0.0
+        assert test_worker.channel_tracker.minute_counters.get("target channel", 0) == 0
+        # Thread subject preserved for same thread
+        assert test_worker.session_thread_subject == initial_subject
 
 
 def test_enter_no_target_sleep_cycle_interruptible_by_stop_event(test_worker):
@@ -167,28 +302,6 @@ def test_enter_no_target_sleep_cycle_interruptible_by_stop_event(test_worker):
         assert test_worker.is_sleeping is False
 
 
-def test_enter_no_target_sleep_cycle_wakes_up_and_relaunches_browser(test_worker):
-    """When the sleep timer expires, the worker wakes up, relaunches the browser, and resets cycle state."""
-    # Use 0.00005 hours (~0.18s) to test automatic wake-up
-    test_worker.config_mgr.set_setting("NoTargetFoundSleepHours", "0.00005 Hours")
-    mock_new_driver = MagicMock()
-
-    with patch.object(test_worker, "_send_session_report"), \
-         patch("src.automation.watching_worker.setup_driver", return_value=mock_new_driver) as mock_setup, \
-         patch("src.automation.watching_worker.perform_google_login", return_value=True) as mock_login, \
-         patch.object(test_worker, "_async_init_and_send_start_notification"):
-
-        session_keys = {"old_vid_1", "old_vid_2"}
-        result = test_worker._enter_no_target_sleep_cycle(session_watched_keys=session_keys)
-
-        assert result is True
-        assert len(session_keys) == 0  # Cleared for fresh discovery
-        assert test_worker.cycle_report_dispatched is False
-        assert test_worker.driver is mock_new_driver
-        mock_setup.assert_called_once()
-        mock_login.assert_called_once()
-
-
 def test_full_watching_loop_triggers_sleep_cycle_when_no_targets(test_worker):
     """In WatchingWorker.run(), when Home, Search, and Shorts find no targets, enters sleep cycle."""
     test_worker.config_mgr.set_setting("NoTargetFoundSleepHours", "2 Hours")
@@ -208,3 +321,4 @@ def test_full_watching_loop_triggers_sleep_cycle_when_no_targets(test_worker):
         test_worker.run()
 
         mock_sleep_cycle.assert_called_once()
+

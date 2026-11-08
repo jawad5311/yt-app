@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .email_reporter import EmailReporter, SessionReport
 from .session_tracker import SessionChannelTracker
@@ -1066,6 +1066,7 @@ class WatchingWorker:
         self.has_started_browsing = False
         self.is_sleeping: bool = False
         self.cycle_report_dispatched: bool = False
+        self.sleep_cycle_count: int = 0
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -4463,15 +4464,18 @@ class WatchingWorker:
             self.stop_event.set()
             return False
 
+        self.sleep_cycle_count += 1
+        current_sleep_cycle = self.sleep_cycle_count
+
         stop_msg = "No video of targeted channel found on YouTube Home or via YouTube Search."
         emit(self.log_queue, stop_msg, logging.WARNING)
         hours_str = f"{int(sleep_hours)} hour{'s' if int(sleep_hours) != 1 else ''}" if sleep_hours.is_integer() else f"{sleep_hours:.1f} hours"
         emit(
             self.log_queue,
-            f"No targeted channel videos found in current browsing pass. Entering sleep mode for {hours_str}...",
+            f"No targeted channel content found in current pass. Entering sleep mode for {hours_str} (Sleep Cycle #{current_sleep_cycle})...",
             logging.INFO,
         )
-        self._report_status("No target videos found. Closing browser & sending session report...", "info")
+        self._report_status(f"No target content. Sending sleep notification (Cycle #{current_sleep_cycle})...", "info")
 
         # 1. Close main visible YouTube browser tab
         if self.driver:
@@ -4482,13 +4486,25 @@ class WatchingWorker:
                 emit(self.log_queue, f"Notice while closing browser before sleep: {e}", logging.DEBUG)
             self.driver = None
 
-        # 2. Deliver session watch report to email
+        # 2. Deliver session sleep notification report to email under the exact same session thread
+        sleep_seconds = sleep_hours * 3600.0
+        wake_up_time = datetime.now() + timedelta(seconds=sleep_seconds)
         try:
-            emit(self.log_queue, "Sending session report to email before entering sleep mode...", logging.INFO)
-            self._send_session_report(status="No Target Found - Sleeping")
+            emit(
+                self.log_queue,
+                f"Sending sleep notification email under thread '{self.session_thread_subject}' (Sleep Cycle #{current_sleep_cycle})...",
+                logging.INFO,
+            )
+            self._send_session_report(
+                status="Going to Sleep",
+                is_sleep_notification=True,
+                sleep_cycle_number=current_sleep_cycle,
+                sleep_duration_hours=sleep_hours,
+                wake_up_time=wake_up_time,
+            )
             self.cycle_report_dispatched = True
         except Exception as e:
-            emit(self.log_queue, f"Error sending session report before sleep: {e}", logging.WARNING)
+            emit(self.log_queue, f"Error sending sleep notification email: {e}", logging.WARNING)
 
         # Close reporting driver as well so no background Chrome processes linger during sleep
         if getattr(self, "reporting_driver", None):
@@ -4499,13 +4515,12 @@ class WatchingWorker:
             self.reporting_driver = None
 
         # 3. Enter interruptible sleep loop
-        sleep_seconds = sleep_hours * 3600.0
         sleep_start = time.monotonic()
         self.is_sleeping = True
 
         emit(
             self.log_queue,
-            f"Bot is now sleeping for {hours_str}. YouTube tab is closed. The bot will automatically wake up and search for new videos when the sleep timer expires.",
+            f"Bot is now sleeping for {hours_str} (Sleep Cycle #{current_sleep_cycle}). YouTube tab is closed. The bot will automatically wake up and search for new videos with fresh stats.",
             logging.INFO,
         )
 
@@ -4543,17 +4558,21 @@ class WatchingWorker:
             self._report_status("Stopped by user", "info")
             return False
 
-        # 5. Wake-up! Relaunch browser and reset cycle counters
+        # 5. Wake-up! Relaunch browser and reset cycle counters to fresh stats
         emit(
             self.log_queue,
-            f"=== Wake-up timer completed ({hours_str})! Relaunching browser to check for new videos and shorts... ===",
+            f"=== Sleep Cycle #{current_sleep_cycle} completed ({hours_str})! Waking up now to look for new videos with fresh stats... ===",
             logging.INFO,
         )
-        self._report_status("Waking up... Relaunching browser to check for new videos", "info")
+        self._report_status("Waking up... Relaunching browser with fresh stats", "info")
 
+        # Start from FRESH stats!
         session_watched_keys.clear()
         self.cycle_report_dispatched = False
+        self.target_attempts = 0
+        self.watched_count = 0
 
+        # Fresh channel tracker so session watch time, videos watched, and discovery counts reset to 0
         if hasattr(self, "channel_tracker") and self.channel_tracker:
             self.channel_tracker = SessionChannelTracker(
                 config_mgr=self.config_mgr,
@@ -4562,13 +4581,6 @@ class WatchingWorker:
                 emit_event=self._emit_event,
                 log_queue=self.log_queue,
             )
-
-        self.reporting_thread = threading.Thread(
-            target=self._async_init_and_send_start_notification,
-            name="ReportingStartNotificationThread",
-            daemon=True,
-        )
-        self.reporting_thread.start()
 
         known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
         known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
@@ -5245,9 +5257,18 @@ class WatchingWorker:
         except Exception as exc:
             logging.debug(f"Failed dispatching critical alert email: {exc}")
 
-    def _send_session_report(self, status: str = "Completed", error: Optional[str] = None) -> None:
-        """Deliver session watch time report."""
-        self._emit_event(("report_generating", "Generating session report... Please do not close the app."))
+    def _send_session_report(
+        self,
+        status: str = "Completed",
+        error: Optional[str] = None,
+        is_sleep_notification: bool = False,
+        sleep_cycle_number: Optional[int] = None,
+        sleep_duration_hours: Optional[float] = None,
+        wake_up_time: Optional[datetime] = None,
+    ) -> None:
+        """Deliver session watch time report or sleep notification email under the same thread."""
+        modal_msg = f"Sending sleep notification (Cycle #{sleep_cycle_number})... Please do not close the app." if is_sleep_notification else "Generating session report... Please do not close the app."
+        self._emit_event(("report_generating", modal_msg))
         if not self.config_mgr:
             self._emit_event(("report_sent", False, "No configuration manager available."))
             return
@@ -5286,6 +5307,9 @@ class WatchingWorker:
                 random_videos_count=report_data.get("random_videos_count", 0),
                 search_queries_count=report_data.get("search_queries_count", 0),
                 system_name=(self.config_mgr.get_setting("SystemName", "") or "").strip() if self.config_mgr else "",
+                sleep_cycle_number=sleep_cycle_number,
+                sleep_duration_hours=sleep_duration_hours,
+                wake_up_time=wake_up_time,
             )
             rep_driver = getattr(self, "reporting_driver", None)
             if rep_driver and not is_driver_alive(rep_driver):
@@ -5307,12 +5331,19 @@ class WatchingWorker:
                 driver=chosen_driver,
                 account=self.account,
                 log_queue=self.log_queue,
+                thread_info=getattr(self, "session_thread_info", None),
             )
             if not ok:
                 emit(self.log_queue, "Session report email delivery could not be completed.", logging.WARNING)
                 self._emit_event(("report_sent", False, "Session report email delivery could not be completed."))
             else:
-                self._emit_event(("report_sent", True, "Session report sent successfully!"))
+                if getattr(self, "session_thread_info", None) and isinstance(self.session_thread_info, dict):
+                    if self.session_thread_info.get("thread_url"):
+                        self.session_thread_url = self.session_thread_info["thread_url"]
+                    if self.session_thread_info.get("message_id"):
+                        self.session_thread_message_id = self.session_thread_info["message_id"]
+                msg = f"Sleep notification (Cycle #{sleep_cycle_number}) sent successfully!" if is_sleep_notification else "Session report sent successfully!"
+                self._emit_event(("report_sent", True, msg))
         except Exception as exc:
             emit(self.log_queue, f"Failed dispatching session email report: {exc}", logging.WARNING)
             self._emit_event(("report_sent", False, f"Failed dispatching session email report: {exc}"))
