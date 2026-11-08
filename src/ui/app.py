@@ -446,6 +446,9 @@ class YTBotApp(tk.Tk):
                         f"Automation start cancelled by user (Full Video Timeout is set to {timeout_mins}m).",
                         logging.INFO,
                     )
+                    dashboard = getattr(self, "views", {}).get("dashboard")
+                    if dashboard is not None and hasattr(dashboard, "set_running_state"):
+                        dashboard.set_running_state(False)
                     return False
             except Exception as err:
                 emit(self.log_queue, f"Timeout confirmation skipped ({err}).", logging.DEBUG)
@@ -497,6 +500,9 @@ class YTBotApp(tk.Tk):
         self.config_mgr.set_setting("AutomationLoops", str(total_loops))
 
         if not self._confirm_full_video_timeout_if_needed():
+            dashboard = getattr(self, "views", {}).get("dashboard")
+            if dashboard is not None and hasattr(dashboard, "set_running_state"):
+                dashboard.set_running_state(False)
             return
 
         self.is_running = True
@@ -713,6 +719,9 @@ class YTBotApp(tk.Tk):
             return
 
         if not self._confirm_full_video_timeout_if_needed():
+            dashboard = getattr(self, "views", {}).get("dashboard")
+            if dashboard is not None and hasattr(dashboard, "set_running_state"):
+                dashboard.set_running_state(False)
             return
 
         self.is_running = True

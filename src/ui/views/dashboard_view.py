@@ -211,6 +211,9 @@ class DashboardView(Frame):
             cmd = getattr(self.app_controller, "start_watching", None)
             if callable(cmd):
                 cmd()
+            # If start_watching was cancelled, failed validation, or did not start, restore idle button state
+            if getattr(self.app_controller, "is_running", None) is False and not getattr(self, "is_running", False):
+                self.set_running_state(False)
 
         def _on_stop_automation():
             if not getattr(self, "is_running", False) and not (hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True):
