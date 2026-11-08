@@ -1,6 +1,7 @@
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 from pathlib import Path
@@ -105,10 +106,13 @@ class YTBotApp(tk.Tk):
         self._close_timeout: float = 30.0
         self._report_finish_time: Optional[float] = None
         self.report_modal: Optional[Any] = None
+        self._close_button_enabled: Optional[bool] = None
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self._update_close_button_state()
         self._poll_job = self.after(50, self._poll_log_queue)
+        self.after(100, self._update_close_button_state)
 
         # Pre-load accounts fallback if saved list is empty and accounts.txt exists
         if not self.loaded_accounts:
@@ -495,6 +499,7 @@ class YTBotApp(tk.Tk):
 
         self.is_running = True
         self.current_mode = "automation"
+        self._update_close_button_state()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
         self.current_session_id = session_id
@@ -710,6 +715,7 @@ class YTBotApp(tk.Tk):
 
         self.is_running = True
         self.current_mode = "watching"
+        self._update_close_button_state()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
         self.current_session_id = session_id
@@ -1117,6 +1123,74 @@ class YTBotApp(tk.Tk):
             except Exception:
                 pass
             self._close_check_job = None
+
+    def is_any_task_running(self) -> bool:
+        """Check whether any worker, browsing session, background job, or email report is active."""
+        if getattr(self, "is_running", False):
+            return True
+        if bool(self._get_owned_threads()):
+            return True
+        # Check if email report modal is active/generating
+        report_modal = self.__dict__.get("report_modal", None)
+        if report_modal is not None:
+            try:
+                if report_modal.winfo_exists() and getattr(report_modal, "is_generating", False):
+                    return True
+            except Exception:
+                pass
+        # Check background jobs
+        bg = self.__dict__.get("background_jobs", None)
+        if bg is not None:
+            jobs = getattr(bg, "_jobs", {})
+            if any(getattr(j, "is_alive", lambda: False)() for j in jobs.values()):
+                return True
+        # If closing transition is active (e.g. stopping session before exit)
+        if self.__dict__.get("is_closing", False):
+            return True
+        return False
+
+    def _update_close_button_state(self) -> None:
+        """Dynamically enable or gray out the title bar close (X) button based on active task status."""
+        is_busy = self.is_any_task_running()
+        should_enable = not is_busy
+        if getattr(self, "_close_button_enabled", None) is not should_enable:
+            self._close_button_enabled = should_enable
+            self._set_native_close_button_enabled(should_enable)
+
+    def _set_native_close_button_enabled(self, enabled: bool) -> None:
+        """Gray out and disable, or re-enable the native Windows title bar close (X) button."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # Retrieve the outer top-level window frame HWND containing the title bar
+            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            if not hwnd:
+                return
+
+            SC_CLOSE = 0xF060
+            MF_BYCOMMAND = 0x00000000
+            MF_ENABLED = 0x00000000
+            MF_GRAYED = 0x00000001
+            MF_DISABLED = 0x00000002
+
+            hmenu = user32.GetSystemMenu(hwnd, False)
+            if hmenu:
+                flags = MF_BYCOMMAND | (MF_ENABLED if enabled else (MF_DISABLED | MF_GRAYED))
+                user32.EnableMenuItem(hmenu, SC_CLOSE, flags)
+                user32.DrawMenuBar(hwnd)
+
+                SWP_FRAMECHANGED = 0x0020
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_NOZORDER = 0x0004
+                user32.SetWindowPos(
+                    hwnd, 0, 0, 0, 0, 0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                )
+        except Exception as exc:
+            logging.debug(f"Could not update native close button: {exc}")
 
     def _safe_exit(self, force: bool = False) -> None:
         """Destroy UI safely and exit the application process at all cost."""
