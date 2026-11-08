@@ -881,7 +881,7 @@ class ChannelsView(Frame):
             values=FETCH_DATA_OPTIONS,
             width=160,
         )
-        videos_menu.set("100")
+        videos_menu.set("Fetch No Data")
         videos_menu.pack(anchor="w", padx=16, pady=(0, 12))
 
         # Shorts limit section
@@ -903,7 +903,7 @@ class ChannelsView(Frame):
             values=FETCH_DATA_OPTIONS,
             width=160,
         )
-        shorts_menu.set("100")
+        shorts_menu.set("Fetch No Data")
         shorts_menu.pack(anchor="w", padx=16, pady=(0, 16))
 
         # Actions
@@ -1397,6 +1397,8 @@ class ChannelsView(Frame):
         name_container = ctk.CTkFrame(header, fg_color="transparent")
         name_container.pack(fill="x", anchor="w")
 
+        _update_totals_display = None
+
         def _open_channel():
             raw_url = (channel.url or "").strip()
             if not raw_url:
@@ -1410,6 +1412,132 @@ class ChannelsView(Frame):
                 raw_url = f"https://www.youtube.com/{raw_url}" if raw_url.startswith("@") else f"https://www.youtube.com/@{raw_url}"
             webbrowser.open_new(raw_url)
 
+        def _check_new_videos():
+            raw_url = (channel.url or "").strip()
+            if not raw_url:
+                messagebox.showinfo(
+                    "Missing URL",
+                    f"Channel '{channel.name}' does not have a URL configured.",
+                    parent=modal,
+                )
+                return
+
+            check_new_btn.configure(state="disabled", text="Checking...")
+
+            def _bg_check():
+                return fetch_channel_data(
+                    raw_url,
+                    video_limit=None,
+                    shorts_limit=None,
+                    config_mgr=getattr(self.app_controller, "config_mgr", None),
+                )
+
+            def _on_done(res):
+                if self._widget_exists(modal) and self._widget_exists(check_new_btn):
+                    check_new_btn.configure(state="normal", text="Check New")
+
+                if getattr(res, "error", None):
+                    messagebox.showerror(
+                        "Check Failed",
+                        f"Failed to check channel on YouTube:\n{res.error}",
+                        parent=modal,
+                    )
+                    return
+
+                # Check if official name changed
+                official_name = (getattr(res, "channel_title", "") or "").strip()
+                if official_name and official_name != channel.name:
+                    if not any(other is not channel and other.name.lower() == official_name.lower() for other in self.channels):
+                        old_name = channel.name
+                        channel.name = official_name
+                        queue = self._queue_view()
+                        if queue is not None:
+                            queue.reassign_channel(old_name, channel.name)
+                        if self._widget_exists(modal) and self._widget_exists(name_lbl):
+                            name_lbl.configure(text=f"📺 {channel.name}{tag}")
+
+                if getattr(res, "total_videos", None) is not None:
+                    channel.total_videos = res.total_videos
+                if getattr(res, "total_shorts", None) is not None:
+                    channel.total_shorts = res.total_shorts
+
+                exist_vids, exist_shorts, exist_total = self.get_existing_video_counts_for_channel(channel.name)
+                yt_vids = channel.total_videos if channel.total_videos is not None else 0
+                yt_shorts = channel.total_shorts if channel.total_shorts is not None else 0
+                yt_total = yt_vids + yt_shorts
+
+                has_new_v = False
+                has_new_s = False
+                if yt_total > 0:
+                    if channel.total_videos is not None and yt_vids > exist_vids:
+                        has_new_v = True
+                    if channel.total_shorts is not None and yt_shorts > exist_shorts:
+                        has_new_s = True
+                    if not has_new_v and not has_new_s and yt_total > exist_total:
+                        has_new_v = True
+
+                channel.has_new_videos = has_new_v
+                channel.has_new_shorts = has_new_s
+
+                self.save_channels()
+                self.refresh_list()
+                queue = self._queue_view()
+                if queue is not None:
+                    queue.refresh_list()
+                if callable(_update_totals_display):
+                    _update_totals_display()
+
+                if has_new_v or has_new_s:
+                    new_items = []
+                    if has_new_v:
+                        diff_v = max(0, yt_vids - exist_vids)
+                        new_items.append(f"{diff_v} new regular video(s)" if diff_v > 0 else "new regular videos")
+                    if has_new_s:
+                        diff_s = max(0, yt_shorts - exist_shorts)
+                        new_items.append(f"{diff_s} new short(s)" if diff_s > 0 else "new shorts")
+                    summary = " and ".join(new_items)
+                    messagebox.showinfo(
+                        "New Content Published",
+                        f"🔥 New content is published for '{channel.name}'!\n\n"
+                        f"Found: {summary}\n\n"
+                        f"• Total on YouTube: {yt_total:,} ({yt_vids:,} videos, {yt_shorts:,} shorts)\n"
+                        f"• Currently in Queue/Stats: {exist_total:,} ({exist_vids:,} videos, {exist_shorts:,} shorts)\n\n"
+                        f"Select your desired fetch count below and click '⚡ Fetch Data' to import them.",
+                        parent=modal,
+                    )
+                else:
+                    messagebox.showinfo(
+                        "No New Content",
+                        f"'{channel.name}' is up to date.\n\n"
+                        f"No new videos or shorts published since last check.\n\n"
+                        f"• Total on YouTube: {yt_total:,} ({yt_vids:,} videos, {yt_shorts:,} shorts)\n"
+                        f"• Currently in Queue/Stats: {exist_total:,} ({exist_vids:,} videos, {exist_shorts:,} shorts)",
+                        parent=modal,
+                    )
+
+            def _on_error(exc):
+                if self._widget_exists(modal) and self._widget_exists(check_new_btn):
+                    check_new_btn.configure(state="normal", text="Check New")
+                messagebox.showerror(
+                    "Check Error",
+                    f"An error occurred while checking channel:\n{exc}",
+                    parent=modal,
+                )
+
+            jobs = getattr(self.app_controller, "background_jobs", None)
+            if jobs is not None:
+                jobs.submit(
+                    _bg_check,
+                    done=_on_done,
+                    error=_on_error,
+                    current=lambda: self._widget_exists(self) and self._widget_exists(modal),
+                )
+            else:
+                threading.Thread(
+                    target=lambda: self.after(0, lambda: _on_done(_bg_check())),
+                    daemon=True,
+                ).start()
+
         open_channel_btn = ctk.CTkButton(
             name_container,
             text="Open Channel",
@@ -1421,6 +1549,20 @@ class ChannelsView(Frame):
             command=_open_channel,
         )
         open_channel_btn.pack(side="right", anchor="e")
+        add_tooltip(open_channel_btn, "Open this channel's page in your web browser.")
+
+        check_new_btn = ctk.CTkButton(
+            name_container,
+            text="Check New",
+            width=100,
+            height=30,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0284C7",
+            hover_color="#0369A1",
+            command=_check_new_videos,
+        )
+        check_new_btn.pack(side="right", anchor="e", padx=(0, 8))
+        add_tooltip(check_new_btn, "Check YouTube to see if new videos or shorts\nhave been published by this channel.")
 
         name_lbl = ctk.CTkLabel(
             name_container,
@@ -1428,7 +1570,7 @@ class ChannelsView(Frame):
             font=ctk.CTkFont(size=18, weight="bold"),
             cursor="hand2",
         )
-        name_lbl.pack(side="left", anchor="w", before=open_channel_btn)
+        name_lbl.pack(side="left", anchor="w", before=check_new_btn)
 
         name_entry = None
         name_saving = False
@@ -1465,7 +1607,7 @@ class ChannelsView(Frame):
                 if name_entry is not None:
                     name_entry.destroy()
                     name_entry = None
-                name_lbl.pack(side="left", anchor="w", before=open_channel_btn)
+                name_lbl.pack(side="left", anchor="w", before=check_new_btn)
                 name_saving = False
 
         def _cancel_name(event=None):
@@ -1477,7 +1619,7 @@ class ChannelsView(Frame):
                 if name_entry is not None:
                     name_entry.destroy()
                     name_entry = None
-                name_lbl.pack(side="left", anchor="w", before=open_channel_btn)
+                name_lbl.pack(side="left", anchor="w", before=check_new_btn)
             finally:
                 name_saving = False
 
@@ -1492,7 +1634,7 @@ class ChannelsView(Frame):
                 height=30,
             )
             name_entry.insert(0, channel.name)
-            name_entry.pack(side="left", fill="x", expand=True, padx=(0, 10), before=open_channel_btn)
+            name_entry.pack(side="left", fill="x", expand=True, padx=(0, 10), before=check_new_btn)
             name_entry.focus_set()
             name_entry.select_range(0, "end")
             name_entry.bind("<Return>", _save_name)
@@ -1643,7 +1785,7 @@ class ChannelsView(Frame):
             values=FETCH_DATA_OPTIONS,
             width=150,
         )
-        videos_menu.set("100")
+        videos_menu.set("Fetch No Data")
         videos_menu.pack(anchor="w", pady=(3, 0))
 
         s_box = ctk.CTkFrame(fetch_settings_frame, fg_color="transparent")
@@ -1658,7 +1800,7 @@ class ChannelsView(Frame):
             values=FETCH_DATA_OPTIONS,
             width=150,
         )
-        shorts_menu.set("100")
+        shorts_menu.set("Fetch No Data")
         shorts_menu.pack(anchor="w", pady=(3, 0))
 
         if channel.url:

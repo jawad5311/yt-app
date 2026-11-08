@@ -49,8 +49,8 @@ def test_channel_videos_modal_has_fetch_dropdowns_and_fetches_directly(ctk_app):
         v_menu, s_menu = option_menus[0], option_menus[1]
         assert v_menu.cget("values") == FETCH_DATA_OPTIONS
         assert s_menu.cget("values") == FETCH_DATA_OPTIONS
-        assert v_menu.get() == "100"
-        assert s_menu.get() == "100"
+        assert v_menu.get() == "Fetch No Data"
+        assert s_menu.get() == "Fetch No Data"
 
         # Locate Fetch Data button
         fetch_btn = None
@@ -60,7 +60,17 @@ def test_channel_videos_modal_has_fetch_dropdowns_and_fetches_directly(ctk_app):
                 break
         assert fetch_btn is not None, "Fetch Data button should be present"
 
-        # Click Fetch Data with default "100" and "100"
+        # Clicking Fetch Data with default 'Fetch No Data' shows warning
+        with patch("src.ui.views.channels_view.messagebox.showwarning") as mock_warn:
+            fetch_btn._command()
+            mock_warn.assert_called_once()
+            mock_fetch.assert_not_called()
+
+        mock_fetch.reset_mock()
+
+        # Set values to "100" videos and "100" shorts
+        v_menu.set("100")
+        s_menu.set("100")
         fetch_btn._command()
         mock_fetch.assert_called_once()
         args, kwargs = mock_fetch.call_args
