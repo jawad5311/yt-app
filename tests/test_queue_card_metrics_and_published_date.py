@@ -2,9 +2,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 import json
 
+from datetime import datetime, timezone
 from src.models.video_task import VideoTask
 from src.models.watch_stats import format_video_watch_ratio, StatRecord
-from src.ui.views.queue_view import format_published_date, _get_task_sort_val
+from src.ui.views.queue_view import format_published_date, format_exact_published_datetime, _get_task_sort_val
 from src.utils.channel_fetcher import (
     parse_duration_str,
     enrich_video_tasks,
@@ -14,18 +15,38 @@ from src.utils.channel_fetcher import (
 
 
 def test_format_published_date_iso():
-    """ISO 8601 timestamps should format as DD Mon YYYY."""
-    assert format_published_date("2025-02-26T13:49:27Z") == "26 Feb 2025"
-    assert format_published_date("2026-08-16T07:09:49Z") == "16 Aug 2026"
-    assert format_published_date("2024-11-23T11:22:44+00:00") == "23 Nov 2024"
+    """ISO 8601 timestamps format as relative time by default and DD Mon YYYY with relative=False."""
+    fixed_now = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
+    assert format_published_date("2026-11-08T12:00:00Z", now=fixed_now) == "1 day ago"
+    assert format_published_date("2026-11-07T12:00:00Z", now=fixed_now) == "2 days ago"
+    assert format_published_date("2026-10-26T12:00:00Z", now=fixed_now) == "2 weeks ago"
+    assert format_published_date("2026-10-09T12:00:00Z", now=fixed_now) == "1 month ago"
+    assert format_published_date("2025-11-09T12:00:00Z", now=fixed_now) == "1 year ago"
+
+    # Non-relative mode
+    assert format_published_date("2025-02-26T13:49:27Z", relative=False) == "26 Feb 2025"
+    assert format_published_date("2026-08-16T07:09:49Z", relative=False) == "16 Aug 2026"
+    assert format_published_date("2024-11-23T11:22:44+00:00", relative=False) == "23 Nov 2024"
 
 
 def test_format_published_date_calendar_and_formatted():
-    """Already formatted and calendar strings should be cleanly parsed and preserved."""
-    assert format_published_date("01 Jan 2026") == "01 Jan 2026"
-    assert format_published_date("16 Aug 2026") == "16 Aug 2026"
-    assert format_published_date("2025-02-26") == "26 Feb 2025"
-    assert format_published_date("2025/03/11") == "11 Mar 2025"
+    """Calendar dates format as relative by default and exact date with relative=False."""
+    fixed_now = datetime(2026, 11, 9, 12, 0, 0)
+    assert format_published_date("2026-11-08", now=fixed_now) == "1 day ago"
+    assert format_published_date("2026-11-07", now=fixed_now) == "2 days ago"
+
+    assert format_published_date("01 Jan 2026", relative=False) == "01 Jan 2026"
+    assert format_published_date("16 Aug 2026", relative=False) == "16 Aug 2026"
+    assert format_published_date("2025-02-26", relative=False) == "26 Feb 2025"
+    assert format_published_date("2025/03/11", relative=False) == "11 Mar 2025"
+
+
+def test_format_exact_published_datetime():
+    """Tooltips display the exact publication date and time."""
+    assert format_exact_published_datetime("2025-02-26T13:49:27Z") == "26 Feb 2025, 01:49 PM"
+    assert format_exact_published_datetime("2026-08-13T22:00:26Z") == "13 Aug 2026, 10:00 PM"
+    assert format_exact_published_datetime("2026-01-01") == "01 Jan 2026"
+    assert format_exact_published_datetime("", fallback="Date: N/A") == "Date: N/A"
 
 
 def test_format_published_date_fallback():
@@ -74,8 +95,10 @@ def test_queue_card_metrics_complete_and_present():
     second_line_parts = [length_part, ratio_part, pub_date_text]
     stats_second_line = " | ".join(second_line_parts)
 
-    assert stats_second_line == "Length: 17 min | 0 / 51 min (0%) | 26 Feb 2025"
+    assert stats_second_line.startswith("Length: 17 min | 0 / 51 min (0%) | ")
+    assert "ago" in second_line_parts[2]
     assert len(second_line_parts) == 3
+    assert format_exact_published_datetime(task.published_at) == "26 Feb 2025, 01:49 PM"
 
 
 def test_queue_card_metrics_fallback_for_unknowns():
@@ -120,8 +143,10 @@ def test_queue_card_short_item_metrics():
     second_line_parts = [length_part, ratio_part, pub_date_text]
     stats_second_line = " | ".join(second_line_parts)
 
-    assert stats_second_line == "Length: 28s | 0s | 13 Aug 2026"
+    assert stats_second_line.startswith("Length: 28s | 0s | ")
+    assert "ago" in second_line_parts[2]
     assert len(second_line_parts) == 3
+    assert format_exact_published_datetime(task.published_at) == "13 Aug 2026, 10:00 PM"
 
 
 def test_task_sort_val_published_date():

@@ -1,5 +1,5 @@
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timezone
 import tkinter as tk
 from tkinter import TclError, messagebox
 from typing import Any, Callable, Dict, List, Optional
@@ -64,15 +64,14 @@ def format_last_played(timestamp_str: Optional[str], now: Optional[datetime] = N
         return "Never"
 
 
-def format_published_date(pub_val: Optional[str], fallback: str = "") -> str:
-    """Format an ISO 8601 or date string into '01 Jan 2026'."""
+def parse_published_datetime(pub_val: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO 8601 or common date string into a datetime object."""
     if not pub_val or not str(pub_val).strip():
-        return fallback
+        return None
     val = str(pub_val).strip()
     try:
         clean_val = val.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(clean_val)
-        return dt.strftime("%d %b %Y")
+        return datetime.fromisoformat(clean_val)
     except Exception:
         pass
     for fmt in (
@@ -85,18 +84,104 @@ def format_published_date(pub_val: Optional[str], fallback: str = "") -> str:
         "%Y/%m/%d",
     ):
         try:
-            dt = datetime.strptime(val[:19] if ("T" in val or " " in val) else val[:11], fmt)
-            return dt.strftime("%d %b %Y")
+            return datetime.strptime(val[:19] if ("T" in val or " " in val) else val[:11], fmt)
         except Exception:
             pass
         try:
-            dt = datetime.strptime(val, fmt)
-            return dt.strftime("%d %b %Y")
+            return datetime.strptime(val, fmt)
         except Exception:
             pass
-    if val:
+    return None
+
+
+def format_published_date(
+    pub_val: Optional[str],
+    fallback: str = "",
+    relative: bool = True,
+    now: Optional[datetime] = None,
+) -> str:
+    """Format an ISO 8601 or date string into YouTube-style relative time (e.g. '1 day ago', '2 weeks ago').
+
+    If relative is False, returns formatted calendar date '01 Jan 2026'.
+    """
+    if not pub_val or not str(pub_val).strip():
+        return fallback
+    val = str(pub_val).strip()
+
+    # If it is already a relative string (e.g. '3 days ago'), return as is
+    if "ago" in val.lower():
         return val
-    return fallback
+
+    dt = parse_published_datetime(val)
+    if dt is None:
+        return val if val else fallback
+
+    if not relative:
+        return dt.strftime("%d %b %Y")
+
+    # Determine reference current time with matching timezone awareness
+    if dt.tzinfo is not None:
+        ref_now = now if now is not None else datetime.now(timezone.utc)
+        if ref_now.tzinfo is None:
+            ref_now = ref_now.replace(tzinfo=timezone.utc)
+    else:
+        ref_now = now if now is not None else datetime.now()
+        if ref_now.tzinfo is not None:
+            ref_now = ref_now.replace(tzinfo=None)
+
+    diff = ref_now - dt
+    total_seconds = int(diff.total_seconds())
+
+    if total_seconds < 60:
+        return "Just now"
+
+    if total_seconds < 3600:
+        mins = max(1, total_seconds // 60)
+        return "1 minute ago" if mins == 1 else f"{mins} minutes ago"
+
+    if total_seconds < 86400:
+        hrs = max(1, total_seconds // 3600)
+        return "1 hour ago" if hrs == 1 else f"{hrs} hours ago"
+
+    days = total_seconds // 86400
+    if days == 1:
+        return "1 day ago"
+    if 2 <= days <= 6:
+        return f"{days} days ago"
+
+    weeks = days // 7
+    if weeks == 1:
+        return "1 week ago"
+    if 2 <= weeks <= 3:
+        return f"{weeks} weeks ago"
+    if weeks == 4 and days < 30:
+        return "4 weeks ago"
+
+    months = days // 30
+    if months <= 1:
+        return "1 month ago"
+    if 2 <= months < 12:
+        return f"{months} months ago"
+
+    years = days // 365
+    if years <= 1:
+        return "1 year ago"
+    return f"{years} years ago"
+
+
+def format_exact_published_datetime(pub_val: Optional[str], fallback: str = "Date: N/A") -> str:
+    """Format publication timestamp into exact date and time for tooltips (e.g. '26 Feb 2025, 01:49 PM')."""
+    if not pub_val or not str(pub_val).strip():
+        return fallback
+    val = str(pub_val).strip()
+    dt = parse_published_datetime(val)
+    if dt is None:
+        return val if val else fallback
+
+    has_time = any(c in val for c in (":", "T", " "))
+    if has_time and (dt.hour != 0 or dt.minute != 0 or dt.second != 0 or "T" in val):
+        return dt.strftime("%d %b %Y, %I:%M %p")
+    return dt.strftime("%d %b %Y")
 
 
 def _get_task_sort_val(task: VideoTask, key: str, stats_store: Optional[Any], reverse: bool = True) -> float:
@@ -105,29 +190,12 @@ def _get_task_sort_val(task: VideoTask, key: str, stats_store: Optional[Any], re
 
     if key == "published_date":
         pub_str = getattr(task, "published_at", "") or ""
-        if pub_str:
+        dt = parse_published_datetime(pub_str)
+        if dt is not None:
             try:
-                clean_pub = pub_str.strip().replace("Z", "+00:00")
-                return datetime.fromisoformat(clean_pub).timestamp()
+                return dt.timestamp()
             except Exception:
                 pass
-            for fmt in (
-                "%d %b %Y",
-                "%d-%b-%Y",
-                "%d %B %Y",
-                "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%d",
-                "%Y/%m/%d",
-            ):
-                try:
-                    return datetime.strptime(pub_str.strip()[:19] if ("T" in pub_str or " " in pub_str) else pub_str.strip()[:11], fmt).timestamp()
-                except Exception:
-                    pass
-                try:
-                    return datetime.strptime(pub_str.strip(), fmt).timestamp()
-                except Exception:
-                    pass
         # Unparsed/empty published dates stay at bottom regardless of sort direction
         return float("-inf") if reverse else float("inf")
 
@@ -440,11 +508,10 @@ class QueueView(Frame):
 
     def get_queue_stats_summary(self) -> str:
         """Return the formatted stats string for total and per-channel queued videos/shorts.
-        Format: 'Total Videos: X | Channel A: Y | Channel B: Z' (or 'Total Shorts: ...')
+        Format: '70 | 36:32 | Uncat: 2' (omits Uncat if 0, or just '0' if empty).
         Order of channels strictly follows the active display order in the queue.
         """
         is_shorts = bool(getattr(self, "shorts_only", False))
-        total_prefix = "Total Shorts" if is_shorts else "Total Videos"
 
         tasks = getattr(self, "video_tasks", []) or []
         matching_tasks = [
@@ -461,7 +528,7 @@ class QueueView(Frame):
             ]
             parts = [f"Matching: {len(search_matched)} of {total_count}"]
         else:
-            parts = [f"{total_prefix}: {total_count}"]
+            parts = [str(total_count)]
 
         if total_count > 0:
             groups = group_videos_by_channel(
@@ -469,6 +536,8 @@ class QueueView(Frame):
                 self._get_display_channels(),
                 include_archived=False,
             )
+            channel_counts = []
+            uncat_count = 0
             for group in groups:
                 ch_matching = [
                     t for _, t in group.videos
@@ -477,14 +546,21 @@ class QueueView(Frame):
                     )
                 ]
                 count = len(ch_matching)
-                if count > 0:
-                    parts.append(f"{group.name}: {count}")
+                if group.is_uncategorized or group.name == "Uncategorized":
+                    uncat_count += count
+                elif count > 0:
+                    channel_counts.append(str(count))
+
+            if channel_counts:
+                parts.append(":".join(channel_counts))
+            if uncat_count > 0:
+                parts.append(f"Uncat: {uncat_count}")
 
         return " | ".join(parts)
 
     def get_queue_header_title(self) -> str:
         """Return the section header title with total and per-channel stats.
-        Format: 'Queued Target Videos (Total Videos: X | Channel A: Y | Channel B: Z)'
+        Format: 'Queued Target Videos (70 | 36:32 | Uncat: 2)'
         """
         is_shorts = bool(getattr(self, "shorts_only", False))
         base_title = "Queued Target Shorts" if is_shorts else "Queued Target Videos"
@@ -1994,7 +2070,9 @@ class QueueView(Frame):
 
         last_played_val = (record.last_run or record.last_completed) if record else ""
         last_played_text = format_last_played(last_played_val)
-        pub_date_text = format_published_date(getattr(task, "published_at", ""), fallback="Date: N/A")
+        raw_pub = getattr(task, "published_at", "")
+        pub_date_text = format_published_date(raw_pub, fallback="Date: N/A")
+        exact_pub_text = format_exact_published_datetime(raw_pub, fallback="Date: N/A")
 
         second_line_parts = [length_part, ratio_part, pub_date_text]
         stats_second_line = " | ".join(second_line_parts)
@@ -2009,6 +2087,9 @@ class QueueView(Frame):
             text_color=("gray50", "gray50") if (not task.enabled or not channel_enabled or is_limit_reached) else None,
         )
         lbl.grid(row=0, column=1, padx=10, pady=(10, 0), sticky="ew")
+
+        tooltip_msg = f"Published: {exact_pub_text}" if exact_pub_text != "Date: N/A" else "Published date not available"
+        add_tooltip(lbl, tooltip_msg)
 
         stats_lbl = ctk.CTkLabel(
             card,

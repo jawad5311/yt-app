@@ -33,7 +33,7 @@ from ...utils.scroll_helper import setup_smooth_scrolling
 from ..confirm_dialog import show_themed_confirm_dialog
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 from .channel_import_modal import ChannelImportModal
-from .queue_view import format_published_date
+from .queue_view import format_exact_published_datetime, format_published_date
 
 def _get_cfg_int(mgr: Any, key: str, default: int) -> int:
     if not mgr:
@@ -1939,20 +1939,52 @@ class ChannelsView(Frame):
                     v_len = "Length: Unknown"
 
                 ratio_display = format_video_watch_ratio(v_watch_sec, v_target_sec) or "0s"
-                pub_display = format_published_date(getattr(task, "published_at", ""), fallback="Date: N/A")
+                raw_pub = getattr(task, "published_at", "")
+                pub_display = format_published_date(raw_pub, fallback="Date: N/A")
+                exact_pub = format_exact_published_datetime(raw_pub, fallback="Date: N/A")
 
-                label_parts.append(f"{v_len} | {ratio_display} | {pub_display}")
-
-                if task.max_runs > 0:
-                    label_parts.append(f"Limit: {task.max_runs} runs")
+                info_col = ctk.CTkFrame(card, fg_color="transparent")
+                info_col.grid(row=0, column=0, padx=12, pady=8, sticky="w")
 
                 ctk.CTkLabel(
-                    card,
-                    text="\n".join(label_parts),
+                    info_col,
+                    text=v_title,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    justify="left",
+                    anchor="w",
+                ).pack(anchor="w")
+
+                line2_frame = ctk.CTkFrame(info_col, fg_color="transparent")
+                line2_frame.pack(anchor="w")
+
+                ctk.CTkLabel(
+                    line2_frame,
+                    text=f"{v_len} | {ratio_display} | ",
                     font=ctk.CTkFont(size=12),
                     justify="left",
                     anchor="w",
-                ).grid(row=0, column=0, padx=12, pady=8, sticky="w")
+                ).pack(side="left")
+
+                pub_lbl = ctk.CTkLabel(
+                    line2_frame,
+                    text=pub_display,
+                    font=ctk.CTkFont(size=12),
+                    justify="left",
+                    anchor="w",
+                    cursor="hand2",
+                )
+                pub_lbl.pack(side="left")
+                modal_tooltip_msg = f"Published: {exact_pub}" if exact_pub != "Date: N/A" else "Published date not available"
+                add_tooltip(pub_lbl, modal_tooltip_msg)
+
+                if task.max_runs > 0:
+                    ctk.CTkLabel(
+                        info_col,
+                        text=f"Limit: {task.max_runs} runs",
+                        font=ctk.CTkFont(size=12),
+                        justify="left",
+                        anchor="w",
+                    ).pack(anchor="w")
 
                 card_btns = ctk.CTkFrame(card, fg_color="transparent")
                 card_btns.grid(row=0, column=1, padx=10, pady=8, sticky="e")

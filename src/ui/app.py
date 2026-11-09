@@ -433,7 +433,7 @@ class YTBotApp(tk.Tk):
         except Exception:
             pass
 
-        if hasattr(self, "quota_label") and self.quota_label:
+        if "quota_label" in self.__dict__ and self.quota_label:
             try:
                 self.quota_label.configure(style="QuotaBadge.TLabel")
             except Exception:

@@ -243,22 +243,34 @@ def test_queue_card_displays_video_watch_time_ratio():
         lines = text_arg.split("\n")
         assert len(lines) == 2
         assert lines[0] == "#1. Stop Wasting Money on Meta Ads! Try This Strategy"
-        assert lines[1] == "Length: 8 min | 7 / 24 min (29%) | 01 Jan 2026"
+        assert lines[1].startswith("Length: 8 min | 7 / 24 min (29%) | ")
+        assert "ago" in lines[1]
         stats_lbl_call = mock_label_cls.call_args_list[1]
         line3_text = stats_lbl_call[1].get("text")
         assert "watched · Last Played: Never" in line3_text
 
 
 def test_format_published_date():
-    from src.ui.views.queue_view import format_published_date
+    from datetime import datetime, timezone
+    from src.ui.views.queue_view import format_published_date, format_exact_published_datetime
 
-    assert format_published_date("2026-01-01T15:30:00Z") == "01 Jan 2026"
-    assert format_published_date("2026-01-01T15:30:00.000Z") == "01 Jan 2026"
-    assert format_published_date("2026-01-01") == "01 Jan 2026"
-    assert format_published_date("2025-10-15T08:00:00Z") == "15 Oct 2025"
-    assert format_published_date("2026-11-07") == "07 Nov 2026"
+    fixed_now = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
+    assert format_published_date("2026-11-08T12:00:00Z", now=fixed_now) == "1 day ago"
+    assert format_published_date("2026-11-07T12:00:00Z", now=fixed_now) == "2 days ago"
+    assert format_published_date("2026-10-26T12:00:00Z", now=fixed_now) == "2 weeks ago"
+    assert format_published_date("2026-10-09T12:00:00Z", now=fixed_now) == "1 month ago"
+    assert format_published_date("3 days ago") == "3 days ago"
+
+    # With relative=False, calendar date is returned
+    assert format_published_date("2026-01-01T15:30:00Z", relative=False) == "01 Jan 2026"
+    assert format_published_date("2026-01-01", relative=False) == "01 Jan 2026"
     assert format_published_date("") == ""
     assert format_published_date(None) == ""
+
+    # Exact date and time for tooltip
+    assert format_exact_published_datetime("2026-01-01T15:30:00Z") == "01 Jan 2026, 03:30 PM"
+    assert format_exact_published_datetime("2026-01-01") == "01 Jan 2026"
+    assert format_exact_published_datetime("") == "Date: N/A"
 
 
 def test_queue_channel_buttons_rearranged_order(ctk_app):
