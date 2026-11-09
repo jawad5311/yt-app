@@ -194,10 +194,10 @@ class YTBotApp(tk.Tk):
         self.nav_buttons: Dict[str, Any] = {}
         nav_items = [
             ("dashboard", "📊  Dashboard"),
-            ("accounts", "👤  Accounts"),
             ("channels", "📺  Channels"),
             ("queue", "🎥  Video Queue"),
             ("shorts_queue", "⚡  Shorts Queue"),
+            ("accounts", "👤  Accounts"),
             ("settings", "⚙  Settings"),
             ("logs", "📋  Logs"),
         ]
@@ -220,10 +220,10 @@ class YTBotApp(tk.Tk):
 
         self.views: Dict[str, Any] = {
             "dashboard": DashboardView(self.container, self),
-            "accounts": AccountsView(self.container, self),
             "channels": ChannelsView(self.container, self),
             "queue": QueueView(self.container, self, shorts_only=False),
             "shorts_queue": QueueView(self.container, self, shorts_only=True),
+            "accounts": AccountsView(self.container, self),
             "settings": SettingsView(self.container, self),
             "logs": LogsView(self.container, self),
         }

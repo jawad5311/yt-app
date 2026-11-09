@@ -101,10 +101,10 @@ def test_sidebar_apple_navigation_structure(tk_root):
 
     nav_items = [
         ("dashboard", "📊  Dashboard"),
-        ("accounts", "👤  Accounts"),
         ("channels", "📺  Channels"),
         ("queue", "🎥  Video Queue"),
         ("shorts_queue", "⚡  Shorts Queue"),
+        ("accounts", "👤  Accounts"),
         ("settings", "⚙  Settings"),
         ("logs", "📋  Logs"),
     ]
