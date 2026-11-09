@@ -30,6 +30,8 @@ class TestCloseButtonShutdownAndReport:
         app._close_timeout = 20.0
         app._poll_job = "poll_job_1"
         app._close_check_job = None
+        app._quota_check_job = None
+        app.quota_tracker = None
 
         app.after = MagicMock(return_value="check_job_1")
         app.after_cancel = MagicMock()

@@ -1218,9 +1218,10 @@ class YTBotApp(tk.Tk):
             except Exception:
                 pass
             self._quota_check_job = None
-        if hasattr(self, "quota_tracker") and self.quota_tracker:
+        quota_tracker = self.__dict__.get("quota_tracker", None)
+        if quota_tracker is not None:
             try:
-                self.quota_tracker.unregister_listener(self._on_quota_updated)
+                quota_tracker.unregister_listener(self._on_quota_updated)
             except Exception:
                 pass
 
