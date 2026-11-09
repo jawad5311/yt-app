@@ -10,7 +10,7 @@
     "ParallelBrowsers": 1,
     "AppearanceMode": "Dark",
     "FullVideoTimeoutMinutes": 0,
-    "VideoCooldownHours": 12,
+    "VideoCooldownHours": 18,
     "BlockAds": true,
     "SkipAds": true,
     "MaxAdWatchSeconds": 9,
@@ -26,8 +26,11 @@
     "AdjustQuality": true,
     "QualityLevel": "360p",
     "RandomMicroPauses": true,
-    "NonTargetShortsLimit": 5,
-    "FullscreenTheaterMode": true
+    "NonTargetShortsLimit": 33,
+    "FullscreenTheaterMode": true,
+    "TargetShortsPerCycle": 10,
+    "NonTargetReelsLimit": 12,
+    "TotalNonTargetShortsLimit": 33
   },
   "accounts": [],
   "videos": [],

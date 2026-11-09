@@ -147,12 +147,12 @@ class SettingsView(Frame):
         scroll_general = SmoothScrollableFrame(tab_general)
         scroll_general.pack(fill="both", expand=True, padx=5, pady=5)
 
-        Label(scroll_general, text="System Name:", font=Font(weight="bold")).pack(
+        Label(scroll_general, text="System Name (Required):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(10, 2)
         )
         Label(
             scroll_general,
-            text="PC / system name identifier. Displayed in email report subjects and report headers.",
+            text="PC / system name identifier (compulsory). Displayed in email report subjects and report headers.",
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
@@ -498,7 +498,7 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.cooldown_entry = Entry(scroll_video, width=100)
-        cd_val = self.config_mgr.get_float("VideoCooldownHours", 0.0) if self.config_mgr else 0.0
+        cd_val = self.config_mgr.get_float("VideoCooldownHours", 18.0) if self.config_mgr else 18.0
         self.cooldown_entry.insert(0, str(int(cd_val)) if cd_val.is_integer() else str(cd_val))
         self.cooldown_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
@@ -532,7 +532,7 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.non_target_reels_limit_entry = Entry(scroll_shorts, width=100)
-        initial_reels_limit = self.config_mgr.get_int("NonTargetReelsLimit", 10) if self.config_mgr else 10
+        initial_reels_limit = self.config_mgr.get_int("NonTargetReelsLimit", 12) if self.config_mgr else 12
         self.non_target_reels_limit_entry.insert(0, str(initial_reels_limit))
         self.non_target_reels_limit_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
@@ -546,7 +546,7 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.total_non_target_shorts_limit_entry = Entry(scroll_shorts, width=100)
-        initial_total_non_target = self.config_mgr.get_int("TotalNonTargetShortsLimit", 20) if self.config_mgr else 20
+        initial_total_non_target = self.config_mgr.get_int("TotalNonTargetShortsLimit", 33) if self.config_mgr else 33
         self.total_non_target_shorts_limit_entry.insert(0, str(initial_total_non_target))
         self.total_non_target_shorts_limit_entry.pack(anchor="w", padx=15, pady=(0, 15))
         # Alias for backward compatibility
@@ -815,9 +815,13 @@ class SettingsView(Frame):
         if hasattr(self, "youtube_api_key_entry"):
             validated["YouTubeApiKey"] = self.youtube_api_key_entry.get().strip()
 
-        # 1c. System Name
+        # 1c. System Name (Compulsory)
         if hasattr(self, "system_name_entry"):
-            validated["SystemName"] = self.system_name_entry.get().strip()
+            sys_name = self.system_name_entry.get().strip()
+            if not sys_name:
+                self._notify_result(False, "System Name is required. Please enter a valid system name.")
+                return
+            validated["SystemName"] = sys_name
 
         # 2. Skip ads / Block ads (compatibility aliases kept consistent)
         skip_ads = bool(self.skip_ads_switch.get())

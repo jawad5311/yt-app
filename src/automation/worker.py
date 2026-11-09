@@ -538,7 +538,7 @@ class AutomationWorker:
                             self.dispatcher.release_task(task)
                         continue
 
-                cooldown_h = self.config_mgr.get_float('VideoCooldownHours', 12.0)
+                cooldown_h = self.config_mgr.get_float('VideoCooldownHours', 18.0)
                 eligible, unrunnable_reason = check_video_task_eligibility(
                     task, channel_objs, self.stats_store, cooldown_hours=cooldown_h
                 )

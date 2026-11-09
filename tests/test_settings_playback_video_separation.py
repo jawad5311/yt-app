@@ -11,6 +11,7 @@ class TestSettingsPlaybackVideoSeparation:
     def settings_view(self, ctk_app, tmp_path):
         settings_file = tmp_path / "settings.json"
         mgr = ConfigManager(settings_file)
+        mgr.set_setting("SystemName", "TestPC")
         app = ctk_app
         app.config_mgr = mgr
         app.apply_appearance_mode = MagicMock()
@@ -66,7 +67,7 @@ class TestSettingsPlaybackVideoSeparation:
         # Verify default / loaded values
         assert settings_view.default_video_views_entry.get() == "3"
         assert settings_view.default_video_max_views_entry.get() == "5"
-        assert settings_view.cooldown_entry.get() == "12"
+        assert settings_view.cooldown_entry.get() == "18"
 
     def test_save_settings_from_both_playback_and_video_tabs(self, settings_view):
         """Verify settings from both separate tabs save and persist properly into configuration."""

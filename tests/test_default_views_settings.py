@@ -42,7 +42,9 @@ def test_settings_view_load_and_save(ctk_app, tmp_path):
     mgr.set_setting("DefaultVideoTargetViews", 4)
     mgr.set_setting("DefaultVideoMaxViews", 8)
     mgr.set_setting("DefaultShortsMaxViews", 18)
+    mgr.set_setting("SystemName", "TestPC")
 
+    mgr.set_setting("SystemName", "TestPC")
     app_ctrl = MagicMock()
     app_ctrl.config_mgr = mgr
     view = SettingsView(ctk_app, app_ctrl)
@@ -75,6 +77,7 @@ def test_settings_view_load_and_save(ctk_app, tmp_path):
 def test_settings_view_validation(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
+    mgr.set_setting("SystemName", "TestPC")
     app_ctrl = MagicMock()
     app_ctrl.config_mgr = mgr
     view = SettingsView(ctk_app, app_ctrl)
@@ -302,6 +305,7 @@ def test_max_ad_watch_time_in_ads_tab(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
     mgr.set_setting("MaxAdWatchSeconds", 35)
+    mgr.set_setting("SystemName", "TestPC")
     app_ctrl = MagicMock()
     app_ctrl.config_mgr = mgr
     view = SettingsView(ctk_app, app_ctrl)

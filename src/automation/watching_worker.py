@@ -1111,7 +1111,7 @@ class WatchingWorker:
         return minutes * 60
 
     def _ad_settings(self) -> Tuple[bool, int]:
-        skip_ads = self.config_mgr.get_bool("SkipAds", True) or self.config_mgr.get_bool("BlockAds", False)
+        skip_ads = self.config_mgr.get_bool("SkipAds", True) or self.config_mgr.get_bool("BlockAds", True)
         max_ad_seconds = self.config_mgr.get_int("MaxAdWatchSeconds", 9)
         if max_ad_seconds < 0:
             max_ad_seconds = 0
@@ -1813,14 +1813,14 @@ class WatchingWorker:
     def _get_cooldown_hours(self) -> float:
         mgr = getattr(self, "config_mgr", None)
         if mgr is None:
-            return 12.0
+            return 18.0
         try:
-            val = mgr.get_float("VideoCooldownHours", 12.0)
+            val = mgr.get_float("VideoCooldownHours", 18.0)
             if isinstance(val, (int, float)):
                 return float(val)
-            return 12.0
+            return 18.0
         except Exception:
-            return 12.0
+            return 18.0
 
     def is_candidate_eligible(
         self,
@@ -3534,8 +3534,8 @@ class WatchingWorker:
         """
         Execute a full Shorts cycle:
         1. Desired Target Shorts: TargetShortsPerCycle (±20%, e.g. 10 -> 8-12).
-        2. Max Total Non-Target Shorts Limit: TotalNonTargetShortsLimit (±20%, e.g. 20 -> 16-24).
-        3. Max Non-Target Reels on scrolling page: NonTargetReelsLimit (±20%, e.g. 10 -> 8-12).
+        2. Max Total Non-Target Shorts Limit: TotalNonTargetShortsLimit (±20%, e.g. 33 -> 26-40).
+        3. Max Non-Target Reels on scrolling page: NonTargetReelsLimit (±20%, e.g. 12 -> 10-14).
         Flow:
         - Scans Home feed for a matching Short from targeted channels.
         - If found: plays it (full short), enters the Shorts reel.
@@ -3550,7 +3550,7 @@ class WatchingWorker:
         max_target_shorts = max(min_target_shorts, round(base_target_shorts * 1.2))
         cycle_target_shorts = random.randint(min_target_shorts, max_target_shorts)
 
-        base_total_non_target = self.config_mgr.get_int("TotalNonTargetShortsLimit", 20) if self.config_mgr else 20
+        base_total_non_target = self.config_mgr.get_int("TotalNonTargetShortsLimit", 33) if self.config_mgr else 33
         min_total_non_target = max(1, round(base_total_non_target * 0.8))
         max_total_non_target = max(min_total_non_target, round(base_total_non_target * 1.2))
         cycle_max_total_non_target = random.randint(min_total_non_target, max_total_non_target)
@@ -3856,7 +3856,7 @@ class WatchingWorker:
             max_target_shorts = max(min_target_shorts, round(base_target_shorts * 1.2))
             cycle_target_shorts = random.randint(min_target_shorts, max_target_shorts)
 
-        base_reel_non_target = self.config_mgr.get_int("NonTargetReelsLimit", self.config_mgr.get_int("NonTargetShortsLimit", 10)) if self.config_mgr else 10
+        base_reel_non_target = self.config_mgr.get_int("NonTargetReelsLimit", self.config_mgr.get_int("NonTargetShortsLimit", 12)) if self.config_mgr else 12
         min_reel_non_target = max(1, round(base_reel_non_target * 0.8))
         max_reel_non_target = max(min_reel_non_target, round(base_reel_non_target * 1.2))
         cycle_reel_max_non_target = random.randint(min_reel_non_target, max_reel_non_target)

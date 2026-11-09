@@ -71,6 +71,7 @@ def test_settings_view_sleep_duration_options(tmp_path):
     config_file = tmp_path / "settings.json"
     config_mgr = ConfigManager(config_file=config_file)
     config_mgr.set_setting("NoTargetFoundSleepHours", "4 Hours")
+    config_mgr.set_setting("SystemName", "TestPC")
 
     app_ctrl = MagicMock()
     app_ctrl.config_mgr = config_mgr

@@ -10,6 +10,7 @@ from src.ui.views.settings_view import SettingsView
 def test_save_settings_shows_success_bubble_notification(ctk_app, tmp_path):
     """Verify that clicking Save Settings displays a self-dismissing bubble/balloon notification without modal confirmation."""
     mgr = ConfigManager(tmp_path / "settings.json")
+    mgr.set_setting("SystemName", "TestPC")
     root = ctk_app
     app = MagicMock()
     app.config_mgr = mgr
@@ -47,6 +48,7 @@ def test_save_settings_shows_success_bubble_notification(ctk_app, tmp_path):
 def test_save_settings_shows_validation_error_bubble(ctk_app, tmp_path):
     """Verify that clicking Save Settings with invalid entries displays a self-dismissing error bubble without modal confirmation."""
     mgr = ConfigManager(tmp_path / "settings.json")
+    mgr.set_setting("SystemName", "TestPC")
     root = ctk_app
     app = MagicMock()
     app.config_mgr = mgr

@@ -141,6 +141,7 @@ def test_valid_form_results_in_one_settings_persistence_operation(tmp_path):
 def test_fractional_cooldown_survives_reopening_and_saving_unchanged(tmp_path):
     mgr = ConfigManager(tmp_path / "settings.json")
     mgr.set_setting("VideoCooldownHours", 1.75)
+    mgr.set_setting("SystemName", "TestPC")
 
     import customtkinter as ctk
     root = ctk.CTk()

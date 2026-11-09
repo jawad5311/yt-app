@@ -10,6 +10,7 @@ from src.ui.views.settings_view import SettingsView
 def test_settings_bubble_notification_on_success(ctk_app, tmp_path):
     """Test that valid settings show in-app bubble 'Settings updated' for 3 seconds without Windows dialog."""
     mgr = ConfigManager(tmp_path / "settings.json")
+    mgr.set_setting("SystemName", "TestPC")
     root = ctk_app
     app = MagicMock()
     app.config_mgr = mgr
@@ -44,6 +45,7 @@ def test_settings_bubble_notification_on_success(ctk_app, tmp_path):
 def test_settings_bubble_notification_on_failure(ctk_app, tmp_path):
     """Test that invalid settings show in-app bubble with failure reason without Windows dialog."""
     mgr = ConfigManager(tmp_path / "settings.json")
+    mgr.set_setting("SystemName", "TestPC")
     root = ctk_app
     app = MagicMock()
     app.config_mgr = mgr
@@ -72,6 +74,7 @@ def test_settings_bubble_notification_on_failure(ctk_app, tmp_path):
 def test_settings_bubble_auto_dismiss(ctk_app, tmp_path):
     """Test that the bubble timer cancels old bubble when save_settings is called repeatedly."""
     mgr = ConfigManager(tmp_path / "settings.json")
+    mgr.set_setting("SystemName", "TestPC")
     root = ctk_app
     app = MagicMock()
     app.config_mgr = mgr

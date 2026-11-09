@@ -29,6 +29,7 @@ from .views.dashboard_view import DashboardView
 from .views.logs_view import LogsView
 from .views.queue_view import QueueView
 from .views.settings_view import SettingsView
+from .views.system_name_modal import SystemNamePromptModal
 from ..utils.quota_tracker import get_quota_tracker
 from .tooltip import add_tooltip
 
@@ -121,6 +122,7 @@ class YTBotApp(tk.Tk):
         self._poll_job = self.after(50, self._poll_log_queue)
         self.after(50, self.maximize_window)
         self.after(100, self._update_close_button_state)
+        self.after(250, self._check_and_prompt_system_name)
         self._poll_quota_clock()
 
         # Pre-load accounts fallback if saved list is empty and accounts.txt exists
@@ -131,6 +133,35 @@ class YTBotApp(tk.Tk):
 
         # Auto-enrich queued video tasks with missing published date or duration
         self._start_background_metadata_enrichment()
+
+    def _check_and_prompt_system_name(self, force: bool = False) -> None:
+        """Prompt user on startup to set system name if it is not configured yet."""
+        if not hasattr(self, "config_mgr") or not self.config_mgr:
+            return
+        sys_name = (self.config_mgr.get_setting("SystemName", "") or "").strip()
+        if not sys_name or force:
+            self.show_system_name_prompt_modal(current_name=sys_name)
+
+    def show_system_name_prompt_modal(self, current_name: str = "") -> None:
+        """Display the SystemNamePromptModal dialog."""
+        try:
+            SystemNamePromptModal(self, current_name=current_name, on_save=self._on_system_name_saved)
+        except Exception as e:
+            logger.error(f"Error displaying system name prompt modal: {e}")
+
+    def _on_system_name_saved(self, name: str) -> None:
+        """Handle saving of system name from startup prompt modal."""
+        if hasattr(self, "config_mgr") and self.config_mgr:
+            self.config_mgr.set_setting("SystemName", name)
+        if hasattr(self, "views") and isinstance(self.views, dict) and "settings" in self.views:
+            settings_view = self.views["settings"]
+            if hasattr(settings_view, "system_name_entry"):
+                try:
+                    settings_view.system_name_entry.delete(0, "end")
+                    settings_view.system_name_entry.insert(0, name)
+                except Exception:
+                    pass
+        logger.info(f"System name configured to: {name}")
 
     def _start_background_metadata_enrichment(self) -> None:
         """Enrich queued video tasks with missing published date or duration via YouTube API."""
@@ -292,7 +323,7 @@ class YTBotApp(tk.Tk):
             else []
         )
         stats = getattr(self, "stats_store", None)
-        cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0) if hasattr(self, "config_mgr") else 0.0
+        cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 18.0) if hasattr(self, "config_mgr") else 0.0
         return sum(1 for t in self.queued_video_tasks if is_video_task_runnable(t, channels, stats, cooldown_hours=cooldown_h))
 
     def reset_all_watch_stats(self) -> None:
@@ -535,7 +566,7 @@ class YTBotApp(tk.Tk):
             return
 
         channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
-        cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+        cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 18.0)
         active_video_tasks = [t for t in self.queued_video_tasks if is_video_task_runnable(t, channels, self.stats_store, cooldown_hours=cooldown_h)]
         if not active_video_tasks:
             self.show_view("queue")
@@ -622,7 +653,7 @@ class YTBotApp(tk.Tk):
 
                 # Filter tasks to ensure any video that reached its run limit is excluded
                 channels = [Channel.from_dict(c) for c in self.config_mgr.get_channels()]
-                cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 12.0)
+                cooldown_h = self.config_mgr.get_float("VideoCooldownHours", 18.0)
                 current_tasks = [t for t in active_video_tasks if is_video_task_runnable(t, channels, self.stats_store, cooldown_hours=cooldown_h)]
                 if not current_tasks:
                     emit(self.log_queue, "All active video tasks have reached their run limit or are in cooldown. Ending automation session.")

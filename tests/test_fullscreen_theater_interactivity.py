@@ -247,6 +247,7 @@ def test_settings_view_fullscreen_theater_toggle(ctk_app, tmp_path):
     config_path = tmp_path / "settings.json"
     mgr = ConfigManager(config_file=config_path)
 
+    mgr.set_setting("SystemName", "TestPC")
     # Initial default is True
     assert mgr.get_bool("FullscreenTheaterMode", True) is True
 

@@ -36,6 +36,7 @@ def test_settings_view_shorts_limits(ctk_app, tmp_path):
     mgr.set_setting("TargetShortsPerCycle", 15)
     mgr.set_setting("NonTargetReelsLimit", 10)
     mgr.set_setting("TotalNonTargetShortsLimit", 25)
+    mgr.set_setting("SystemName", "TestRig")
 
     app = ctk_app
     app.config_mgr = mgr

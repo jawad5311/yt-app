@@ -104,6 +104,7 @@ def test_settings_view_short_and_long_sleep_ui(tmp_path):
     config_mgr = ConfigManager(config_file=config_file)
     config_mgr.set_setting("ShortSleepHours", "2 Hours")
     config_mgr.set_setting("NightSleepEnabled", False)
+    config_mgr.set_setting("SystemName", "TestPC")
 
     app_ctrl = MagicMock()
     app_ctrl.config_mgr = config_mgr
@@ -248,6 +249,7 @@ def test_short_sleep_nap_mode_messaging_and_fresh_stats(test_worker):
     """When no target videos are found during the day, enters Short Sleep / Nap mode with fresh stats."""
     test_worker.config_mgr.set_setting("ShortSleepHours", "1 Hour")
     test_worker.config_mgr.set_setting("NightSleepEnabled", False)
+    test_worker.config_mgr.set_setting("SystemName", "TestPC")
 
     with patch.object(test_worker, "_send_session_report") as mock_report, \
          patch("src.automation.watching_worker.setup_driver", return_value=MagicMock()), \
