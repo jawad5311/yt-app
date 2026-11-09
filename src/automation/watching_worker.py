@@ -5059,6 +5059,7 @@ class WatchingWorker:
                             last_watched_channel = played_ch
                             consecutive_target_watched += 1
                             cycle_long_vids_watched += 1
+                            suggested_miss_count = 0
 
                             emit(
                                 self.log_queue,
