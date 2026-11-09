@@ -455,26 +455,69 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
         except Exception:
             pass
 
-        # 1. CAPTCHA / Bot challenge
-        if any(c in url for c in ("captcha", "sorry/index", "recaptcha")) or            any(c in page_source for c in ("sorry/index", "g-recaptcha", "recaptcha", "solve the puzzle", "unusual traffic from your computer network", "our systems have detected unusual traffic")):
+        # 1. Google / YouTube Bot Block & CAPTCHA (sorry/index, unusual traffic, bot checks)
+        # Check URL path or specific challenge phrases in page_source.
+        # Note: Do NOT match bare 'recaptcha' in page_source because normal YouTube pages include
+        # '.grecaptcha-badge{visibility:hidden}' in their default stylesheet.
+        is_bot_challenge = (
+            "/sorry/index" in url
+            or "google.com/sorry" in url
+            or "youtube.com/sorry" in url
+            or any(phrase in page_source for phrase in (
+                "sorry/index",
+                "unusual traffic from your computer network",
+                "our systems have detected unusual traffic",
+                "please show you're not a robot",
+                "sign in to confirm you’re not a bot",
+                "sign in to confirm you're not a bot",
+                "solve the puzzle",
+                "type the characters you see in the picture",
+                "to continue, please type the characters below",
+            ))
+        )
+        if is_bot_challenge:
             return (
                 "Manual Action Required - Google CAPTCHA / Bot Challenge",
                 "Google presented a CAPTCHA or bot verification challenge. Manual completion in the browser is required.",
             )
 
-        # 2. 2-Step Verification / Security Challenge / Phone prompt
-        if any(c in url for c in ("2step", "challenge/pwd", "challenge/totp", "challenge/ipp", "challenge/az", "challenge/selection", "speedbump")) or            any(c in page_source for c in ("2-step verification", "check your phone", "google sent a notification to your phone", "enter the 2-digit number", "get a verification code", "verify it's you")):
-            return (
-                "Manual Action Required - 2-Step Verification / Security Challenge",
-                "Google presented a 2-Step Verification prompt or security challenge. Please verify on your device or browser manually.",
-            )
+        # 2. Authentication challenges and 2FA on Google Account sign-in pages
+        if "accounts.google.com" in url:
+            # CAPTCHA on Google sign-in
+            if any(c in url for c in ("challenge/recaptcha", "signin/challenge/az")) or \
+               any(el in page_source for el in ("id=\"captchaimg\"", "id='captchaimg'", "name=\"captcha\"", "name='captcha'")):
+                return (
+                    "Manual Action Required - Google CAPTCHA / Bot Challenge",
+                    "Google presented a CAPTCHA or bot verification challenge. Manual completion in the browser is required.",
+                )
 
-        # 3. Google / Gmail asking for sign-in again / re-authentication
-        if "accounts.google.com" in url and any(c in page_source for c in ("sign in again", "your session has expired", "re-enter your password", "confirm your password", "verify your identity")):
-            return (
-                "Manual Action Required - Google Re-Authentication Required",
-                "Google / Gmail is asking for sign-in or password confirmation again. Manual re-authentication is required.",
-            )
+            # 2-Step Verification / Security Challenge / Phone prompt
+            if any(c in url for c in ("2step", "challenge/pwd", "challenge/totp", "challenge/ipp", "challenge/az", "challenge/selection", "speedbump")) or \
+               any(phrase in page_source for phrase in (
+                   "2-step verification",
+                   "check your phone",
+                   "google sent a notification to your phone",
+                   "enter the 2-digit number",
+                   "get a verification code",
+                   "verify it's you",
+               )):
+                return (
+                    "Manual Action Required - 2-Step Verification / Security Challenge",
+                    "Google presented a 2-Step Verification prompt or security challenge. Please verify on your device or browser manually.",
+                )
+
+            # Re-authentication / password re-entry
+            if any(phrase in page_source for phrase in (
+                "sign in again",
+                "your session has expired",
+                "re-enter your password",
+                "confirm your password",
+                "verify your identity",
+            )):
+                return (
+                    "Manual Action Required - Google Re-Authentication Required",
+                    "Google / Gmail is asking for sign-in or password confirmation again. Manual re-authentication is required.",
+                )
 
         return None
     except Exception:
@@ -529,8 +572,9 @@ def perform_google_login(
         emit(log_queue, f"Automatic login input notice: {err_msg}", logging.WARNING)
 
     # Wait loop for login completion or manual CAPTCHA / 2FA completion
-    end_time = time.time() + 180  # wait up to 3 mins for user manual challenge if needed
+    end_time = time.time() + 600  # wait up to 10 mins for user manual challenge if needed
     challenge_logged = False
+    last_reminder = time.time()
 
     while time.time() < end_time:
         if stop_event is not None and stop_event.is_set():
@@ -568,12 +612,17 @@ def perform_google_login(
                 challenge_logged = True
                 _dispatch_login_alert("Manual Action Required - Google Challenge / CAPTCHA", det, account, config_mgr, alert_callback, driver, log_queue)
 
+        if challenge_logged and time.time() - last_reminder >= 30.0:
+            rem = int(max(0, end_time - time.time()))
+            emit(log_queue, f"[Manual Action Required] Still waiting for manual challenge resolution ({rem}s remaining)...", logging.INFO)
+            last_reminder = time.time()
+
         time.sleep(2)
 
     if not (stop_event is not None and stop_event.is_set()):
         emit(log_queue, f"Sign-in timed out for {account.email}.", logging.ERROR)
         if not challenge_logged:
-            det = f"Google sign-in timed out after 180 seconds for {account.email} on this PC. ID is stuck at signing in."
+            det = f"Google sign-in timed out after 600 seconds for {account.email} on this PC. ID is stuck at signing in."
             _dispatch_login_alert("Manual Action Required - Sign-In Stuck / Timed Out", det, account, config_mgr, alert_callback, driver, log_queue)
     return False
 
@@ -587,11 +636,14 @@ def check_account_logged_in(
     alert_callback: Optional[Callable[[str, str], None]] = None,
     content_type: str = "video",
     content_title: str = "",
+    wait_for_challenge_resolution: bool = True,
+    challenge_timeout_seconds: Optional[float] = None,
 ) -> bool:
     """Verify that the account is logged in before playing a video or short.
 
     If Google requests CAPTCHA, 2FA, re-sign in, or if the account was logged out
-    and re-login fails, dispatches an alert email to notify the user which PC is stuck.
+    and re-login fails, dispatches an alert email to notify the user which PC is stuck,
+    and pauses/waits for manual resolution in the browser before proceeding.
     """
     if account is None or not getattr(account, "email", "").strip():
         return True
@@ -606,6 +658,58 @@ def check_account_logged_in(
         full_details = f"{details} Issue detected on this PC before playing {content_type} '{content_title or 'item'}' for account {account.email}."
         emit(log_queue, f"[Manual Action Required] {full_details}", logging.ERROR)
         _dispatch_login_alert(alert_type, full_details, account, config_mgr, alert_callback, driver, log_queue)
+
+        timeout = challenge_timeout_seconds
+        if timeout is None:
+            timeout = (
+                float(config_mgr.get_setting("ChallengeTimeoutSeconds", 600.0) or 600.0)
+                if config_mgr
+                else 0.0
+            )
+
+        if not wait_for_challenge_resolution or timeout <= 0.0:
+            return False
+
+        emit(
+            log_queue,
+            f"[Manual Action Required] Notification email sent. Waiting up to {int(timeout)}s ({int(timeout / 60)}m) for manual CAPTCHA / challenge resolution in the browser on this PC...",
+            logging.WARNING,
+        )
+
+        start_wait = time.time()
+        last_logged = start_wait
+        while time.time() - start_wait < timeout:
+            if stop_event is not None and stop_event.is_set():
+                emit(log_queue, "Manual challenge wait cancelled by user.")
+                return False
+
+            time.sleep(2.0)
+
+            cur_chal = detect_manual_challenge(driver)
+            if cur_chal is None:
+                emit(
+                    log_queue,
+                    f"[Manual Action Required] Manual challenge resolved for {account.email}! Resuming {content_type} playback.",
+                    logging.INFO,
+                )
+                human_like_delay(1.5, 2.5)
+                return True
+
+            if time.time() - last_logged >= 30.0:
+                elapsed = int(time.time() - start_wait)
+                remaining = int(timeout - elapsed)
+                emit(
+                    log_queue,
+                    f"[Manual Action Required] Still waiting for manual challenge resolution ({elapsed}s elapsed, {remaining}s remaining)...",
+                    logging.INFO,
+                )
+                last_logged = time.time()
+
+        emit(
+            log_queue,
+            f"[Manual Action Required] Timed out after {int(timeout)}s waiting for manual challenge resolution for {account.email}.",
+            logging.ERROR,
+        )
         return False
 
     # 2. Check YouTube logged-in status via YouTube client config (fast, zero DOM delay)

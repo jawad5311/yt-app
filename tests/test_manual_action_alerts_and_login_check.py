@@ -64,6 +64,13 @@ class TestDetectManualChallenge:
 
         assert detect_manual_challenge(driver) is None
 
+    def test_youtube_page_source_recaptcha_style_does_not_trigger_false_positive(self):
+        driver = MagicMock()
+        driver.current_url = "https://www.youtube.com/watch?v=8bvD2xrce5U"
+        driver.page_source = "<html><head><style>.grecaptcha-badge{visibility:hidden}</style></head><body>Welcome to YouTube</body></html>"
+
+        assert detect_manual_challenge(driver) is None
+
 
 class TestAlertEmailContentAndMachineInfo:
     @patch("smtplib.SMTP")
@@ -235,6 +242,89 @@ class TestCheckAccountLoggedInBeforePlay:
         assert "user@gmail.com" in details
         assert "Awesome Vid" in details
 
+    def test_captcha_wait_loop_resumes_when_challenge_cleared(self):
+        driver = MagicMock()
+        driver.current_url = "https://www.google.com/sorry/index"
+        driver.page_source = "<html><body>Please solve the captcha</body></html>"
+        account = Account(email="user@gmail.com", password="pwd")
+
+        call_count = 0
+        def dynamic_detect(drv):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                return ("Manual Action Required - Google CAPTCHA / Bot Challenge", "Google presented a CAPTCHA")
+            return None
+
+        mock_alert = MagicMock()
+        with patch("src.automation.login.detect_manual_challenge", side_effect=dynamic_detect), \
+             patch("src.automation.login.time.sleep"), \
+             patch("src.automation.login.human_like_delay"):
+            ok = check_account_logged_in(
+                driver,
+                account,
+                alert_callback=mock_alert,
+                challenge_timeout_seconds=60.0,
+                content_type="video",
+                content_title="Cool Video",
+            )
+
+        assert ok is True
+        mock_alert.assert_called_once()
+        assert "Cool Video" in mock_alert.call_args[0][1]
+
+    def test_captcha_wait_loop_aborts_on_stop_event(self):
+        driver = MagicMock()
+        driver.current_url = "https://www.google.com/sorry/index"
+        driver.page_source = "<html><body>Please solve the captcha</body></html>"
+        account = Account(email="user@gmail.com", password="pwd")
+        stop_event = threading.Event()
+
+        mock_alert = MagicMock()
+        def on_alert(a_type, det):
+            stop_event.set()
+
+        mock_alert.side_effect = on_alert
+
+        with patch("src.automation.login.detect_manual_challenge", return_value=("CAPTCHA", "solve captcha")), \
+             patch("src.automation.login.time.sleep"):
+            ok = check_account_logged_in(
+                driver,
+                account,
+                stop_event=stop_event,
+                alert_callback=mock_alert,
+                challenge_timeout_seconds=60.0,
+            )
+
+        assert ok is False
+        mock_alert.assert_called_once()
+
+    def test_captcha_wait_loop_times_out(self):
+        driver = MagicMock()
+        driver.current_url = "https://www.google.com/sorry/index"
+        driver.page_source = "<html><body>Please solve the captcha</body></html>"
+        account = Account(email="user@gmail.com", password="pwd")
+
+        cur_t = 1000.0
+        def fake_time():
+            nonlocal cur_t
+            cur_t += 20.0
+            return cur_t
+
+        mock_alert = MagicMock()
+        with patch("src.automation.login.detect_manual_challenge", return_value=("CAPTCHA", "solve captcha")), \
+             patch("src.automation.login.time.time", side_effect=fake_time), \
+             patch("src.automation.login.time.sleep"):
+            ok = check_account_logged_in(
+                driver,
+                account,
+                alert_callback=mock_alert,
+                challenge_timeout_seconds=60.0,
+            )
+
+        assert ok is False
+        mock_alert.assert_called_once()
+
 
 class TestPerformGoogleLoginAlerts:
     @patch("src.automation.login.safe_get")
@@ -242,6 +332,7 @@ class TestPerformGoogleLoginAlerts:
         driver = MagicMock()
         driver.current_url = "https://accounts.google.com/signin/v2/challenge/pwd"
         driver.page_source = "<html><body>Google 2-Step Verification: check your phone</body></html>"
+        driver.find_elements.return_value = []
 
         account = Account(email="challenge.user@gmail.com", password="pwd")
         mock_alert_cb = MagicMock()
@@ -274,6 +365,38 @@ class TestPerformGoogleLoginAlerts:
         alert_type, details = mock_alert_cb.call_args[0]
         assert "2-Step Verification" in alert_type or "Security Challenge" in alert_type
         assert "challenge.user@gmail.com" in details
-        alert_type, details = mock_alert_cb.call_args[0]
-        assert "2-Step Verification" in alert_type or "Security Challenge" in alert_type
-        assert "challenge.user@gmail.com" in details
+
+
+class TestWatchingWorkerLoginVerification:
+    def test_play_target_video_returns_watch_result_when_login_fails(self, tmp_path):
+        from src.automation.watching_worker import WatchingWorker
+        from src.models.video_task import VideoTask
+        from src.models.watch_stats import WatchResult
+
+        cfg = ConfigManager(tmp_path / "settings.json")
+        worker = WatchingWorker.__new__(WatchingWorker)
+        worker.config_mgr = cfg
+        worker.account = Account(email="test@gmail.com", password="pwd")
+        worker.stop_event = threading.Event()
+        worker.log_queue = queue.Queue()
+        worker.driver = MagicMock()
+        worker._ensure_video_in_queue = MagicMock(return_value=VideoTask(url="https://youtube.com/watch?v=1", title="V1"))
+        worker.click_home_video = MagicMock(return_value=True)
+
+        # Mock login verification failure
+        worker._check_account_login_before_play = MagicMock(return_value=False)
+
+        res = worker._play_target_video(
+            card_info={"title": "V1", "href": "/watch?v=1"},
+            full_url="https://youtube.com/watch?v=1",
+            title="V1",
+            channel_display="Test Channel",
+            session_watched_keys=set(),
+            is_home=True,
+            source="home",
+        )
+
+        assert isinstance(res, WatchResult)
+        assert res.completed is False
+        assert res.reason == "login_verification_failed"
+        assert res.interrupted is True

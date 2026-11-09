@@ -696,12 +696,6 @@ class AutomationWorker:
         if not self.config_mgr:
             return
         try:
-            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto")
-            smtp_pass = self.config_mgr.get_setting("SmtpPassword", "")
-            if not smtp_pass and self.driver:
-                close_driver(self.driver, log_queue=self.log_queue)
-                self.driver = None
-
             EmailReporter.send_alert_notification(
                 account=self.account,
                 alert_type=alert_type,
@@ -709,10 +703,11 @@ class AutomationWorker:
                 config_mgr=self.config_mgr,
                 start_time=getattr(self, "session_start_time", datetime.now()),
                 custom_subject=getattr(self, "session_thread_subject", None),
-                log_queue=None,
+                log_queue=self.log_queue,
                 thread_url=getattr(self, "session_thread_url", None),
                 thread_message_id=getattr(self, "session_thread_message_id", None),
                 thread_info=getattr(self, "session_thread_info", None),
+                driver=getattr(self, "reporting_driver", None) or self.driver,
             )
             if getattr(self, "session_thread_info", None) and isinstance(self.session_thread_info, dict):
                 if self.session_thread_info.get("thread_url"):
