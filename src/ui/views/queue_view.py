@@ -171,6 +171,50 @@ def _get_cfg_float(mgr: Any, key: str, default: float) -> float:
         return default
 
 
+def compute_task_search_rank(task: VideoTask, query: str) -> Optional[int]:
+    """Calculate search match rank for a video task against a search query.
+
+    Matches against titles (title, title_2, title_3), keywords (keywords, keywords_2, keywords_3),
+    channel name, and URL.
+
+    Ranking:
+        0: Exact substring match in title/keywords (highest priority)
+        1: Exact substring match in channel name or URL
+        2: Word match in title/keywords (all query words present in any order)
+        3: Word match across all fields (all query words present across title, channel, keywords, URL)
+        None: No match (task filtered out)
+    """
+    clean_query = (query or "").strip().lower()
+    if not clean_query:
+        return 0
+
+    title_text = f"{task.title or ''} {task.title_2 or ''} {task.title_3 or ''}".lower()
+    keywords_text = f"{task.keywords or ''} {task.keywords_2 or ''} {task.keywords_3 or ''}".lower()
+    channel_text = (task.channel or "").lower()
+    url_text = (task.url or "").lower()
+    title_and_kw = f"{title_text} {keywords_text}".strip()
+    full_text = f"{title_and_kw} {channel_text} {url_text}".strip()
+
+    # Tier 1: Exact Substring Matches (First priority)
+    if clean_query in title_and_kw:
+        return 0
+    if clean_query in channel_text or clean_query in url_text:
+        return 1
+
+    # Tier 2: Word Matching (all query words present in any order)
+    words = clean_query.split()
+    if len(words) > 1:
+        if all(w in title_and_kw for w in words):
+            return 2
+        if all(w in full_text for w in words):
+            return 3
+    elif len(words) == 1:
+        if words[0] in full_text:
+            return 1
+
+    return None
+
+
 class QueueView(Frame):
     shorts_only: bool = False
     current_sort_key: Optional[str] = "last_played"
@@ -185,6 +229,7 @@ class QueueView(Frame):
         self.app_controller = app_controller
         self.shorts_only = shorts_only
         self.video_tasks: List[VideoTask] = []
+        self.displayed_tasks: List[VideoTask] = []
         self.collapsed_groups: set = set()
         self._pending_card_queue: List[Any] = []
         self._render_job: Optional[str] = None
@@ -282,6 +327,45 @@ class QueueView(Frame):
         )
         self._update_sort_buttons()
 
+        # Real-time Search Bar
+        self.search_frame = ctk.CTkFrame(btn_frame, fg_color="transparent")
+        self.search_frame.pack(side="left", padx=(12, 10))
+
+        search_icon = ctk.CTkLabel(self.search_frame, text="🔍", font=ctk.CTkFont(size=12))
+        search_icon.pack(side="left", padx=(0, 4))
+
+        placeholder = "Search shorts..." if is_shorts else "Search videos..."
+        self.search_entry = ctk.CTkEntry(
+            self.search_frame,
+            placeholder_text=placeholder,
+            width=240,
+        )
+        self.search_entry.pack(side="left", padx=(0, 4))
+
+        self.search_clear_btn = ctk.CTkButton(
+            self.search_frame,
+            text="✕",
+            width=28,
+            fg_color="#374151",
+            hover_color="#4B5563",
+            command=self.clear_search,
+        )
+        self.search_clear_btn.pack(side="left")
+        add_tooltip(
+            self.search_clear_btn,
+            "Clear search and show all queue tasks.",
+        )
+        add_tooltip(
+            self.search_entry,
+            "Real-time search across titles, channel names, keywords, and URLs.\nExact matches are prioritized, followed by multi-word matches.",
+        )
+
+        self._search_debounce_job: Optional[str] = None
+        self._last_applied_search: str = ""
+        self.search_entry.bind("<KeyRelease>", self._on_search_key_release)
+        self.search_entry.bind("<Return>", lambda e: self._apply_search_filter())
+        self.search_entry.bind("<Escape>", lambda e: self.clear_search())
+
         reset_btn = ctk.CTkButton(
             btn_frame,
             text="🗑 Reset Stats",
@@ -369,7 +453,15 @@ class QueueView(Frame):
         ]
         total_count = len(matching_tasks)
 
-        parts = [f"{total_prefix}: {total_count}"]
+        query = self.get_search_query() if hasattr(self, "get_search_query") else ""
+        if query:
+            search_matched = [
+                t for t in matching_tasks
+                if compute_task_search_rank(t, query) is not None
+            ]
+            parts = [f"Matching: {len(search_matched)} of {total_count}"]
+        else:
+            parts = [f"{total_prefix}: {total_count}"]
 
         if total_count > 0:
             groups = group_videos_by_channel(
@@ -380,7 +472,9 @@ class QueueView(Frame):
             for group in groups:
                 ch_matching = [
                     t for _, t in group.videos
-                    if (t.is_short if is_shorts else not t.is_short)
+                    if (t.is_short if is_shorts else not t.is_short) and (
+                        not query or compute_task_search_rank(t, query) is not None
+                    )
                 ]
                 count = len(ch_matching)
                 if count > 0:
@@ -446,7 +540,74 @@ class QueueView(Frame):
             except Exception:
                 pass
 
+    def get_search_query(self) -> str:
+        """Return the current search query string from the search bar."""
+        if hasattr(self, "search_entry") and self.search_entry:
+            val = self.search_entry.get()
+            return val.strip() if val else ""
+        return ""
+
+    def _on_search_key_release(self, event=None):
+        """Handle key release in search entry with real-time debouncing."""
+        self._schedule_search_filter()
+
+    def _on_search_changed(self):
+        """Handle StringVar change with real-time debouncing."""
+        self._schedule_search_filter()
+
+    def _schedule_search_filter(self):
+        """Debounce real-time keystrokes to ensure smooth, responsive filtering."""
+        if hasattr(self, "_search_debounce_job") and self._search_debounce_job:
+            try:
+                self.after_cancel(self._search_debounce_job)
+            except Exception:
+                pass
+            self._search_debounce_job = None
+
+        query = self.get_search_query()
+        if query == getattr(self, "_last_applied_search", None):
+            return
+
+        self._search_debounce_job = self.after(50, self._apply_search_filter)
+
+    def _apply_search_filter(self):
+        """Apply the search filter and re-render matching tasks in the queue."""
+        self._search_debounce_job = None
+        self._last_applied_search = self.get_search_query()
+        self.refresh_list()
+
+    def clear_search(self):
+        """Clear the search input and restore all queue tasks."""
+        if hasattr(self, "_search_debounce_job") and self._search_debounce_job:
+            try:
+                self.after_cancel(self._search_debounce_job)
+            except Exception:
+                pass
+            self._search_debounce_job = None
+
+        if hasattr(self, "search_entry") and self.search_entry:
+            try:
+                self.search_entry.delete(0, "end")
+                if hasattr(self.search_entry, "_restore_placeholder"):
+                    self.search_entry._restore_placeholder()
+            except Exception:
+                pass
+
+        self._last_applied_search = ""
+        self.refresh_list()
+        if hasattr(self, "search_entry") and self.search_entry:
+            try:
+                self.search_entry.focus_set()
+            except Exception:
+                pass
+
     def destroy(self):
+        if hasattr(self, "_search_debounce_job") and self._search_debounce_job:
+            try:
+                self.after_cancel(self._search_debounce_job)
+            except Exception:
+                pass
+            self._search_debounce_job = None
         if hasattr(self, "_active_sort_menu") and self._active_sort_menu:
             try:
                 self._active_sort_menu.destroy()
@@ -1335,6 +1496,7 @@ class QueueView(Frame):
         ]
 
         if not matching_tasks:
+            self.displayed_tasks = []
             empty_msg = (
                 "Shorts queue is empty. Click '+ Add Target Short' to add tasks."
                 if getattr(self, "shorts_only", False)
@@ -1347,16 +1509,72 @@ class QueueView(Frame):
             ).pack(pady=30)
             return
 
-        for group in group_videos_by_channel(self.video_tasks, self._get_display_channels(), include_archived=False):
-            if getattr(self, "shorts_only", False):
-                filtered_videos = [(idx, t) for (idx, t) in group.videos if t.is_short]
-            else:
-                filtered_videos = [(idx, t) for (idx, t) in group.videos if not t.is_short]
+        query = self.get_search_query() if hasattr(self, "get_search_query") else ""
+        channel_groups = group_videos_by_channel(self.video_tasks, self._get_display_channels(), include_archived=False)
+        total_search_matches = 0
+        prepared_groups = []
 
-            if not filtered_videos:
+        for group in channel_groups:
+            if getattr(self, "shorts_only", False):
+                type_videos = [(idx, t) for (idx, t) in group.videos if t.is_short]
+            else:
+                type_videos = [(idx, t) for (idx, t) in group.videos if not t.is_short]
+
+            if not type_videos:
                 continue
 
-            filtered_group = VideoGroup(channel=group.channel, videos=filtered_videos)
+            if query:
+                # Score each task: 0 = exact title/kw match, 1 = exact ch/url match, 2 = word title match, 3 = word full match
+                ranked_videos = []
+                for idx, t in type_videos:
+                    rank = compute_task_search_rank(t, query)
+                    if rank is not None:
+                        ranked_videos.append((rank, idx, t))
+
+                if not ranked_videos:
+                    continue
+
+                # Sort matches within group: exact matches first
+                ranked_videos.sort(key=lambda item: item[0])
+                filtered_videos = [(idx, t) for _, idx, t in ranked_videos]
+                best_group_rank = ranked_videos[0][0]
+                total_search_matches += len(filtered_videos)
+            else:
+                filtered_videos = type_videos
+                best_group_rank = 0
+
+            prepared_groups.append((best_group_rank, VideoGroup(channel=group.channel, videos=filtered_videos)))
+
+        # When searching, prioritize channel groups with higher relevance matches
+        if query:
+            prepared_groups.sort(key=lambda item: item[0])
+
+        if query and total_search_matches == 0:
+            self.displayed_tasks = []
+            item_noun = "shorts" if getattr(self, "shorts_only", False) else "videos"
+            no_match_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+            no_match_frame.pack(pady=40)
+            ctk.CTkLabel(
+                no_match_frame,
+                text=f'🔍 No {item_noun} matching "{query}" found.',
+                font=ctk.CTkFont(size=15, weight="bold"),
+            ).pack(pady=(0, 6))
+            ctk.CTkLabel(
+                no_match_frame,
+                text="Try searching with different keywords or click Clear Search to view all tasks.",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray45", "gray65"),
+            ).pack(pady=(0, 12))
+            ctk.CTkButton(
+                no_match_frame,
+                text="✕ Clear Search",
+                width=120,
+                command=self.clear_search,
+            ).pack()
+            return
+
+        self.displayed_tasks = [t for _, g in prepared_groups for _, t in g.videos]
+        for _, filtered_group in prepared_groups:
             self._render_group(filtered_group)
 
         if hasattr(self, "_pending_card_queue") and self._pending_card_queue:
@@ -1583,8 +1801,8 @@ class QueueView(Frame):
                     task,
                     real_index,
                     group,
-                    not is_first,
-                    not is_last,
+                    (not is_first and not bool(self.get_search_query() if hasattr(self, "get_search_query") else False)),
+                    (not is_last and not bool(self.get_search_query() if hasattr(self, "get_search_query") else False)),
                     _move_up,
                     _move_down,
                 ))
@@ -1595,8 +1813,8 @@ class QueueView(Frame):
                     task,
                     real_index,
                     channel_enabled=group.channel.enabled if not group.is_uncategorized else True,
-                    can_move_up=not is_first,
-                    can_move_down=not is_last,
+                    can_move_up=(not is_first and not bool(self.get_search_query() if hasattr(self, "get_search_query") else False)),
+                    can_move_down=(not is_last and not bool(self.get_search_query() if hasattr(self, "get_search_query") else False)),
                     on_move_up=_move_up,
                     on_move_down=_move_down,
                     group=group,

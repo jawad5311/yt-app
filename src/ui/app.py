@@ -411,7 +411,7 @@ class YTBotApp(tk.Tk):
             else:
                 if view_name in self.nav_buttons:
                     self.nav_buttons[view_name].configure(style="Nav.TButton")
-        if hasattr(self, "quota_label") and self.quota_label:
+        if self.__dict__.get("quota_label"):
             self.quota_label.lift()
 
     def apply_appearance_mode(self, mode: str, persist: bool = True) -> None:
