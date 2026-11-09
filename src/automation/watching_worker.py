@@ -5073,7 +5073,18 @@ class WatchingWorker:
                                     f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
                                     logging.INFO,
                                 )
-                                break
+                                self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+                                cycle_long_vids_watched = 0
+                                target_long_vids_cycle = random.randint(3, 5)
+                                suggested_miss_count = 0
+                                emit(
+                                    self.log_queue,
+                                    f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
+                                    logging.INFO,
+                                )
+                                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                                human_like_delay(2.0, 3.5)
+                                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
                         else:
                             emit(
                                 self.log_queue,

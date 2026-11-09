@@ -76,3 +76,39 @@ def test_suggested_cycle_transitions_to_shorts_when_target_reached(test_worker):
 
     assert shorts_called.is_set(), "_run_shorts_cycle should be called when suggested video reaches cycle target"
     test_worker._run_shorts_cycle.assert_called_once()
+
+
+def test_search_cycle_transitions_to_shorts_when_target_reached(test_worker):
+    """When cycle_long_vids_watched reaches target_long_vids_cycle after search video, _run_shorts_cycle is called."""
+    test_worker.driver.current_url = "https://www.youtube.com/watch?v=start"
+    test_worker._check_and_enter_night_sleep = MagicMock(return_value=False)
+    test_worker._check_and_play_random_buffer_video = MagicMock(return_value=False)
+    test_worker._check_account_login_before_play = MagicMock(return_value=True)
+
+    # Simulate no video found in suggested section
+    test_worker.fetch_recommended_videos = MagicMock(return_value=[])
+    test_worker._find_preferred_target_video = MagicMock(return_value=None)
+
+    # Search finds and plays a target video
+    test_worker.search_and_play_target_video = MagicMock(return_value="TestChannel")
+
+    shorts_called = threading.Event()
+
+    def fake_shorts_cycle(session_watched_keys):
+        shorts_called.set()
+        test_worker.stop_event.set()
+        return 3
+
+    test_worker._run_shorts_cycle = MagicMock(side_effect=fake_shorts_cycle)
+
+    with patch("src.automation.watching_worker.setup_driver", return_value=test_worker.driver), \
+         patch("src.automation.watching_worker.perform_google_login", return_value=True), \
+         patch("src.automation.watching_worker.safe_get"), \
+         patch("src.automation.watching_worker.human_like_delay"), \
+         patch("src.automation.watching_worker.dismiss_youtube_dialogs"), \
+         patch("src.automation.watching_worker.random.randint", return_value=1):  # Force cycle target = 1
+        test_worker.run()
+
+    assert shorts_called.is_set(), "_run_shorts_cycle should be called when search fallback reaches cycle target"
+    test_worker._run_shorts_cycle.assert_called_once()
+
