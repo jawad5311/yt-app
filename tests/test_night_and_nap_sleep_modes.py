@@ -61,7 +61,7 @@ def test_worker(tmp_path):
     return worker
 
 
-def test_config_manager_short_and_night_sleep_defaults_and_parsers():
+def test_config_manager_short_and_night_sleep_defaults_and_parsers(tmp_path):
     """Verify safe parsing of minutes, hours, time of day, and duration ranges."""
     assert parse_sleep_hours("30 Minutes") == 0.5
     assert parse_sleep_hours("45 Minutes") == 0.75
@@ -80,7 +80,7 @@ def test_config_manager_short_and_night_sleep_defaults_and_parsers():
     assert parse_duration_range("7 - 8 Hours") == (7.0, 8.0)
     assert parse_duration_range("6 - 8 Hours (Random)") == (6.0, 8.0)
 
-    cm = ConfigManager()
+    cm = ConfigManager(config_file=tmp_path / "settings.json")
     cm.set_setting("ShortSleepHours", "30 Minutes")
     assert cm.get_short_sleep_hours() == 0.5
 
