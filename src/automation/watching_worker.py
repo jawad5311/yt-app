@@ -2518,7 +2518,7 @@ class WatchingWorker:
             pass
 
         if not self._check_account_login_before_play(content_type="video", content_title=title):
-            return
+            return WatchResult(completed=False, reason="login_verification_failed", interrupted=True)
         enable_interactivity, interactivity_cfg = self._interactivity_settings()
         self._report_status(f"Watching: {title}", "info")
 
@@ -3255,7 +3255,7 @@ class WatchingWorker:
                 )
 
         if not self._check_account_login_before_play(content_type="short", content_title=title):
-            return
+            return False
         watch_res = watch_short(
             self.driver,
             target_loops=target_loops,
@@ -4041,7 +4041,9 @@ class WatchingWorker:
                         )
 
                 if not self._check_account_login_before_play(content_type="discovered short", content_title=ch_display):
-                    return
+                    emit(self.log_queue, f"Shorts reel playback aborted due to unresolved manual verification / login issue.", logging.WARNING)
+                    exit_reason = "login_verification_failed"
+                    break
                 watch_res = watch_short(
                     self.driver,
                     target_loops=target_loops,
@@ -4247,7 +4249,7 @@ class WatchingWorker:
                     task=task,
                     target_channels=target_channel_names,
                     max_scrolls=3,
-                    log_queue=None,
+                    log_queue=self.log_queue,
                 )
 
                 if matched_result:
@@ -4268,6 +4270,11 @@ class WatchingWorker:
                         )
                     except Exception as exc:
                         emit(self.log_queue, f"Error watching search result video: {exc}", logging.ERROR)
+                        return None
+
+                    if watch_res is None or (watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch", "login_verification_failed") and not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
+                        if watch_res and watch_res.reason == "login_verification_failed":
+                            emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
                         return None
 
                     if vid_id:
@@ -4315,7 +4322,7 @@ class WatchingWorker:
                     self.driver,
                     target_channels=[ch_query],
                     max_scrolls=3,
-                    log_queue=None,
+                    log_queue=self.log_queue,
                 )
 
                 if matched_result:
@@ -4335,6 +4342,11 @@ class WatchingWorker:
                         )
                     except Exception as exc:
                         emit(self.log_queue, f"Error watching channel search video: {exc}", logging.ERROR)
+                        return None
+
+                    if watch_res is None or (watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch", "login_verification_failed") and not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
+                        if watch_res and watch_res.reason == "login_verification_failed":
+                            emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
                         return None
 
                     if vid_id:
@@ -4968,6 +4980,9 @@ class WatchingWorker:
                         except Exception:
                             raise
 
+                        if watch_res is None:
+                            continue
+
                         if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
                             emit(
                                 self.log_queue,
@@ -4975,6 +4990,12 @@ class WatchingWorker:
                                 logging.WARNING,
                             )
                             failed_rec_ids.add(cand_id)
+                            continue
+                        elif not watch_res.completed and watch_res.reason == "login_verification_failed":
+                            emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Trying next candidate...", logging.WARNING)
+                            failed_rec_ids.add(cand_id)
+                            if self.stop_event.is_set():
+                                break
                             continue
 
                         suggested_played = True
@@ -5144,6 +5165,9 @@ class WatchingWorker:
                     except Exception:
                         raise
 
+                    if watch_res is None:
+                        continue
+
                     if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
                         emit(
                             self.log_queue,
@@ -5153,6 +5177,11 @@ class WatchingWorker:
                         safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
                         human_like_delay(2.0, 3.5)
                         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                        continue
+                    elif not watch_res.completed and watch_res.reason == "login_verification_failed":
+                        emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Trying next candidate...", logging.WARNING)
+                        if self.stop_event.is_set():
+                            break
                         continue
 
                     target_attempts += 1
@@ -5388,7 +5417,7 @@ class WatchingWorker:
                 config_mgr=self.config_mgr,
                 start_time=getattr(self, "session_start_time", datetime.now()),
                 custom_subject=getattr(self, "session_thread_subject", None),
-                log_queue=None,
+                log_queue=self.log_queue,
                 thread_url=getattr(self, "session_thread_url", None),
                 thread_message_id=getattr(self, "session_thread_message_id", None),
                 thread_info=getattr(self, "session_thread_info", None),

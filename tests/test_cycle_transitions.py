@@ -151,3 +151,42 @@ def test_search_playback_resets_suggested_misses_to_continue_suggestions(test_wo
     assert not any("youtube.com/" in str(call) and "/watch" not in str(call) for call in mock_safe_get.call_args_list)
 
 
+def test_home_video_timeout_completed_false_does_not_abort_session(test_worker):
+    """When a home video stops with completed=False (e.g. safety timeout or cutoff), session continues instead of exiting."""
+    test_worker.driver.current_url = "https://www.youtube.com/"
+    test_worker._check_and_enter_night_sleep = MagicMock(return_value=False)
+    test_worker._check_and_play_random_buffer_video = MagicMock(return_value=False)
+    test_worker._check_account_login_before_play = MagicMock(return_value=True)
+
+    home_item = {"href": "/watch?v=home1", "title": "Home 1", "channel_name": "TestChannel"}
+    home_match = (home_item, test_worker.channels[0], "https://youtube.com/watch?v=home1", "Home 1", "TestChannel")
+    test_worker._scan_home_feed_for_target = MagicMock(return_value=home_match)
+
+    # Simulate video ending due to safety timeout: completed=False, reason="full_timeout"
+    test_worker._play_target_video = MagicMock(
+        return_value=WatchResult(completed=False, reason="full_timeout", watched_seconds=67.8)
+    )
+
+    shorts_called = threading.Event()
+
+    def fake_shorts_cycle(session_watched_keys):
+        shorts_called.set()
+        test_worker.stop_event.set()
+        return 2
+
+    test_worker._run_shorts_cycle = MagicMock(side_effect=fake_shorts_cycle)
+
+    with patch("src.automation.watching_worker.setup_driver", return_value=test_worker.driver), \
+         patch("src.automation.watching_worker.perform_google_login", return_value=True), \
+         patch("src.automation.watching_worker.safe_get"), \
+         patch("src.automation.watching_worker.human_like_delay"), \
+         patch("src.automation.watching_worker.dismiss_youtube_dialogs"), \
+         patch("src.automation.watching_worker.random.randint", return_value=1):  # Cycle target = 1
+        test_worker.run()
+
+    # The session must NOT have aborted with 0 target attempts. It should have credited the attempt and transitioned
+    assert test_worker.target_attempts == 1
+    assert shorts_called.is_set(), "_run_shorts_cycle should be reached because video attempt was credited and cycle target was met"
+
+
+
