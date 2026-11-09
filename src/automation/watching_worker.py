@@ -5007,6 +5007,19 @@ class WatchingWorker:
                         break
 
                     if suggested_played:
+                        if cycle_long_vids_watched >= target_long_vids_cycle:
+                            self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+                            cycle_long_vids_watched = 0
+                            target_long_vids_cycle = random.randint(3, 5)
+                            suggested_miss_count = 0
+                            emit(
+                                self.log_queue,
+                                f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
+                                logging.INFO,
+                            )
+                            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                            human_like_delay(2.0, 3.5)
+                            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
                         continue
 
                     if failed_rec_ids and not suggested_played:
