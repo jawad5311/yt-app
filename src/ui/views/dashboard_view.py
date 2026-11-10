@@ -117,28 +117,34 @@ class DashboardView(Frame):
             footer_text="Current session delivered",
         )
         self.card_slot1 = self.card_session_watch_time
-        self.card_slot2 = self._create_card(
-            title="Box 2",
-            initial_value="—",
+
+        self.card_session_duration = self._create_card(
+            title="Session Duration",
+            initial_value="0s",
             row=2,
             col=1,
-            category_icon="📊",
-            footer_text="Awaiting assignment",
+            category_icon="⏳",
+            footer_text="Elapsed session time",
         )
-        self.card_slot3 = self._create_card(
-            title="Box 3",
-            initial_value="—",
+        self.card_slot2 = self.card_session_duration
+
+        self.card_target_videos = self._create_card(
+            title="Targeted Watched",
+            initial_value="0 Vids · 0 Shorts",
             row=2,
             col=2,
-            category_icon="📈",
-            footer_text="Awaiting assignment",
+            category_icon="🎯",
+            footer_text="From targeted channels",
         )
+        self.card_target_videos.configure(font=Font(size=15, weight="bold"))
+        self.card_slot3 = self.card_target_videos
+
         self.card_slot4 = self._create_card(
             title="Box 4",
             initial_value="—",
             row=2,
             col=3,
-            category_icon="🎯",
+            category_icon="📊",
             footer_text="Awaiting assignment",
         )
 
@@ -380,6 +386,16 @@ class DashboardView(Frame):
         """Current session watch time delivered."""
         if hasattr(self, "card_session_watch_time"):
             self.card_session_watch_time.configure(text=formatted_duration)
+
+    def update_session_duration(self, formatted_duration: str) -> None:
+        """Update active session elapsed duration widget."""
+        if hasattr(self, "card_session_duration"):
+            self.card_session_duration.configure(text=formatted_duration)
+
+    def update_target_videos_watched(self, regular_count: int, shorts_count: int) -> None:
+        """Update targeted videos and shorts watched count widget."""
+        if hasattr(self, "card_target_videos"):
+            self.card_target_videos.configure(text=f"{regular_count} Vids · {shorts_count} Shorts")
 
     def set_card_content(
         self,

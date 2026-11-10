@@ -4,8 +4,9 @@ import queue
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -112,6 +113,10 @@ class YTBotApp(tk.Tk):
         self._session_counter: int = 0
         self.current_session_id: int = 0
         self._current_session_watch_seconds: float = 0.0
+        self._session_start_time: Optional[datetime] = None
+        self._current_session_duration_seconds: float = 0.0
+        self._current_session_target_vids: int = 0
+        self._current_session_target_shorts: int = 0
         self._poll_job: Optional[str] = None
         self._close_check_job: Optional[str] = None
         self._close_start_time: float = 0.0
@@ -337,6 +342,10 @@ class YTBotApp(tk.Tk):
     def reset_all_watch_stats(self) -> None:
         """Completely reset all watch statistics across stats.json, settings channel counters, and running workers."""
         self._current_session_watch_seconds = 0.0
+        self._session_start_time = None
+        self._current_session_duration_seconds = 0.0
+        self._current_session_target_vids = 0
+        self._current_session_target_shorts = 0
         if hasattr(self, "stats_store") and self.stats_store:
             self.stats_store.clear_all()
 
@@ -378,6 +387,38 @@ class YTBotApp(tk.Tk):
             self._current_session_watch_seconds = total
         return total
 
+    def get_current_session_duration_seconds(self) -> float:
+        """Calculate wall-clock elapsed duration of active or most recent session."""
+        if self.is_running and getattr(self, "_session_start_time", None) is not None:
+            elapsed = max(0.0, (datetime.now() - self._session_start_time).total_seconds())
+            self._current_session_duration_seconds = elapsed
+            return elapsed
+        return float(getattr(self, "_current_session_duration_seconds", 0.0) or 0.0)
+
+    def get_current_session_target_counts(self) -> Tuple[int, int]:
+        """Aggregate (target_regular_videos, target_shorts) across active workers or recent session."""
+        vids = getattr(self, "_current_session_target_vids", 0)
+        shorts = getattr(self, "_current_session_target_shorts", 0)
+        w_vids = 0
+        w_shorts = 0
+        has_active = False
+        for worker in list(self.__dict__.get("active_workers", [])):
+            tracker = getattr(worker, "channel_tracker", None)
+            if tracker and hasattr(tracker, "get_target_counts"):
+                try:
+                    tv, ts = tracker.get_target_counts()
+                    w_vids += tv
+                    w_shorts += ts
+                    has_active = True
+                except Exception:
+                    pass
+        if has_active:
+            vids = max(vids, w_vids)
+            shorts = max(shorts, w_shorts)
+            self._current_session_target_vids = vids
+            self._current_session_target_shorts = shorts
+        return vids, shorts
+
     def update_dashboard_stats(self) -> None:
         """Refresh dashboard overview cards with live accounts, runnable queue, and status."""
         if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
@@ -393,6 +434,12 @@ class YTBotApp(tk.Tk):
             if hasattr(dashboard, "update_session_watch_time"):
                 session_dur = format_duration(self.get_current_session_watch_seconds())
                 dashboard.update_session_watch_time(session_dur)
+            if hasattr(dashboard, "update_session_duration"):
+                el_dur = format_duration(self.get_current_session_duration_seconds())
+                dashboard.update_session_duration(el_dur)
+            if hasattr(dashboard, "update_target_videos_watched"):
+                tv, ts = self.get_current_session_target_counts()
+                dashboard.update_target_videos_watched(tv, ts)
 
     def refresh_watch_stats(self) -> None:
         """Re-render everything that shows watch statistics (main thread only, without rebuilding hidden tabs)."""
@@ -418,6 +465,12 @@ class YTBotApp(tk.Tk):
             if hasattr(dashboard, "update_session_watch_time"):
                 session_dur = format_duration(self.get_current_session_watch_seconds())
                 dashboard.update_session_watch_time(session_dur)
+            if hasattr(dashboard, "update_session_duration"):
+                el_dur = format_duration(self.get_current_session_duration_seconds())
+                dashboard.update_session_duration(el_dur)
+            if hasattr(dashboard, "update_target_videos_watched"):
+                tv, ts = self.get_current_session_target_counts()
+                dashboard.update_target_videos_watched(tv, ts)
             self.update_dashboard_stats()
 
     def show_view(self, name: str):
@@ -637,6 +690,10 @@ class YTBotApp(tk.Tk):
         self.is_running = True
         self.current_mode = "automation"
         self._current_session_watch_seconds = 0.0
+        self._session_start_time = datetime.now()
+        self._current_session_duration_seconds = 0.0
+        self._current_session_target_vids = 0
+        self._current_session_target_shorts = 0
         self._update_close_button_state()
         start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
@@ -859,6 +916,10 @@ class YTBotApp(tk.Tk):
         self.is_running = True
         self.current_mode = "watching"
         self._current_session_watch_seconds = 0.0
+        self._session_start_time = datetime.now()
+        self._current_session_duration_seconds = 0.0
+        self._current_session_target_vids = 0
+        self._current_session_target_shorts = 0
         self._update_close_button_state()
         start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
@@ -1256,13 +1317,25 @@ class YTBotApp(tk.Tk):
         except Exception:
             pass
 
-        # 4. Smooth real-time update of session watch time while running
+        # 4. Smooth real-time update of session metrics while running
         if self.is_running and hasattr(self, "views") and "dashboard" in self.views:
             dashboard = self.views["dashboard"]
             if hasattr(dashboard, "update_session_watch_time"):
                 try:
                     session_sec = self.get_current_session_watch_seconds()
                     dashboard.update_session_watch_time(format_duration(session_sec))
+                except Exception:
+                    pass
+            if hasattr(dashboard, "update_session_duration"):
+                try:
+                    el_sec = self.get_current_session_duration_seconds()
+                    dashboard.update_session_duration(format_duration(el_sec))
+                except Exception:
+                    pass
+            if hasattr(dashboard, "update_target_videos_watched"):
+                try:
+                    tv, ts = self.get_current_session_target_counts()
+                    dashboard.update_target_videos_watched(tv, ts)
                 except Exception:
                     pass
 

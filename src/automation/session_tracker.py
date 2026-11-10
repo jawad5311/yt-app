@@ -14,7 +14,7 @@ import logging
 import queue
 import threading
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..models.channel import Channel, calculate_channel_target_seconds
 from ..utils.logger import emit
@@ -54,6 +54,8 @@ class SessionChannelTracker:
         # Video & Shorts counts for session reporting
         self.total_regular_videos: int = 0
         self.total_shorts: int = 0
+        self.target_regular_videos: int = 0
+        self.target_shorts: int = 0
         self.channel_regular_videos: Dict[str, int] = {}
         self.channel_shorts: Dict[str, int] = {}
 
@@ -173,6 +175,16 @@ class SessionChannelTracker:
         with self._lock:
             return float(sum(self.session_watch_seconds.values()))
 
+    def get_target_counts(self) -> Tuple[int, int]:
+        """Return (target_regular_videos, target_shorts) watched in this session."""
+        with self._lock:
+            reg = getattr(self, "target_regular_videos", 0)
+            shorts = getattr(self, "target_shorts", 0)
+            if reg == 0 and shorts == 0:
+                reg = sum(self.channel_regular_videos.values())
+                shorts = sum(self.channel_shorts.values())
+            return int(reg), int(shorts)
+
     def record_search_query(self) -> None:
         """Record that a YouTube search was performed."""
         with self._lock:
@@ -194,6 +206,11 @@ class SessionChannelTracker:
 
             if is_random:
                 self.random_videos_count += 1
+            else:
+                if is_short:
+                    self.target_shorts += 1
+                else:
+                    self.target_regular_videos += 1
 
             if source:
                 src_clean = source.strip().lower()
