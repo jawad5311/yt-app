@@ -44,7 +44,15 @@ class WatchResult:
     views_counted: int = 0
 
     def __post_init__(self) -> None:
-        if self.reason == "ended":
+        if self.reason in (
+            "ended",
+            "completion_cutoff",
+            "autoplay_transition",
+            "duration_reached",
+            "video_target_achieved",
+            "task_limit_reached",
+            "channel_target_achieved",
+        ):
             self.playback_finished = True
 
     def __bool__(self) -> bool:
@@ -205,6 +213,10 @@ class StatRecord:
             video_duration=_float("video_duration"),
             task_keys=_str_list("task_keys"),
         )
+        if rec.runs == 0 and rec.video_duration > 0 and rec.watch_seconds >= rec.video_duration:
+            equiv = int(rec.watch_seconds // rec.video_duration)
+            if equiv > 0:
+                rec.runs = equiv
         return rec
 
     def is_on_cooldown(self, cooldown_hours: float, current_time: Optional[datetime] = None) -> Tuple[bool, float]:
@@ -239,8 +251,12 @@ class StatRecord:
 
         if outcome.runs is not None:
             self.runs += max(0, outcome.runs)
-        elif outcome.playback_finished and outcome.success and not outcome.interrupted:
+        elif outcome.playback_finished and (outcome.success or outcome.result in ("completion_cutoff", "video_target_achieved", "ended", "duration_reached", "autoplay_transition")):
             self.runs += 1
+        elif self.runs == 0 and self.video_duration > 0 and self.watch_seconds >= self.video_duration:
+            equiv = int(self.watch_seconds // self.video_duration)
+            if equiv > 0:
+                self.runs = equiv
 
         if outcome.success:
             self.successes += 1
@@ -275,6 +291,10 @@ def fold_records(primary: StatRecord, secondary: Optional[StatRecord]) -> StatRe
     if secondary.video_duration > 0:
         primary.video_duration = secondary.video_duration
     primary.runs += secondary.runs
+    if primary.runs == 0 and primary.video_duration > 0 and primary.watch_seconds >= primary.video_duration:
+        equiv = int(primary.watch_seconds // primary.video_duration)
+        if equiv > 0:
+            primary.runs = equiv
     if secondary.label and not primary.label:
         primary.label = secondary.label
     if secondary.last_run > primary.last_run:
@@ -421,6 +441,13 @@ def format_watch_line(
 ) -> str:
     """Queue-card line: ``x/x runs -- xx watched (multiplier)``."""
     current_runs = record.runs if record is not None else 0
+    eff_duration = task_duration
+    if eff_duration <= 0 and record is not None and record.video_duration > 0:
+        eff_duration = record.video_duration
+    if current_runs == 0 and eff_duration > 0 and record is not None and record.watch_seconds >= eff_duration:
+        equiv = int(record.watch_seconds // eff_duration)
+        if equiv > 0:
+            current_runs = equiv
     unit_singular = unit.rstrip("s") if unit.endswith("s") else unit
     if max_runs > 0:
         runs_str = f"{current_runs}/{max_runs} {unit}"

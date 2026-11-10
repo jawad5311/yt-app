@@ -254,13 +254,18 @@ def get_task_status_badges(task: VideoTask, channel_enabled: bool = True, stats_
         current_runs = getattr(record, "runs", None)
         if current_runs is None:
             current_runs = getattr(task, "total_runs", getattr(task, "runs", 0)) or 0
-        watch_sec = getattr(record, "watch_seconds", None)
-        if watch_sec is None:
-            watch_sec = getattr(task, "total_watch_seconds", getattr(task, "watch_seconds", 0.0)) or 0.0
         rec_dur = getattr(record, "video_duration", 0.0) if record else 0.0
         task_dur = getattr(task, "duration_seconds", 0.0) or 0.0
         eff_dur = float(rec_dur if rec_dur and rec_dur > 0 else (task_dur if isinstance(task_dur, (int, float)) else 0.0))
-
+        watch_sec = getattr(record, "watch_seconds", None)
+        if watch_sec is None:
+            watch_sec = getattr(task, "total_watch_seconds", getattr(task, "watch_seconds", 0.0)) or 0.0
+        if current_runs == 0 and eff_dur > 0 and watch_sec >= eff_dur:
+            equiv = int(watch_sec // eff_dur)
+            if equiv > 0:
+                current_runs = equiv
+        if watch_sec is None:
+            watch_sec = getattr(task, "total_watch_seconds", getattr(task, "watch_seconds", 0.0)) or 0.0
         is_limit = False
         if hasattr(task, "is_target_reached"):
             is_limit = task.is_target_reached(
@@ -2147,6 +2152,13 @@ class QueueView(Frame):
         record = store.find_for_task(task) if store is not None else None
         current_runs = record.runs if record is not None else 0
         watch_sec = record.watch_seconds if record else 0.0
+        rec_dur = getattr(record, "video_duration", 0.0) if record else 0.0
+        task_dur = getattr(task, "duration_seconds", 0.0) or 0.0
+        eff_dur = float(rec_dur if rec_dur and rec_dur > 0 else (task_dur if isinstance(task_dur, (int, float)) else 0.0))
+        if current_runs == 0 and eff_dur > 0 and watch_sec >= eff_dur:
+            equiv = int(watch_sec // eff_dur)
+            if equiv > 0:
+                current_runs = equiv
 
         rec_dur = getattr(record, "video_duration", 0.0) if record else 0.0
         if not isinstance(rec_dur, (int, float)):

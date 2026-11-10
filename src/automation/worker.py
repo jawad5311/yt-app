@@ -411,6 +411,7 @@ class AutomationWorker:
                         return outcome
                     if result:
                         outcome.success = True
+                        outcome.runs = 1 if (result.playback_finished or result.completed) else None
                         return outcome
                 except Exception as exc:
                     emit(self.log_queue, f"Watch error: {exc}", logging.ERROR)

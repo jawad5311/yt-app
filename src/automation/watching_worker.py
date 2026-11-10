@@ -2702,6 +2702,16 @@ class WatchingWorker:
         actual_watched = float(watch_res.watched_seconds or 0.0)
         actual_ad = float(watch_res.ad_seconds or 0.0)
         actual_dur = float(watch_res.video_duration or 0.0)
+
+        # Calculate runs credited from this watch
+        if watch_res.completed or watch_res.playback_finished:
+            if actual_dur > 0 and actual_watched >= 2.0 * actual_dur:
+                runs_done = int(actual_watched // actual_dur)
+            else:
+                runs_done = 1
+        else:
+            runs_done = 0
+
         self._record_watch(
             title=title,
             channel_name=channel_display,
@@ -2712,6 +2722,7 @@ class WatchingWorker:
             playback_finished=watch_res.playback_finished,
             interrupted=watch_res.interrupted,
             task=registered_task,
+            runs=runs_done,
         )
         self._update_task_duration(registered_task, actual_dur)
         if hasattr(self, "channel_tracker") and self.channel_tracker and (actual_watched > 0 or watch_res.completed):
@@ -2725,9 +2736,14 @@ class WatchingWorker:
                 source=resolved_source,
                 is_random=is_rand,
             )
+        rec = self.stats_store.find_for_task(registered_task) if self.stats_store else None
+        current_runs = rec.runs if rec else 0
+        max_r = getattr(registered_task, "max_runs", 0) or 0
+        runs_info = f" ({current_runs}/{max_r} runs)" if max_r > 0 else f" ({current_runs} runs)"
         emit(
             self.log_queue,
-            f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}).",
+            f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}){runs_info}.",
+            logging.INFO,
         )
         return watch_res
 

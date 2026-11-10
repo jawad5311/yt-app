@@ -144,18 +144,31 @@ class StatsStore:
         base = resolve_video_key(task)
         with self._lock:
             record = self.records.get(base)
-            if record is not None:
-                return record
-            for candidate in self.records.values():
-                if base in candidate.task_keys:
-                    return candidate
-            return None
+            if record is None:
+                for candidate in self.records.values():
+                    if base in candidate.task_keys:
+                        record = candidate
+                        break
+            if record is not None and task is not None:
+                t_dur = getattr(task, "duration_seconds", 0.0) or (task.parse_duration_seconds() if hasattr(task, "parse_duration_seconds") else 0.0) or 0.0
+                if record.video_duration <= 0 and t_dur > 0:
+                    record.video_duration = float(t_dur)
+                if record.runs == 0 and record.video_duration > 0 and record.watch_seconds >= record.video_duration:
+                    equiv = int(record.watch_seconds // record.video_duration)
+                    if equiv > 0:
+                        record.runs = equiv
+            return record
 
     # -------------------------------------------------------------- queries
 
     def get(self, key: str) -> Optional[StatRecord]:
         with self._lock:
-            return self.records.get(key)
+            record = self.records.get(key)
+            if record is not None and record.runs == 0 and record.video_duration > 0 and record.watch_seconds >= record.video_duration:
+                equiv = int(record.watch_seconds // record.video_duration)
+                if equiv > 0:
+                    record.runs = equiv
+            return record
 
     def all(self) -> Dict[str, StatRecord]:
         with self._lock:

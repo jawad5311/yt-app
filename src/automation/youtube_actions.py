@@ -773,6 +773,9 @@ def watch_video(
             if stop_reason:
                 reason_str = stop_reason if isinstance(stop_reason, str) else "channel_disabled"
                 emit(log_queue, f"Playback stopped: {reason_str.replace('_', ' ')}.")
+                is_target_stop = reason_str in ("video_target_achieved", "task_limit_reached", "channel_target_achieved")
+                if is_target_stop:
+                    return _result(True, reason_str, interrupted=False, playback_finished=True)
                 return _result(False, reason_str, interrupted=True)
 
         # User-requested pause
@@ -793,6 +796,9 @@ def watch_video(
                     if stop_reason:
                         reason_str = stop_reason if isinstance(stop_reason, str) else "channel_disabled"
                         emit(log_queue, f"Playback stopped while paused: {reason_str.replace('_', ' ')}.")
+                        is_target_stop = reason_str in ("video_target_achieved", "task_limit_reached", "channel_target_achieved")
+                        if is_target_stop:
+                            return _result(True, reason_str, interrupted=False, playback_finished=True)
                         return _result(False, reason_str, interrupted=True)
                 time.sleep(0.5)
             pause_duration = max(0.0, time.monotonic() - pause_start)
@@ -824,7 +830,7 @@ def watch_video(
                         driver.execute_script("var v = document.querySelector('video'); if (v) v.pause();")
                     except Exception:
                         pass
-                    return _result(True, "autoplay_transition")
+                    return _result(True, "autoplay_transition", playback_finished=True)
             except Exception:
                 pass
 
@@ -1071,7 +1077,7 @@ def watch_video(
         if ended:
             return _result(True, "ended", playback_finished=True)
         if is_full_mode and video_duration > 0 and curr_time >= threshold_time:
-            return _result(True, "completion_cutoff")
+            return _result(True, "completion_cutoff", playback_finished=True)
 
         # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
         resume_cutoff = threshold_time if is_full_mode else video_duration
@@ -1107,7 +1113,7 @@ def watch_video(
             # Measure actual video playback seconds so pause duration does not prematurely end playback
             if watched_seconds >= duration_seconds:
                 emit(log_queue, f"Reached watch duration limit ({duration_seconds}s). Finding next video directly without pausing.")
-                return _result(True, "duration_reached")
+                return _result(True, "duration_reached", playback_finished=True)
 
         # Natural human interactivity simulation
         interactive_event = simulator.on_playback_tick(
@@ -1125,7 +1131,7 @@ def watch_video(
             started_at += float(interactive_event["micro_paused"])
 
         if is_full_mode and interactive_event.get("target_cutoff_reached"):
-            return _result(True, "completion_cutoff")
+            return _result(True, "completion_cutoff", playback_finished=True)
 
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Watchtime interrupted by user.")
@@ -1207,6 +1213,9 @@ def watch_short(
             if stop_reason:
                 reason_str = stop_reason if isinstance(stop_reason, str) else "playback_stopped"
                 emit(log_queue, f"Playback stopped: {reason_str.replace('_', ' ')}.")
+                is_target_stop = reason_str in ("video_target_achieved", "task_limit_reached", "channel_target_achieved")
+                if is_target_stop:
+                    return _result(True, reason_str, interrupted=False, finished=True)
                 return _result(False, reason_str, interrupted=True)
 
         if pause_event is not None and pause_event.is_set():
