@@ -4265,6 +4265,9 @@ class WatchingWorker:
                     if t.channel and target_channels:
                         if not any(c.name.strip().lower() == t.channel.strip().lower() for c in target_channels):
                             continue
+                    eligible, _, _ = self.is_candidate_eligible(t.url, t.title, t.channel)
+                    if not eligible:
+                        continue
                     queue_tasks.append(t)
 
         candidate_tasks = list(queue_tasks)
@@ -4294,7 +4297,15 @@ class WatchingWorker:
             if not queries:
                 queries = [task.title or task.keywords or task.channel]
 
-            for query in queries:
+            candidate_queries: List[str] = []
+            for q in queries:
+                if q:
+                    clean_q = q.strip()
+                    if task.channel and task.channel.strip().lower() not in clean_q.lower():
+                        candidate_queries.append(f"{task.channel.strip()} {clean_q}")
+                    candidate_queries.append(clean_q)
+
+            for query in candidate_queries:
                 if self.stop_event.is_set():
                     return None
                 if not query:
@@ -4339,10 +4350,12 @@ class WatchingWorker:
                         emit(self.log_queue, f"Error watching search result video: {exc}", logging.ERROR)
                         return None
 
-                    if watch_res is None or (watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch", "login_verification_failed") and not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
+                    if watch_res is None or (not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
                         if watch_res and watch_res.reason == "login_verification_failed":
                             emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
-                        return None
+                        if vid_id:
+                            session_watched_keys.add(vid_id)
+                        continue
 
                     if vid_id:
                         session_watched_keys.add(vid_id)
@@ -4411,10 +4424,12 @@ class WatchingWorker:
                         emit(self.log_queue, f"Error watching channel search video: {exc}", logging.ERROR)
                         return None
 
-                    if watch_res is None or (watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch", "login_verification_failed") and not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
+                    if watch_res is None or (not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
                         if watch_res and watch_res.reason == "login_verification_failed":
                             emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
-                        return None
+                        if vid_id:
+                            session_watched_keys.add(vid_id)
+                        continue
 
                     if vid_id:
                         session_watched_keys.add(vid_id)
@@ -5101,6 +5116,12 @@ class WatchingWorker:
                             if self.stop_event.is_set():
                                 break
                             continue
+                        elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
+                            emit(self.log_queue, f"Video '{title}' stopped without playback ({watch_res.reason or 'not watched'}). Skipping to next candidate...", logging.INFO)
+                            failed_rec_ids.add(cand_id)
+                            if self.stop_event.is_set():
+                                break
+                            continue
 
                         suggested_played = True
                         target_attempts += 1
@@ -5284,6 +5305,11 @@ class WatchingWorker:
                         continue
                     elif not watch_res.completed and watch_res.reason == "login_verification_failed":
                         emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Trying next candidate...", logging.WARNING)
+                        if self.stop_event.is_set():
+                            break
+                        continue
+                    elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
+                        emit(self.log_queue, f"Home video '{title}' stopped without playback ({watch_res.reason or 'not watched'}).", logging.INFO)
                         if self.stop_event.is_set():
                             break
                         continue

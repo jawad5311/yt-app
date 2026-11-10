@@ -512,7 +512,7 @@ def find_and_click_search_result(
                     match_reason = f"video ID '{target_video_id}'"
                     break
 
-        # Priority 2: Match by candidate title
+        # Priority 2: Match by candidate title (scoped to target channels if specified)
         if matched_idx < 0 and candidate_titles:
             for cand in candidate_titles:
                 c_lower = cand.strip().lower()
@@ -521,14 +521,19 @@ def find_and_click_search_result(
                 for idx, item in enumerate(results_data):
                     t_lower = item.get("title", "").lower()
                     if c_lower in t_lower or t_lower in c_lower:
+                        if target_channels_clean:
+                            ch_name = item.get("channel", "").lower()
+                            ch_href = item.get("channelHref", "").lower()
+                            if not any(tc in ch_name or tc in ch_href for tc in target_channels_clean):
+                                continue
                         matched_idx = idx
                         match_reason = f"title '{cand}'"
                         break
                 if matched_idx >= 0:
                     break
 
-        # Priority 3: Match by target channel name or channel handle
-        if matched_idx < 0 and target_channels_clean:
+        # Priority 3: Match by target channel name or channel handle (only when searching directly for channel)
+        if matched_idx < 0 and target_channels_clean and not candidate_titles and not target_video_id:
             for idx, item in enumerate(results_data):
                 ch_name = item.get("channel", "").lower()
                 ch_href = item.get("channelHref", "").lower()

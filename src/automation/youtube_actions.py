@@ -224,16 +224,22 @@ def check_ad_playback_progress(driver: Any, sample_delay: float = 0.5) -> Dict[s
         "time_display": display_str,
     }
 
-def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
+def ensure_video_playing(
+    driver: Any,
+    log_queue: Optional[queue.Queue] = None,
+    verbose: bool = True,
+) -> bool:
     """Ensure video playback starts by tapping center play button, control bar, or player element."""
     try:
         ad_check = check_ad_playback_progress(driver, sample_delay=0.4)
         if ad_check.get("is_ad"):
             if ad_check.get("is_changing"):
-                emit(log_queue, f"Ad is already playing (time changing: {ad_check.get('time_display')}). Not clicking play button.")
+                if verbose and log_queue is not None:
+                    emit(log_queue, f"Ad is already playing (time changing: {ad_check.get('time_display')}). Not clicking play button.")
                 return True
             else:
-                emit(log_queue, f"Ad playback is stalled (time not changing: {ad_check.get('time_display')}). Clicking play button to resume.")
+                if verbose and log_queue is not None:
+                    emit(log_queue, f"Ad playback is stalled (time not changing: {ad_check.get('time_display')}). Clicking play button to resume.")
 
         # Check if already playing via JS probe
         res = driver.execute_script(ENSURE_PLAYING_JS)
@@ -252,7 +258,8 @@ def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -
                     ActionChains(driver).move_to_element(btn).click().perform()
                 except Exception:
                     click_element(driver, btn)
-                emit(log_queue, "Tapped center play button to start video.")
+                if verbose and log_queue is not None:
+                    emit(log_queue, "Tapped center play button to start video.")
                 time.sleep(0.4)
                 return True
 
@@ -267,19 +274,34 @@ def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -
                         ActionChains(driver).move_to_element(btn).click().perform()
                     except Exception:
                         click_element(driver, btn)
-                    emit(log_queue, "Clicked play button on player controls.")
+                    if verbose and log_queue is not None:
+                        emit(log_queue, "Clicked play button on player controls.")
                     time.sleep(0.4)
                     return True
 
-        # 3. Universal keyboard 'k' / Space key shortcut to start playback (only if paused)
+        # 3. Direct HTML5 video play API call
         try:
-            is_paused = driver.execute_script("var v = document.querySelector('video'); return !v || v.paused;")
-            if is_paused:
-                body = driver.find_element(By.TAG_NAME, "body")
-                body.send_keys("k")
-                emit(log_queue, "Sent play key shortcut to start video.")
-                time.sleep(0.4)
-                return True
+            res_play = driver.execute_script("""
+            var v = document.querySelector('video');
+            if (v && v.paused) {
+                var p = v.play();
+                if (p && typeof p.catch === 'function') {
+                    p.catch(function() {
+                        v.muted = true;
+                        v.play();
+                    });
+                }
+                return true;
+            }
+            return false;
+            """)
+            if res_play:
+                time.sleep(0.3)
+                is_paused = driver.execute_script("var v = document.querySelector('video'); return !v || v.paused;")
+                if not is_paused:
+                    if verbose and log_queue is not None:
+                        emit(log_queue, "Resumed video playback via HTML5 play.")
+                    return True
         except Exception:
             pass
 
@@ -291,25 +313,23 @@ def ensure_video_playing(driver: Any, log_queue: Optional[queue.Queue] = None) -
                     ActionChains(driver).move_to_element(p).click().perform()
                 except Exception:
                     click_element(driver, p)
-                emit(log_queue, "Tapped video player to resume playback.")
+                if verbose and log_queue is not None:
+                    emit(log_queue, "Tapped video player to resume playback.")
                 time.sleep(0.4)
                 return True
 
-        # 5. HTML5 video play with muted autoplay policy unlock fallback
+        # 5. Universal keyboard 'k' shortcut fallback (only if still paused, and verify effect)
         try:
-            driver.execute_script("""
-            var v = document.querySelector('video');
-            if (v) {
-                var p = v.play();
-                if (p && typeof p.catch === 'function') {
-                    p.catch(function() {
-                        v.muted = true;
-                        v.play();
-                        setTimeout(function() { v.muted = false; }, 300);
-                    });
-                }
-            }
-            """)
+            is_paused = driver.execute_script("var v = document.querySelector('video'); return !v || v.paused;")
+            if is_paused:
+                body = driver.find_element(By.TAG_NAME, "body")
+                body.send_keys("k")
+                time.sleep(0.4)
+                is_still_paused = driver.execute_script("var v = document.querySelector('video'); return !v || v.paused;")
+                if not is_still_paused:
+                    if verbose and log_queue is not None:
+                        emit(log_queue, "Sent play key shortcut to start video.")
+                    return True
         except Exception:
             pass
 
@@ -1064,16 +1084,18 @@ def watch_video(
                     if now - last_play_attempt >= 3.0:
                         last_play_attempt = now
                         play_attempts += 1
+                        is_verbose = play_attempts <= 2
                         try:
-                            ensure_video_playing(driver, log_queue=log_queue if play_attempts <= 2 else None)
+                            ensure_video_playing(driver, log_queue=log_queue if is_verbose else None, verbose=is_verbose)
                         except Exception as exc:
                             logging.debug(f"Could not resume playback: {exc}")
             else:
                 if now - last_play_attempt >= 3.0:
                     last_play_attempt = now
                     play_attempts += 1
+                    is_verbose = play_attempts <= 2
                     try:
-                        ensure_video_playing(driver, log_queue=log_queue if play_attempts <= 2 else None)
+                        ensure_video_playing(driver, log_queue=log_queue if is_verbose else None, verbose=is_verbose)
                     except Exception as exc:
                         logging.debug(f"Could not resume playback: {exc}")
 
