@@ -709,7 +709,7 @@ return (function() {
 
 GET_ACTIVE_SHORT_INFO_JS = r"""
 return (function() {
-    var renderers = document.querySelectorAll('ytd-reel-video-renderer');
+    var renderers = document.querySelectorAll('ytd-reel-video-renderer, ytd-ad-slot-renderer');
     var activeReel = null;
 
     // 1. Identify active renderer by URL video ID
@@ -742,7 +742,7 @@ return (function() {
 
     // 3. Fallback: is-active attribute
     if (!activeReel) {
-        activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active');
+        activeReel = document.querySelector('ytd-reel-video-renderer[is-active], ytd-reel-video-renderer.active, ytd-ad-slot-renderer[is-active]');
     }
 
     // 4. Fallback: renderer containing the playing video element
@@ -751,7 +751,7 @@ return (function() {
         for (var i = 0; i < videos.length; i++) {
             var v = videos[i];
             if (!v.paused || v.currentTime > 0) {
-                var pr = v.closest('ytd-reel-video-renderer');
+                var pr = v.closest('ytd-reel-video-renderer, ytd-ad-slot-renderer');
                 if (pr) {
                     activeReel = pr;
                     break;
@@ -766,7 +766,9 @@ return (function() {
         return {
             found: false,
             channel_name: '',
+            channel_handle: '',
             channel_url: '',
+            is_ad: false,
             title: '',
             url: window.location.href
         };
@@ -825,6 +827,77 @@ return (function() {
         channelUrl = channelName.startsWith('/') ? channelName : ('/' + channelName);
     }
 
+    // Extract channel handle
+    var channelHandle = '';
+    if (chLink) {
+        var href = chLink.getAttribute('href') || '';
+        var matchH = href.match(/\/(@[^\/?#]+)/);
+        if (matchH && matchH[1]) {
+            channelHandle = matchH[1];
+        } else if (chLink.textContent && chLink.textContent.trim().startsWith('@')) {
+            channelHandle = chLink.textContent.trim();
+        }
+    }
+    if (!channelHandle) {
+        var handleEl = activeReel.querySelector(
+            'yt-reel-channel-bar-view-model a[href*="/@"], ' +
+            '.ytReelMetapanelViewModelMetapanelItem a[href*="/@"], ' +
+            'ytd-reel-player-header-renderer a[href*="/@"], ' +
+            'a.ytAttributedStringLink[href*="/@"], ' +
+            'a[href*="/@"]'
+        );
+        if (handleEl) {
+            var hHref = handleEl.getAttribute('href') || '';
+            var hMatch = hHref.match(/\/(@[^\/?#]+)/);
+            if (hMatch && hMatch[1]) {
+                channelHandle = hMatch[1];
+            } else if (handleEl.textContent && handleEl.textContent.trim().startsWith('@')) {
+                channelHandle = handleEl.textContent.trim();
+            }
+        }
+    }
+    if (!channelHandle && channelUrl) {
+        var uMatch = channelUrl.match(/\/(@[^\/?#]+)/);
+        if (uMatch && uMatch[1]) {
+            channelHandle = uMatch[1];
+        }
+    }
+    if (!channelHandle && channelName && channelName.startsWith('@')) {
+        channelHandle = channelName;
+    }
+
+    // Extract is_ad
+    var isAd = false;
+    if (activeReel.tagName && activeReel.tagName.toLowerCase() === 'ytd-ad-slot-renderer') {
+        isAd = true;
+    } else if (activeReel.querySelector(
+        'ytd-ad-slot-renderer, .ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ' +
+        '.ytp-ad-overlay-container, ytd-action-companion-ad-renderer, .ytd-action-companion-ad-renderer, ' +
+        '.ytp-ad-text, .ytp-ad-badge, [aria-label*="Sponsored" i], [aria-label*="advertisement" i]'
+    )) {
+        isAd = true;
+    } else {
+        var rClass = activeReel.className || '';
+        if (rClass.indexOf('ad-showing') !== -1 || rClass.indexOf('ytp-showing-ad') !== -1 || activeReel.querySelector('.ad-showing')) {
+            isAd = true;
+        } else {
+            var badges = activeReel.querySelectorAll('ytd-badge-supported-renderer, .badge-shape-wiz, .ytd-badge-supported-renderer, yt-badge-shape');
+            for (var bi = 0; bi < badges.length; bi++) {
+                var bText = (badges[bi].textContent || '').trim().toLowerCase();
+                if (bText === 'sponsored' || bText === 'ad' || bText.indexOf('sponsored') !== -1) {
+                    isAd = true;
+                    break;
+                }
+            }
+            if (!isAd && !chLink) {
+                var adButton = activeReel.querySelector('.yt-spec-button-shape-next--call-to-action, a[href*="googleadservices"], a[href*="ad_url"]');
+                if (adButton) {
+                    isAd = true;
+                }
+            }
+        }
+    }
+
     // Title strictly within activeReel
     var titleEl = activeReel.querySelector(
         'ytd-reel-player-header-renderer h2, h2.title, #video-title, .title.ytd-reel-player-header-renderer, .ytReelMetapanelViewModelMetapanelItem h2, yt-reel-metapanel-view-model h2, h2'
@@ -834,7 +907,9 @@ return (function() {
     return {
         found: true,
         channel_name: channelName,
+        channel_handle: channelHandle,
         channel_url: channelUrl,
+        is_ad: isAd,
         title: title,
         url: window.location.href
     };
@@ -3316,14 +3391,57 @@ class WatchingWorker:
 
 
     @staticmethod
-    def _is_unknown_channel_short(ch_name: Optional[str], title: Optional[str]) -> bool:
-        """Return True if channel name or video title is unknown/unresolved."""
+    def is_short_ad(info: Optional[Dict[str, Any]]) -> bool:
+        """Check if a Short info dictionary represents an advertisement or sponsored reel."""
+        if not info or not isinstance(info, dict):
+            return False
+        if info.get("is_ad"):
+            return True
+        href = (info.get("url") or info.get("href") or "").lower()
+        if any(ad_kw in href for ad_kw in ["googleadservices", "doubleclick", "/pagead/", "aclk", "ad_type", "googleads"]):
+            return True
+        title = (info.get("title") or "").strip().lower()
+        if title.startswith("sponsored") or title.startswith("ad ") or title.startswith("ad:") or title == "ad" or "sponsored" in title:
+            return True
+        ch_name = (info.get("channel_name") or "").strip().lower()
+        if ch_name.startswith("sponsored") or ch_name.startswith("ad ") or ch_name.startswith("ad:") or ch_name == "ad" or "sponsored" in ch_name:
+            return True
+        ch_handle = (info.get("channel_handle") or "").strip().lower()
+        if ch_handle.startswith("sponsored") or ch_handle.startswith("ad") or ch_handle in ("@sponsored", "@ad"):
+            return True
+        return False
+
+    @staticmethod
+    def _is_unknown_channel_short(
+        ch_name: Optional[str],
+        title: Optional[str] = None,
+        ch_handle: Optional[str] = None,
+        is_ad: bool = False,
+        short_info: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Return True if the Short is an ad, channel handle is unknown/unresolved, or no channel handle is found."""
+        if is_ad:
+            return True
+        if short_info and isinstance(short_info, dict):
+            if short_info.get("is_ad") or WatchingWorker.is_short_ad(short_info):
+                return True
+
         clean_ch = (ch_name or "").strip().lower()
+        clean_handle = (ch_handle or "").strip().lower()
         clean_title = (title or "").strip().lower()
+
+        # If channel name indicates unknown
         if not clean_ch or clean_ch in ("unknown", "unknown channel", "none"):
             return True
+
+        # If channel handle is explicitly provided
+        if ch_handle is not None:
+            if not clean_handle or clean_handle in ("unknown", "unknown channel", "@unknown", "none", "@none"):
+                return True
+
         if not clean_title or clean_title in ("short", "untargeted short", "unknown"):
             return True
+
         return False
 
     def get_active_short_info(self) -> Dict[str, Any]:
@@ -3331,17 +3449,19 @@ class WatchingWorker:
         for attempt in range(4):
             try:
                 info = self.driver.execute_script(GET_ACTIVE_SHORT_INFO_JS)
-                if isinstance(info, dict) and info.get("found") and info.get("channel_name"):
+                if isinstance(info, dict) and info.get("found"):
                     curr_url = getattr(self.driver, "current_url", "") or info.get("url", "")
                     info["url"] = curr_url
                     info["video_id"] = extract_video_id(curr_url)
-                    return info
+                    # If confirmed ad, handle is known, or channel name is known, return immediately
+                    if info.get("is_ad") or info.get("channel_name") or info.get("channel_handle"):
+                        return info
             except Exception as exc:
                 emit(self.log_queue, f"Error getting active short info: {exc}", logging.DEBUG)
             if attempt < 3:
                 time.sleep(0.3)
 
-        # Fallback if channel_name wasn't populated within retry attempts
+        # Fallback if metadata wasn't fully populated within retry attempts
         try:
             info = self.driver.execute_script(GET_ACTIVE_SHORT_INFO_JS)
             if isinstance(info, dict):
@@ -3357,7 +3477,9 @@ class WatchingWorker:
         return {
             "found": False,
             "channel_name": "",
+            "channel_handle": "",
             "channel_url": "",
+            "is_ad": False,
             "title": "",
             "url": curr_url,
             "video_id": extract_video_id(curr_url),
@@ -3731,23 +3853,51 @@ class WatchingWorker:
                 dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
 
                 first_ch = ""
+                first_handle = ""
+                first_is_ad = False
                 if first_info and isinstance(first_info, dict):
                     first_ch = first_info.get("channel_name", "") or ""
+                    first_handle = first_info.get("channel_handle", "") or ""
+                    first_is_ad = bool(first_info.get("is_ad", False)) or self.is_short_ad(first_info)
                 elif random_short and isinstance(random_short, dict):
                     first_ch = random_short.get("channel") or random_short.get("channel_name") or ""
+                    first_handle = random_short.get("channel_handle") or ""
 
-                if self._is_unknown_channel_short(first_ch, r_title):
-                    untargeted_watch_time = random.uniform(1.0, 2.0)
+                if not first_handle and first_ch and first_ch.startswith("@"):
+                    first_handle = first_ch
+                if not first_handle and first_info and isinstance(first_info, dict):
+                    f_url = first_info.get("channel_url", "")
+                    if f_url:
+                        id_t, id_v = parse_channel_identity(f_url)
+                        if id_t == "handle" and id_v:
+                            first_handle = id_v
+
+                clean_first_ch = (first_ch or "").strip().lower()
+                clean_first_handle = (first_handle or "").strip().lower()
+
+                first_is_ad_or_unknown = (
+                    first_is_ad
+                    or not clean_first_handle
+                    or clean_first_handle in ("unknown", "unknown channel", "@unknown", "none", "@none")
+                    or not clean_first_ch
+                    or clean_first_ch in ("unknown", "unknown channel", "none")
+                    or self._is_unknown_channel_short(first_ch, r_title, ch_handle=first_handle, is_ad=first_is_ad, short_info=first_info)
+                )
+
+                first_label = first_handle or first_ch or "Unknown Channel"
+
+                if first_is_ad_or_unknown:
+                    untargeted_watch_time = min(1.0, max(0.2, round(random.uniform(0.4, 0.8), 2)))
                     emit(
                         self.log_queue,
-                        f"Short from unknown channel '{r_title}' found. Scrolling immediately within {untargeted_watch_time:.1f}s before entering Shorts reel...",
+                        f"Short is an ad or from unknown channel/handle '{first_label}'. Scrolling immediately within 1s ({untargeted_watch_time:.2f}s) before entering Shorts reel...",
                         logging.INFO,
                     )
                 else:
                     untargeted_watch_time = random.uniform(2.0, 6.0)
                     emit(
                         self.log_queue,
-                        f"Short from '{first_ch}' is not in targeted channels list. Watching for {untargeted_watch_time:.1f}s randomly before entering Shorts reel...",
+                        f"Short from '{first_label}' is not in targeted channels list. Watching for {untargeted_watch_time:.1f}s randomly before entering Shorts reel...",
                         logging.INFO,
                     )
                 elapsed = 0.0
@@ -3947,10 +4097,31 @@ class WatchingWorker:
                 break
 
             ch_name = short_info.get("channel_name", "")
+            ch_handle = short_info.get("channel_handle", "")
             ch_url = short_info.get("channel_url", "")
+            is_ad_short = bool(short_info.get("is_ad", False)) or self.is_short_ad(short_info)
             title = short_info.get("title", "") or "Short"
             vid_id = short_info.get("video_id") or extract_video_id(short_info.get("url", ""))
             full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
+
+            if not ch_handle and ch_name and ch_name.startswith("@"):
+                ch_handle = ch_name
+            if not ch_handle and ch_url:
+                id_type, id_val = parse_channel_identity(ch_url)
+                if id_type == "handle" and id_val:
+                    ch_handle = id_val
+
+            clean_ch = (ch_name or "").strip().lower()
+            clean_handle = (ch_handle or "").strip().lower()
+
+            is_ad_or_unknown = (
+                is_ad_short
+                or not clean_handle
+                or clean_handle in ("unknown", "unknown channel", "@unknown", "none", "@none")
+                or not clean_ch
+                or clean_ch in ("unknown", "unknown channel", "none")
+                or self._is_unknown_channel_short(ch_name, title, ch_handle=ch_handle, is_ad=is_ad_short, short_info=short_info)
+            )
 
             if not short_info.get("found") and not vid_id and not ch_name:
                 human_like_delay(0.5, 1.0)
@@ -4016,7 +4187,10 @@ class WatchingWorker:
                         matched_task = t
                         break
 
-            is_target = bool(matched_channel or matched_task)
+            if is_ad_short:
+                is_target = False
+            else:
+                is_target = bool(matched_channel or matched_task)
 
             if is_target:
                 ch_display = (matched_channel.name if matched_channel else (matched_task.channel if matched_task else ch_name)) or "Target Channel"
@@ -4180,13 +4354,13 @@ class WatchingWorker:
             else:
                 reel_non_target_count += 1
                 non_targets_in_this_reel += 1
-                ch_label = ch_name or "Unknown Channel"
+                ch_label = ch_handle or ch_name or "Unknown Channel"
 
-                if self._is_unknown_channel_short(ch_name, title):
-                    non_target_watch_time = random.uniform(1.0, 2.0)
+                if is_ad_or_unknown:
+                    non_target_watch_time = min(1.0, max(0.2, round(random.uniform(0.4, 0.8), 2)))
                     emit(
                         self.log_queue,
-                        f"Short from unknown channel '{ch_label}' found. Scrolling immediately within {non_target_watch_time:.1f}s ({reel_non_target_count}/{cycle_reel_max_non_target})...",
+                        f"Short is an ad or from unknown channel/handle '{ch_label}'. Scrolling immediately within 1s ({non_target_watch_time:.2f}s) ({reel_non_target_count}/{cycle_reel_max_non_target})...",
                         logging.INFO,
                     )
                 else:
@@ -4228,7 +4402,10 @@ class WatchingWorker:
 
             prev_url = full_url or getattr(self.driver, "current_url", "")
             self.scroll_to_next_short(prev_url=prev_url)
-            human_like_delay(1.0, 1.8)
+            if is_ad_or_unknown:
+                human_like_delay(0.4, 0.8)
+            else:
+                human_like_delay(1.0, 1.8)
 
         return ReelLoopResult(target_shorts_watched, non_targets_in_this_reel, exit_reason)
 
