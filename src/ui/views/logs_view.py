@@ -40,6 +40,7 @@ class LogsView(Frame):
         # Action Buttons
         self._clear_reset_timer: Optional[str] = None
         self._copy_reset_timer: Optional[str] = None
+        self._copy_complete_reset_timer: Optional[str] = None
 
         self.clear_btn = Button(
             h_frame,
@@ -58,6 +59,15 @@ class LogsView(Frame):
             command=self.copy_logs,
         )
         self.copy_btn.pack(side="right", padx=(0, 10))
+
+        self.copy_complete_btn = Button(
+            h_frame,
+            text="Copy Complete Logs",
+            width=150,
+            style="Primary.TButton",
+            command=self.copy_complete_logs,
+        )
+        self.copy_complete_btn.pack(side="right", padx=(0, 10))
 
         # Logs Content Container (Allows floating scroll-down button overlay)
         self.logs_container = Frame(self, style="Transparent.TFrame")
@@ -328,8 +338,8 @@ class LogsView(Frame):
             self.log_textbox.insert("end", "\n")
             try:
                 line_count = int(self.log_textbox.index("end-1c").split(".")[0])
-                if line_count > 3000:
-                    self.log_textbox.delete("1.0", f"{line_count - 2500}.0")
+                if line_count > 1000:
+                    self.log_textbox.delete("1.0", f"{line_count - 1000 + 1}.0")
             except Exception:
                 pass
 
@@ -388,6 +398,38 @@ class LogsView(Frame):
                 self.copy_btn.configure(text="Copied!")
                 self._copy_reset_timer = self.after(
                     2500, lambda: self.copy_btn.configure(text="📋 Copy Logs") if hasattr(self, "copy_btn") else None
+                )
+        except Exception:
+            pass
+
+    def copy_complete_logs(self):
+        """Copy all logs of the current session stored in the session log file."""
+        try:
+            from ...utils.logger import read_current_session_logs
+
+            content = read_current_session_logs()
+            if not content.strip():
+                content = self.log_textbox.get("1.0", "end-1c")
+
+            if not content.strip():
+                return
+
+            self.clipboard_clear()
+            self.clipboard_append(content)
+        except Exception:
+            pass
+
+        # Flash feedback on the button for 2-3 seconds without showing a pop-up
+        try:
+            if hasattr(self, "copy_complete_btn") and self.copy_complete_btn is not None:
+                if getattr(self, "_copy_complete_reset_timer", None):
+                    try:
+                        self.after_cancel(self._copy_complete_reset_timer)
+                    except Exception:
+                        pass
+                self.copy_complete_btn.configure(text="Copied!")
+                self._copy_complete_reset_timer = self.after(
+                    2500, lambda: self.copy_complete_btn.configure(text="Copy Complete Logs") if hasattr(self, "copy_complete_btn") else None
                 )
         except Exception:
             pass

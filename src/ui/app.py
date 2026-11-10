@@ -21,7 +21,14 @@ from ..models.account import Account
 from ..models.channel import Channel, is_video_task_runnable
 from ..models.video_task import VideoTask
 from ..models.watch_stats import format_duration, resolve_video_key
-from ..utils.logger import emit, init_logging
+from ..utils.logger import (
+    emit,
+    get_current_session_log_file,
+    init_logging,
+    read_current_session_logs,
+    start_session_logging,
+    stop_session_logging,
+)
 from .background_jobs import BackgroundJobs
 from .views.accounts_view import AccountsView
 from .views.channels_view import ChannelsView
@@ -603,6 +610,7 @@ class YTBotApp(tk.Tk):
         self.is_running = True
         self.current_mode = "automation"
         self._update_close_button_state()
+        start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
         self.current_session_id = session_id
@@ -753,6 +761,7 @@ class YTBotApp(tk.Tk):
                 pass
             if not session_error and not self.stop_event.is_set():
                 emit(self.log_queue, "=== Automation Session Completed ===")
+            stop_session_logging()
 
     def start_watching(self):
         """Start the continuous watching recommendation loop."""
@@ -822,6 +831,7 @@ class YTBotApp(tk.Tk):
         self.is_running = True
         self.current_mode = "watching"
         self._update_close_button_state()
+        start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
         self.current_session_id = session_id
@@ -927,6 +937,7 @@ class YTBotApp(tk.Tk):
                 pass
             if not session_error and not self.stop_event.is_set():
                 emit(self.log_queue, "=== Watching Session Completed ===")
+            stop_session_logging()
 
     def toggle_pause_watching(self):
         """Toggle pause/resume state during browsing session."""
