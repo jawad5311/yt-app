@@ -293,7 +293,7 @@ def test_settings_tab_order_and_separation(ctk_app, tmp_path):
 
     view = SettingsView(app, app)
     tab_names = list(view.tabview._segmented_button._buttons_dict.keys())
-    assert tab_names == ["General", "Playback", "Video", "Shorts", "Ads", "Interactivity", "Email & Reports"]
+    assert tab_names == ["General", "Playback", "Video", "Shorts", "Ads", "Interactivity", "Email & Reports", "RDP/VPS"]
 
     # Verify shorts entries are in view and configured properly
     assert hasattr(view, "target_shorts_cycle_entry")

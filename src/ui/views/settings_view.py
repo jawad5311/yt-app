@@ -136,6 +136,7 @@ class SettingsView(Frame):
         tab_ads = self.tabview.add("Ads")
         tab_interactivity = self.tabview.add("Interactivity")
         tab_email = self.tabview.add("Email & Reports")
+        tab_rdp = self.tabview.add("RDP/VPS")
 
         # Compatibility aliases for code checking old tab names
         self.tabview._tab_dict["Playback & Video"] = tab_playback
@@ -782,6 +783,40 @@ class SettingsView(Frame):
         self.test_email_btn.pack(anchor="w", padx=15, pady=(5, 20))
 
         # ---------------------------------------------------------
+        # Tab 8: RDP/VPS
+        # ---------------------------------------------------------
+        scroll_rdp = SmoothScrollableFrame(tab_rdp)
+        scroll_rdp.pack(fill="both", expand=True, padx=5, pady=5)
+
+        Label(scroll_rdp, text="Username:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(10, 2)
+        )
+        self.rdp_username_entry = Entry(scroll_rdp, width=280)
+        rdp_user = self.config_mgr.get_setting("RdpUsername", "") if self.config_mgr else ""
+        if rdp_user:
+            self.rdp_username_entry.insert(0, rdp_user)
+        self.rdp_username_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_rdp, text="Password:", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        self.rdp_password_entry = Entry(scroll_rdp, width=280)
+        rdp_pass = self.config_mgr.get_setting("RdpPassword", "") if self.config_mgr else ""
+        if rdp_pass:
+            self.rdp_password_entry.insert(0, rdp_pass)
+        self.rdp_password_entry.pack(anchor="w", padx=15, pady=(0, 10))
+
+        self.rdp_info_label = Label(
+            scroll_rdp,
+            text="This username and password is sent to the email address for the user to log in to the RDP or VPS if needed.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+            wraplength=650,
+            justify="left",
+        )
+        self.rdp_info_label.pack(anchor="w", padx=15, pady=(0, 15))
+
+        # ---------------------------------------------------------
         # Footer Action Bar: Save Button
         # ---------------------------------------------------------
         self.action_bar = Frame(self, style="Transparent.TFrame")
@@ -1195,7 +1230,13 @@ class SettingsView(Frame):
         if hasattr(self, "smtp_pass_entry"):
             validated["SmtpPassword"] = self.smtp_pass_entry.get().strip()
 
-        # 13. Appearance mode
+        # 13. RDP/VPS credentials
+        if hasattr(self, "rdp_username_entry"):
+            validated["RdpUsername"] = self.rdp_username_entry.get().strip()
+        if hasattr(self, "rdp_password_entry"):
+            validated["RdpPassword"] = self.rdp_password_entry.get().strip()
+
+        # 14. Appearance mode
         selected_appearance = self.appearance_menu.get()
         if selected_appearance not in APPEARANCE_OPTIONS:
             self._notify_result(False, f"Appearance Mode must be one of: {', '.join(APPEARANCE_OPTIONS)}.")

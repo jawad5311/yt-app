@@ -211,6 +211,8 @@ class ConfigManager:
             "SmtpUsername": "",
             "SmtpPassword": "",
             "SenderEmail": "",
+            "RdpUsername": "",
+            "RdpPassword": "",
         },
         "accounts": [],
         "videos": [],
