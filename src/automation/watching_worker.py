@@ -3383,20 +3383,26 @@ class WatchingWorker:
         """Click on the target short card on the home page and verify navigation."""
         href = short_info.get("href", "")
         vid_id = short_info.get("video_id") or extract_video_id(href)
+        title = short_info.get("title", "")
         try:
-            if vid_id:
+            if vid_id or title:
                 candidates = self.driver.execute_script(r"""
-                    var vidId = arguments[0];
-                    var links = Array.from(document.querySelectorAll(
-                        'ytd-reel-shelf-renderer a[href*="' + vidId + '"], ' +
-                        'ytd-rich-shelf-renderer a[href*="' + vidId + '"], ' +
-                        'grid-shelf-view-model a[href*="' + vidId + '"], ' +
-                        'ytd-rich-section-renderer a[href*="' + vidId + '"], ' +
-                        'ytm-shorts-lockup-view-model-v2 a[href*="' + vidId + '"], ' +
-                        'ytm-shorts-lockup-view-model a[href*="' + vidId + '"], ' +
-                        'shorts-lockup-view-model a[href*="' + vidId + '"], ' +
-                        'a[href*="/shorts/' + vidId + '"]'
-                    ));
+                    var vidId = arguments[0] || '';
+                    var targetTitle = (arguments[1] || '').toLowerCase().trim();
+                    var links = [];
+                    if (vidId) {
+                        links = Array.from(document.querySelectorAll(
+                            'ytd-reel-shelf-renderer a[href*="' + vidId + '"], ' +
+                            'ytd-rich-shelf-renderer a[href*="' + vidId + '"], ' +
+                            'grid-shelf-view-model a[href*="' + vidId + '"], ' +
+                            'ytd-rich-section-renderer a[href*="' + vidId + '"], ' +
+                            'ytm-shorts-lockup-view-model-v2 a[href*="' + vidId + '"], ' +
+                            'ytm-shorts-lockup-view-model a[href*="' + vidId + '"], ' +
+                            'shorts-lockup-view-model a[href*="' + vidId + '"], ' +
+                            'a[href*="/shorts/' + vidId + '"], ' +
+                            'a[href*="' + vidId + '"]'
+                        ));
+                    }
                     var cleanLinks = links.filter(function(l) {
                         if (!l) return false;
                         if (l.closest && l.closest('ytd-ad-slot-renderer, [layout*="ad"]')) return false;
@@ -3413,8 +3419,23 @@ class WatchingWorker:
                             result.push(card);
                         }
                     });
+                    if (result.length === 0 && targetTitle) {
+                        var allShortCards = Array.from(document.querySelectorAll(
+                            'ytd-reel-item-renderer, ytm-shorts-lockup-view-model-v2, shorts-lockup-view-model, ytd-rich-item-renderer[is-slim-media]'
+                        ));
+                        for (var i = 0; i < allShortCards.length; i++) {
+                            var sc = allShortCards[i];
+                            var cardText = (sc.innerText || sc.textContent || '').toLowerCase();
+                            if (cardText.indexOf(targetTitle) !== -1) {
+                                var link = sc.querySelector('a[href*="/shorts/"], a');
+                                if (link) result.push(link);
+                                result.push(sc);
+                                break;
+                            }
+                        }
+                    }
                     return result;
-                """, vid_id)
+                """, vid_id, title)
 
                 if isinstance(candidates, list):
                     for el in candidates:
@@ -3644,121 +3665,35 @@ class WatchingWorker:
         prev = prev_url or getattr(self.driver, "current_url", "")
         prev_vid = extract_video_id(prev) if prev else ""
         clicked = False
-        try:
-            res = self.driver.execute_script(r"""
-                return (function() {
-                    function isVisible(el) {
-                        if (!el) return false;
-                        try {
-                            var rect = el.getBoundingClientRect();
-                            if (rect.width <= 0 || rect.height <= 0) return false;
-                            var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
-                            if (style && (style.visibility === 'hidden' || style.display === 'none')) return false;
-                            return true;
-                        } catch(e) {
-                            return false;
-                        }
-                    }
 
-                    function triggerClick(el) {
-                        if (!el) return false;
-                        try { el.focus(); } catch(e) {}
-                        try {
-                            var mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window });
-                            var mouseup = new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window });
-                            var click = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-                            el.dispatchEvent(mousedown);
-                            el.dispatchEvent(mouseup);
-                            el.dispatchEvent(click);
-                            return true;
-                        } catch(e) {
-                            try {
-                                el.click();
-                                return true;
-                            } catch(e2) {
-                                return false;
-                            }
-                        }
-                    }
-
-                    var selectors = [
-                        '#navigation-button-down button[aria-label*="Next" i]',
-                        '#navigation-button-down button[aria-label="Next video"]',
-                        '#navigation-button-down button[aria-label="Next Short"]',
-                        '#navigation-button-down button[aria-label="Next"]',
-                        '#navigation-button-down yt-button-shape button',
-                        '#navigation-button-down button',
-                        'ytd-shorts #navigation-button-down button',
-                        'ytd-shorts [id="navigation-button-down"] button',
-                        '[id="navigation-button-down"] yt-icon-button button',
-                        '#navigation-button-down tp-yt-paper-icon-button button',
-                        '#navigation-button-down tp-yt-paper-icon-button',
-                        'button[aria-label*="Next" i]',
-                        'button[aria-label*="next" i]',
-                        'button[aria-label="Next video"]',
-                        'button[aria-label="Next Short"]',
-                        'button[aria-label="Next"]',
-                        'ytd-reel-video-renderer[is-active] [id="navigation-button-down"] button',
-                        'ytd-shorts-player-controls-view-model [aria-label*="Next" i]',
-                        '.navigation-button#navigation-button-down button',
-                        'button.navigation-button-down',
-                        '[id="navigation-button-down"]'
-                    ];
-
-                    for (var i = 0; i < selectors.length; i++) {
-                        var btn = document.querySelector(selectors[i]);
-                        if (btn && isVisible(btn)) {
-                            if (triggerClick(btn)) {
-                                return true;
-                            }
-                        }
-                    }
-
-                    var active = document.querySelector('ytd-reel-video-renderer[is-active]');
-                    if (active && active.nextElementSibling) {
-                        try {
-                            active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        } catch(e) {}
-                    }
-
-                    var container = document.querySelector('#shorts-container') ||
-                                    document.querySelector('ytd-shorts') ||
-                                    document.querySelector('#shorts-inner-container');
-                    if (container && container.scrollTop !== undefined) {
-                        try { container.scrollTop += (window.innerHeight || 800); } catch(e) {}
-                    }
-
-                    try {
-                        var wheelTarget = container || document.body;
-                        wheelTarget.dispatchEvent(new WheelEvent('wheel', {
-                            deltaY: window.innerHeight || 800,
-                            deltaMode: 0,
-                            bubbles: true,
-                            cancelable: true,
-                            view: window
-                        }));
-                    } catch(e) {}
-
-                    ['keydown', 'keyup'].forEach(function(evtType) {
-                        try {
-                            var e = new KeyboardEvent(evtType, {
-                                key: 'ArrowDown',
-                                code: 'ArrowDown',
-                                keyCode: 40,
-                                which: 40,
-                                bubbles: true,
-                                cancelable: true
-                            });
-                            (document.activeElement || document.body || document).dispatchEvent(e);
-                        } catch(e) {}
-                    });
-
-                    return false;
-                })();
-            """)
-            clicked = bool(res)
-        except Exception:
-            clicked = False
+        nav_selectors = [
+            "#navigation-button-down button",
+            "ytd-shorts #navigation-button-down button",
+            "ytd-shorts [id='navigation-button-down'] button",
+            "[id='navigation-button-down'] yt-button-shape button",
+            "[id='navigation-button-down'] yt-icon-button button",
+            "ytd-shorts-player-controls-view-model button[aria-label*='Next' i]",
+            "ytd-reel-video-renderer[is-active] [id='navigation-button-down'] button",
+            "button[aria-label*='Next' i]",
+            "button[aria-label*='next' i]",
+            "button[aria-label='Next video']",
+            "button[aria-label='Next Short']",
+            "button[aria-label='Next']",
+            "#navigation-button-down tp-yt-paper-icon-button button",
+            "#navigation-button-down",
+        ]
+        for sel in nav_selectors:
+            try:
+                nav_btns = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                for nb in nav_btns:
+                    if nb.is_displayed():
+                        ActionChains(self.driver).move_to_element(nb).pause(0.05).click().perform()
+                        clicked = True
+                        break
+                if clicked:
+                    break
+            except Exception:
+                pass
 
         try:
             self.driver.execute_script(r"""
@@ -3777,40 +3712,47 @@ class WatchingWorker:
             pass
 
         if not clicked:
-            nav_selectors = [
-                "#navigation-button-down button",
-                "ytd-shorts #navigation-button-down button",
-                "ytd-shorts [id='navigation-button-down'] button",
-                "[id='navigation-button-down'] yt-button-shape button",
-                "[id='navigation-button-down'] yt-icon-button button",
-                "ytd-shorts-player-controls-view-model button[aria-label*='Next' i]",
-                "ytd-reel-video-renderer[is-active] [id='navigation-button-down'] button",
-                "button[aria-label*='Next' i]",
-                "button[aria-label*='next' i]",
-                "button[aria-label='Next video']",
-                "button[aria-label='Next Short']",
-                "button[aria-label='Next']",
-                "#navigation-button-down tp-yt-paper-icon-button button",
-                "#navigation-button-down",
-            ]
-            for sel in nav_selectors:
-                try:
-                    nav_btns = self.driver.find_elements(By.CSS_SELECTOR, sel)
-                    for nb in nav_btns:
-                        if nb.is_displayed():
-                            ActionChains(self.driver).move_to_element(nb).pause(0.05).click().perform()
-                            clicked = True
-                            break
-                    if clicked:
-                        break
-                except Exception:
-                    pass
+            try:
+                self.driver.execute_script(r"""
+                    return (function() {
+                        var active = document.querySelector('ytd-reel-video-renderer[is-active]');
+                        if (active && active.nextElementSibling) {
+                            try {
+                                active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            } catch(e) {}
+                        }
+
+                        var container = document.querySelector('#shorts-container') ||
+                                        document.querySelector('ytd-shorts') ||
+                                        document.querySelector('#shorts-inner-container');
+                        if (container && container.scrollTop !== undefined) {
+                            try { container.scrollTop += (window.innerHeight || 800); } catch(e) {}
+                        }
+
+                        try {
+                            var wheelTarget = container || document.body;
+                            wheelTarget.dispatchEvent(new WheelEvent('wheel', {
+                                deltaY: window.innerHeight || 800,
+                                deltaMode: 0,
+                                bubbles: true,
+                                cancelable: true,
+                                view: window
+                            }));
+                        } catch(e) {}
+
+                        return false;
+                    })();
+                """)
+            except Exception:
+                pass
 
         try:
-            # YouTube Shorts native shortcut: 'j' key advances to next Short
-            ActionChains(self.driver).send_keys("j").perform()
+            ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
         except Exception:
-            pass
+            try:
+                ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
+            except Exception:
+                pass
 
         try:
             active_el = self.driver.switch_to.active_element
@@ -3820,12 +3762,10 @@ class WatchingWorker:
             pass
 
         try:
-            ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
+            # YouTube Shorts native shortcut: 'j' key advances to next Short
+            ActionChains(self.driver).send_keys("j").perform()
         except Exception:
-            try:
-                ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
-            except Exception:
-                pass
+            pass
 
         scrolled = False
         for attempt in range(15):
@@ -4617,13 +4557,16 @@ class WatchingWorker:
         target_channels = self.get_target_channels()
         target_channel_names = [c.name for c in target_channels if c.name]
 
-        # 1. Gather runnable candidate video tasks from queue
+        # 1. Gather runnable candidate video tasks from queue (long-form videos only)
         raw_queue = self.config_mgr.get_video_queue() if self.config_mgr else []
         queue_tasks: List[VideoTask] = []
         for raw in raw_queue:
             if isinstance(raw, dict):
                 t = VideoTask.from_dict(raw)
                 if t.enabled:
+                    # Filter out YouTube Shorts: search candidates are strictly long-form videos
+                    if getattr(t, "is_short", False) or ("/shorts/" in (getattr(t, "url", "") or "")):
+                        continue
                     if t.channel and target_channels:
                         if not any(c.name.strip().lower() == t.channel.strip().lower() for c in target_channels):
                             continue
@@ -4632,20 +4575,55 @@ class WatchingWorker:
                         continue
                     queue_tasks.append(t)
 
-        candidate_tasks = list(queue_tasks)
-        if preferred_channel_to_avoid and len(target_channels) > 1:
-            avoid_canon = SessionChannelTracker._canon_name(preferred_channel_to_avoid)
-            other_tasks = [t for t in candidate_tasks if t.channel and SessionChannelTracker._canon_name(t.channel) != avoid_canon]
-            same_tasks = [t for t in candidate_tasks if not t.channel or SessionChannelTracker._canon_name(t.channel) == avoid_canon]
-            random.shuffle(other_tasks)
-            random.shuffle(same_tasks)
-            candidate_tasks = other_tasks + same_tasks
+        def get_task_watch_seconds(task_item: VideoTask) -> float:
+            if getattr(self, "stats_store", None):
+                rec = self.stats_store.find_for_task(task_item)
+                if rec is not None:
+                    return float(getattr(rec, "watch_seconds", 0.0) or 0.0)
+            return 0.0
+
+        def is_task_zero_watch(task_item: VideoTask) -> bool:
+            if getattr(self, "stats_store", None):
+                rec = self.stats_store.find_for_task(task_item)
+                if rec is not None:
+                    return (getattr(rec, "watch_seconds", 0.0) or 0.0) <= 0.0 and (getattr(rec, "runs", 0) or 0) <= 0
+            return True
+
+        zero_watch_tasks: List[VideoTask] = []
+        watched_tasks: List[VideoTask] = []
+        for t in queue_tasks:
+            if is_task_zero_watch(t):
+                zero_watch_tasks.append(t)
+            else:
+                watched_tasks.append(t)
+
+        avoid_canon = SessionChannelTracker._canon_name(preferred_channel_to_avoid) if (preferred_channel_to_avoid and len(target_channels) > 1) else None
+
+        # Sort zero_watch_tasks: prioritize alternating channel if avoid_canon is set
+        if avoid_canon:
+            zero_other = [t for t in zero_watch_tasks if t.channel and SessionChannelTracker._canon_name(t.channel) != avoid_canon]
+            zero_same = [t for t in zero_watch_tasks if not t.channel or SessionChannelTracker._canon_name(t.channel) == avoid_canon]
+            random.shuffle(zero_other)
+            random.shuffle(zero_same)
+            zero_sorted = zero_other + zero_same
         else:
-            random.shuffle(candidate_tasks)
+            random.shuffle(zero_watch_tasks)
+            zero_sorted = zero_watch_tasks
+
+        # Sort watched_tasks: ascending by watch_seconds (least watch time first)
+        if avoid_canon:
+            watched_tasks.sort(key=lambda t: (
+                get_task_watch_seconds(t),
+                1 if (t.channel and SessionChannelTracker._canon_name(t.channel) == avoid_canon) else 0,
+            ))
+        else:
+            watched_tasks.sort(key=lambda t: get_task_watch_seconds(t))
+
+        candidate_tasks = zero_sorted + watched_tasks
 
         emit(
             self.log_queue,
-            f"\n=== [YouTube Search] Searching for targeted video across {len(candidate_tasks)} queued candidate(s) and {len(target_channels)} channel(s) ===",
+            f"\n=== [YouTube Search] Searching for targeted video across {len(candidate_tasks)} long-form candidate(s) ({len(zero_sorted)} zero-watch, {len(watched_tasks)} least-watch) and {len(target_channels)} channel(s) ===",
         )
 
         for cand_idx, task in enumerate(candidate_tasks, start=1):

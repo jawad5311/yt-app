@@ -485,13 +485,16 @@ def find_and_click_search_result(
     SCAN_RESULTS_JS = """
     var videoRenderers = Array.from(document.querySelectorAll('ytd-video-renderer, ytd-grid-video-renderer, yt-lockup-view-model'));
     return videoRenderers.map(function(r) {
-        var titleElem = r.querySelector('a#video-title, a#video-title-link, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a');
-        var channelElem = r.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"], a[href*="/@"], a[href*="/channel/"], [class*="channel"] a');
+        var titleElem = r.querySelector('a#video-title, a#video-title-link, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a, h3');
+        var channelElem = r.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"], a[href*="/@"], a[href*="/channel/"], [class*="channel"] a, .yt-content-metadata-view-model-wiz__metadata-row a, .yt-content-metadata-view-model-wiz__metadata-row span, [class*="metadata-row"] a, [class*="metadata-row"] span');
+        var linkElem = r.querySelector('a#video-title, a#video-title-link, a#thumbnail, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a, a[href*="/watch?v="]');
+        var rawText = (r.innerText || r.textContent || '').trim();
         return {
             title: titleElem ? (titleElem.getAttribute('title') || titleElem.textContent || '').trim() : '',
-            url: titleElem ? (titleElem.href || '') : '',
+            url: linkElem ? (linkElem.href || '') : (titleElem ? (titleElem.href || '') : ''),
             channel: channelElem ? (channelElem.textContent || '').trim() : '',
-            channelHref: channelElem ? (channelElem.href || '') : ''
+            channelHref: channelElem ? (channelElem.href || channelElem.getAttribute('href') || '') : '',
+            rawText: rawText
         };
     });
     """
@@ -525,7 +528,8 @@ def find_and_click_search_result(
                         if target_channels_clean:
                             ch_name = item.get("channel", "").lower()
                             ch_href = item.get("channelHref", "").lower()
-                            if not any(tc in ch_name or tc in ch_href for tc in target_channels_clean):
+                            raw_text = item.get("rawText", "").lower()
+                            if not any(tc in ch_name or tc in ch_href or tc in raw_text for tc in target_channels_clean):
                                 continue
                         matched_idx = idx
                         match_reason = f"title '{cand}'"
@@ -538,8 +542,9 @@ def find_and_click_search_result(
             for idx, item in enumerate(results_data):
                 ch_name = item.get("channel", "").lower()
                 ch_href = item.get("channelHref", "").lower()
+                raw_text = item.get("rawText", "").lower()
                 for target_ch in target_channels_clean:
-                    if target_ch in ch_name or target_ch in ch_href:
+                    if target_ch in ch_name or target_ch in ch_href or target_ch in raw_text:
                         matched_idx = idx
                         match_reason = f"target channel '{target_ch}'"
                         break
@@ -642,15 +647,18 @@ def find_channel_video_on_home(
     emit(log_queue, f"Scanning YouTube Home feed for videos from target channel(s): {', '.join(target_channels)}...")
 
     SCAN_HOME_JS = """
-    var cards = Array.from(document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer'));
+    var cards = Array.from(document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-rich-grid-media, yt-lockup-view-model'));
     return cards.map(function(c) {
-        var titleElem = c.querySelector('a#video-title-link, a#video-title');
-        var channelElem = c.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"]');
+        var titleElem = c.querySelector('a#video-title-link, a#video-title, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a');
+        var channelElem = c.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"], a[href*="/@"], a[href*="/channel/"], [class*="channel"] a, .yt-content-metadata-view-model-wiz__metadata-row a, .yt-content-metadata-view-model-wiz__metadata-row span, [class*="metadata-row"] a, [class*="metadata-row"] span');
+        var linkElem = c.querySelector('a#video-title-link, a#video-title, a#thumbnail, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a, a[href*="/watch?v="]');
+        var rawText = (c.innerText || c.textContent || '').trim();
         return {
             title: titleElem ? (titleElem.getAttribute('title') || titleElem.textContent || '').trim() : '',
-            url: titleElem ? (titleElem.href || '') : '',
+            url: linkElem ? (linkElem.href || '') : (titleElem ? (titleElem.href || '') : ''),
             channel: channelElem ? (channelElem.textContent || '').trim() : '',
-            channelHref: channelElem ? (channelElem.href || '') : ''
+            channelHref: channelElem ? (channelElem.href || channelElem.getAttribute('href') || '') : '',
+            rawText: rawText
         };
     });
     """
@@ -667,16 +675,17 @@ def find_channel_video_on_home(
                 continue
             ch_name = card.get("channel", "").lower()
             ch_href = card.get("channelHref", "").lower()
+            raw_text = card.get("rawText", "").lower()
             for target_ch in clean_targets:
-                if target_ch in ch_name or target_ch in ch_href:
+                if target_ch in ch_name or target_ch in ch_href or target_ch in raw_text:
                     matched_title = card.get("title", "")
                     emit(log_queue, f"Found home feed video from channel '{card.get('channel')}': '{matched_title}'!")
 
                     CLICK_HOME_JS = """
-                    var cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer');
+                    var cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-rich-grid-media, yt-lockup-view-model');
                     var target = cards[arguments[0]];
                     if (!target) return false;
-                    var link = target.querySelector('a#video-title-link, a#video-title, a#thumbnail');
+                    var link = target.querySelector('a#video-title-link, a#video-title, a#thumbnail, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a, a[href*="/watch?v="]');
                     if (link) {
                         link.scrollIntoView({behavior: 'smooth', block: 'center'});
                         return true;

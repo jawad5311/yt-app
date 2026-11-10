@@ -40,13 +40,13 @@ class TestSearchPlaybackLoopFixes(unittest.TestCase):
         results_payload = [
             {
                 "title": "The Blessing with Kari Jobe | Elevation Worship",
-                "url": "https://www.youtube.com/watch?v=ELEVATION_123",
+                "url": "https://www.youtube.com/watch?v=ELEVATION_1",
                 "channel": "Elevation Worship",
                 "channelHref": "https://www.youtube.com/@elevationworship",
             },
             {
                 "title": "Blessing: How Gratitude Shifts Mindset",
-                "url": "https://www.youtube.com/watch?v=TARGET_LIFESTYLE_456",
+                "url": "https://www.youtube.com/watch?v=TARGET_1234",
                 "channel": "Lifestyle Mapping",
                 "channelHref": "https://www.youtube.com/@lifestylemapping",
             },
@@ -65,7 +65,7 @@ class TestSearchPlaybackLoopFixes(unittest.TestCase):
             )
             self.assertIsNotNone(matched)
             # Must match the Lifestyle Mapping result, NOT Elevation Worship!
-            self.assertEqual(matched["url"], "https://www.youtube.com/watch?v=TARGET_LIFESTYLE_456")
+            self.assertEqual(matched["url"], "https://www.youtube.com/watch?v=TARGET_1234")
             self.assertEqual(matched["channel"], "Lifestyle Mapping")
 
     def test_find_and_click_search_result_priority3_does_not_hijack_unmatched_title_task(self):
@@ -138,11 +138,14 @@ class TestSearchPlaybackLoopFixes(unittest.TestCase):
         with patch.object(worker, "is_candidate_eligible", side_effect=mock_is_eligible):
             with patch.object(worker, "search_youtube_query", side_effect=mock_search):
                 with patch("src.automation.watching_worker.find_and_click_search_result") as mock_find:
-                    mock_find.return_value = {
-                        "title": "Fresh Eligible Video",
-                        "url": "https://www.youtube.com/watch?v=FRESH_2",
-                        "channel": "Lifestyle Mapping",
-                    }
+                    mock_find.side_effect = [
+                        None,  # Stage 1 (exact title) fails
+                        {      # Stage 2 (exact title + channel) succeeds
+                            "title": "Fresh Eligible Video",
+                            "url": "https://www.youtube.com/watch?v=FRESH_12345",
+                            "channel": "Lifestyle Mapping",
+                        },
+                    ]
                     with patch.object(worker, "_play_target_video") as mock_play:
                         mock_play.return_value = WatchResult(completed=True, watched_seconds=30.0, video_duration=100.0)
                         session_keys = set()
@@ -151,7 +154,9 @@ class TestSearchPlaybackLoopFixes(unittest.TestCase):
                         # Beyond the Renal Diet must NEVER have been searched
                         for q in searched_queries:
                             self.assertNotIn("Beyond the Renal Diet", q)
-                        # Channel name should be scoped
+                        # Stage 1 tried exact title first
+                        self.assertIn("Fresh Eligible Video", searched_queries)
+                        # Stage 2 appended channel name
                         self.assertTrue(any("Lifestyle Mapping" in q for q in searched_queries))
 
     def test_search_and_play_target_video_zero_seconds_does_not_return_success(self):
