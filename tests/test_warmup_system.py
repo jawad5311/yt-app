@@ -405,3 +405,238 @@ def test_settings_view_channel_warmup_persistence(ctk_app, tmp_path):
     assert mgr.data["settings"]["WarmupChannelDefaultTargetHours"] == 18
     assert mgr.data["settings"]["WarmupChannelDefaultDailyIncrementHours"] == 1.5
     view.destroy()
+
+
+def test_channel_warmup_default_target_30(ctk_app, tmp_path):
+    """Verify channel warm-up defaults to 30 hours in global settings, ConfigManager, WarmupManager, and WarmupDialog."""
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_setting("SystemName", "TestPC")
+
+    # 1. Global config default is 30 for channels (while accounts stay 15)
+    assert mgr.get_int("WarmupChannelDefaultTargetHours") == 30
+    assert mgr.get_setting("WarmupChannelDefaultTargetHours") == "30"
+    assert mgr.get_int("WarmupDefaultTargetHours") == 15
+
+    # 2. WarmupChannelConfig defaults to 30
+    dc = WarmupChannelConfig(channel_name="FreshChan")
+    assert dc.target_hours == 30
+    assert dc.total_steps == 30
+    dc2 = WarmupChannelConfig.from_dict({"channel_name": "FromDictChan"})
+    assert dc2.target_hours == 30
+
+    # 3. Auto-enrolled channel receives target_hours == 30
+    mgr.set_channels([{"name": "AutoChan", "url": "https://www.youtube.com/@autochan"}])
+    auto_w = mgr.get_channel_warmup("autochan")
+    assert auto_w is not None
+    assert auto_w["target_hours"] == 30
+
+    # 4. WarmupManager fallback uses 30
+    wm = WarmupManager(mgr)
+    wm_cfg = wm.get_channel_config("AnotherChan", "https://www.youtube.com/@anotherchan")
+    assert wm_cfg.target_hours == 30
+
+    # 5. SettingsView defaults to 30 in UI entry
+    app = ctk_app
+    app.config_mgr = mgr
+    app.appearance_mode = "Dark"
+    app.apply_appearance_mode = MagicMock()
+    s_view = SettingsView(app, app)
+    assert s_view.warmup_channel_default_target_entry.get() == "30"
+    s_view.destroy()
+
+    # 6. WarmupDialog for new channel opens with 30
+    ch = Channel(name="DialogChan", url="https://www.youtube.com/@dialogchan")
+    dlg = WarmupDialog(ctk_app, channel=ch, config_mgr=mgr)
+    assert dlg.target_entry.get() == "30"
+    dlg.destroy()
+
+
+def test_channel_warmup_per_day_limit_divided_by_accounts(tmp_path):
+    """Verify per-day channel quota (e.g. 10h) is divided equally by added accounts (e.g. 2 -> 5h each, 10h combined)."""
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_accounts([
+        {"email": "acc1@gmail.com", "password": "p1"},
+        {"email": "acc2@gmail.com", "password": "p2"},
+    ])
+    mgr.set_channels([{"name": "SharedChan", "url": "https://www.youtube.com/@sharedchan"}])
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    mgr.set_channel_warmup("sharedchan", {
+        "channel_name": "SharedChan",
+        "channel_url": "https://www.youtube.com/@sharedchan",
+        "enabled": True,
+        "target_hours": 30,
+        "daily_increment_hours": 1,
+        "current_day": 10,  # Day 10 -> 10 hours combined daily limit
+        "is_warmed_up": False,
+        "last_active_date": today,
+        "watched_today_seconds": 0.0,
+        "watched_today_by_account": {},
+        "total_watched_seconds": 0.0,
+    })
+
+    wm = WarmupManager(mgr)
+    assert wm.get_total_accounts_count() == 2
+
+    cfg = wm.get_channel_config("SharedChan", "https://www.youtube.com/@sharedchan")
+    assert cfg.get_daily_allowed_seconds() == 36000.0  # 10 hours total
+    assert cfg.get_per_account_daily_allowed_seconds(2) == 18000.0  # 5 hours per account
+
+    # Acc1 watches 4 hours -> neither account has hit quota yet
+    wm.record_channel_watch_time("SharedChan", 4 * 3600.0, account_email="acc1@gmail.com")
+    assert not wm.is_channel_daily_quota_reached("SharedChan", account_email="acc1@gmail.com")
+    assert not wm.is_channel_daily_quota_reached("SharedChan", account_email="acc2@gmail.com")
+
+    # Acc1 watches 1 more hour -> 5 hours total for Acc1 -> Acc1 reaches its 5h slice; Acc2 still has 5h!
+    wm.record_channel_watch_time("SharedChan", 1 * 3600.0, account_email="acc1@gmail.com")
+    assert wm.is_channel_daily_quota_reached("SharedChan", account_email="acc1@gmail.com") is True
+    assert wm.is_channel_daily_quota_reached("SharedChan", account_email="acc2@gmail.com") is False
+
+    # Acc2 watches 5 hours -> Combined reaches 10 hours (36000s) -> BOTH stopped!
+    wm.record_channel_watch_time("SharedChan", 5 * 3600.0, account_email="acc2@gmail.com")
+    assert wm.is_channel_daily_quota_reached("SharedChan", account_email="acc2@gmail.com") is True
+    final_cfg = wm.get_channel_config("SharedChan")
+    assert final_cfg.watched_today_seconds == 36000.0
+    assert final_cfg.get_account_watched_today_seconds("acc1@gmail.com") == 18000.0
+    assert final_cfg.get_account_watched_today_seconds("acc2@gmail.com") == 18000.0
+
+    # Rollover clears both combined and per-account daily counters
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    assert final_cfg.check_and_rollover(today_str=tomorrow) is True
+    assert final_cfg.current_day == 11
+    assert final_cfg.watched_today_seconds == 0.0
+    assert final_cfg.watched_today_by_account == {}
+
+
+def test_channel_warmup_combined_cap_when_accounts_added_midday(tmp_path):
+    """Verify combined 10h cap still holds even if an earlier account watched 7h before a 2nd account was added."""
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_accounts([{"email": "acc1@gmail.com", "password": "p1"}])
+    today = datetime.now().strftime("%Y-%m-%d")
+    mgr.set_channel_warmup("middaychan", {
+        "channel_name": "MiddayChan",
+        "enabled": True,
+        "target_hours": 30,
+        "daily_increment_hours": 1,
+        "current_day": 10,  # 10h daily limit
+        "is_warmed_up": False,
+        "last_active_date": today,
+        "watched_today_seconds": 0.0,
+        "watched_today_by_account": {},
+        "total_watched_seconds": 0.0,
+    })
+
+    wm = WarmupManager(mgr)
+    wm.record_channel_watch_time("MiddayChan", 7 * 3600.0, account_email="acc1@gmail.com")
+
+    # Now add a 2nd account -> per-account limit becomes 5h, combined limit stays 10h (3h remaining)
+    mgr.set_accounts([
+        {"email": "acc1@gmail.com", "password": "p1"},
+        {"email": "acc2@gmail.com", "password": "p2"},
+    ])
+    assert wm.is_channel_daily_quota_reached("MiddayChan", account_email="acc1@gmail.com") is True
+    assert wm.is_channel_daily_quota_reached("MiddayChan", account_email="acc2@gmail.com") is False
+
+    # Acc2 watches 3h -> combined hits 10h -> Acc2 stops at 3h instead of overshooting combined cap!
+    wm.record_channel_watch_time("MiddayChan", 3 * 3600.0, account_email="acc2@gmail.com")
+    assert wm.is_channel_daily_quota_reached("MiddayChan", account_email="acc2@gmail.com") is True
+
+
+def test_workers_enforce_divided_channel_warmup_and_live_delta(tmp_path):
+    """Verify WatchingWorker and AutomationWorker respect divided per-account channel warm-up and live delta."""
+    from src.automation.watching_worker import WatchingWorker
+    from src.automation.worker import AutomationWorker
+    from src.models.video_task import VideoTask
+
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_accounts([
+        {"email": "acc1@gmail.com", "password": "p1"},
+        {"email": "acc2@gmail.com", "password": "p2"},
+    ])
+    mgr.set_channels([{"name": "DivChan", "url": "https://www.youtube.com/@divchan", "enabled": True}])
+    today = datetime.now().strftime("%Y-%m-%d")
+    mgr.set_channel_warmup("divchan", {
+        "channel_name": "DivChan",
+        "channel_url": "https://www.youtube.com/@divchan",
+        "enabled": True,
+        "target_hours": 30,
+        "daily_increment_hours": 1,
+        "current_day": 10,  # 10h daily -> 5h per account (18000s)
+        "is_warmed_up": False,
+        "last_active_date": today,
+        "watched_today_seconds": 17940.0,  # 4h 59m
+        "watched_today_by_account": {"acc1@gmail.com": 17940.0},
+        "total_watched_seconds": 17940.0,
+    })
+
+    acc1 = Account(email="acc1@gmail.com", password="p1")
+    acc2 = Account(email="acc2@gmail.com", password="p2")
+
+    w1 = WatchingWorker(account=acc1, channels=[Channel(name="DivChan", enabled=True)], config_mgr=mgr)
+    w2 = WatchingWorker(account=acc2, channels=[Channel(name="DivChan", enabled=True)], config_mgr=mgr)
+
+    # Before live delta, acc1 still has 60s left
+    assert len(w1.get_target_channels()) == 1
+    assert not w1._is_channel_warmup_quota_reached_live("DivChan")
+
+    # Simulate 60s live playback delta in channel_tracker -> acc1 hits 5h limit immediately!
+    w1.channel_tracker.set_active_channel("DivChan")
+    w1.channel_tracker._active_watch_delta = 60.0
+    assert w1._is_channel_warmup_quota_reached_live("DivChan") is True
+    assert w1.get_target_channels() == []
+
+    # Meanwhile acc2 still has its full 5h available!
+    assert len(w2.get_target_channels()) == 1
+    assert not w2._is_channel_warmup_quota_reached_live("DivChan")
+
+    # Record those 60s via _record_watch mock store and verify AutomationWorker also honors it
+    w1.stats_store = MagicMock()
+    w1._record_watch(
+        title="Test Vid",
+        channel_name="DivChan",
+        watch_seconds=60.0,
+        ad_seconds=0.0,
+        duration=120.0,
+        completed=False,
+        task=VideoTask(url="https://youtube.com/watch?v=12345678901", channel="DivChan"),
+    )
+
+    aw1 = AutomationWorker(account=acc1, video_tasks=[], config_mgr=mgr)
+    aw2 = AutomationWorker(account=acc2, video_tasks=[], config_mgr=mgr)
+    assert WarmupManager(mgr).is_channel_daily_quota_reached("DivChan", account_email=aw1.account.email) is True
+    assert WarmupManager(mgr).is_channel_daily_quota_reached("DivChan", account_email=aw2.account.email) is False
+
+
+def test_warmup_dialog_displays_divided_per_account_quota(ctk_app, tmp_path):
+    """Verify WarmupDialog status banner shows divided per-account daily quota when multiple accounts exist."""
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_accounts([
+        {"email": "acc1@gmail.com", "password": "p1"},
+        {"email": "acc2@gmail.com", "password": "p2"},
+    ])
+    today = datetime.now().strftime("%Y-%m-%d")
+    mgr.set_channel_warmup("bannerchan", {
+        "channel_name": "BannerChan",
+        "enabled": True,
+        "target_hours": 30,
+        "daily_increment_hours": 1,
+        "current_day": 10,
+        "is_warmed_up": False,
+        "last_active_date": today,
+        "watched_today_seconds": 3600.0,
+        "watched_today_by_account": {"acc1@gmail.com": 3600.0},
+    })
+
+    ch = Channel(name="BannerChan")
+    dlg = WarmupDialog(ctk_app, channel=ch, config_mgr=mgr)
+    detail = dlg.status_detail_lbl.cget("text")
+    assert "Today's Combined Quota" in detail
+    assert "÷ 2 accounts" in detail
+    assert "5h/account" in detail
+    assert "30h" in detail
+    dlg.destroy()

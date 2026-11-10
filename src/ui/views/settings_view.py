@@ -903,7 +903,7 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.warmup_channel_default_target_entry = Entry(scroll_warmup, width=150)
-        def_ch_target = self.config_mgr.get_setting("WarmupChannelDefaultTargetHours", 15) if self.config_mgr else 15
+        def_ch_target = self.config_mgr.get_setting("WarmupChannelDefaultTargetHours", 30) if self.config_mgr else 30
         self.warmup_channel_default_target_entry.insert(0, format_number(def_ch_target))
         self.warmup_channel_default_target_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
@@ -912,9 +912,11 @@ class SettingsView(Frame):
         )
         Label(
             scroll_warmup,
-            text="Hours added to the channel's daily allowed watch time each calendar day.",
+            text="Hours added to the channel's daily allowed watch time each calendar day (divided equally across all accounts added in the app).",
             font=Font(size=12),
             style="Muted.TLabel",
+            wraplength=650,
+            justify="left",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.warmup_channel_default_inc_entry = Entry(scroll_warmup, width=150)
         def_ch_inc = self.config_mgr.get_setting("WarmupChannelDefaultDailyIncrementHours", 1) if self.config_mgr else 1

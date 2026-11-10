@@ -1212,8 +1212,52 @@ class WatchingWorker:
         }
         return enabled, config
 
+    def _resolve_channel_url(self, channel_name: str) -> str:
+        """Look up saved channel URL matching channel_name from loaded or configured channels."""
+        target = (channel_name or "").strip().lower().lstrip("@")
+        if not target:
+            return ""
+        for ch in getattr(self, "channels", []) or []:
+            if (getattr(ch, "name", "") or "").strip().lower().lstrip("@") == target and getattr(ch, "url", ""):
+                return str(ch.url)
+        cfg = getattr(self, "config_mgr", None)
+        if cfg is not None and hasattr(cfg, "get_channels"):
+            try:
+                for c_dict in cfg.get_channels() or []:
+                    if isinstance(c_dict, dict) and (c_dict.get("name") or "").strip().lower().lstrip("@") == target:
+                        if c_dict.get("url"):
+                            return str(c_dict["url"])
+            except Exception:
+                pass
+        return ""
+
+    def _is_channel_warmup_quota_reached_live(self, channel_name: str) -> bool:
+        """Check whether channel warm-up daily quota (per-account share or combined) is hit including live active delta."""
+        if not channel_name or not getattr(self, "config_mgr", None):
+            return False
+        try:
+            from .warmup_manager import WarmupManager
+            curr_watch = 0.0
+            if hasattr(self, "channel_tracker") and getattr(self.channel_tracker, "active_channel_name", None):
+                if self.channel_tracker.active_channel_name.strip().lower().lstrip("@") == channel_name.strip().lower().lstrip("@"):
+                    curr_watch = float(self.channel_tracker.get_active_watch_delta() or 0.0)
+            acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
+            ch_url = self._resolve_channel_url(channel_name)
+            return WarmupManager(self.config_mgr).is_channel_daily_quota_reached(
+                channel_name, ch_url, account_email=acc_email, extra_seconds=curr_watch
+            )
+        except Exception:
+            return False
+
     def get_target_channels(self) -> List[Channel]:
         """Get fresh enabled target channels list from settings.json. Only returns channels that are checked/enabled, not archived, and haven't achieved target watch time."""
+        acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
+        active_ch_canon = ""
+        active_delta = 0.0
+        if hasattr(self, "channel_tracker") and getattr(self.channel_tracker, "active_channel_name", None):
+            active_ch_canon = self.channel_tracker.active_channel_name.strip().lower().lstrip("@")
+            active_delta = float(self.channel_tracker.get_active_watch_delta() or 0.0)
+
         def _is_active(c: Channel) -> bool:
             if not (c.name and c.enabled and not c.archived):
                 return False
@@ -1224,7 +1268,10 @@ class WatchingWorker:
             if cfg is not None:
                 try:
                     from .warmup_manager import WarmupManager
-                    if WarmupManager(cfg).is_channel_daily_quota_reached(c.name, c.url):
+                    extra = active_delta if (active_ch_canon and c.name.strip().lower().lstrip("@") == active_ch_canon) else 0.0
+                    if WarmupManager(cfg).is_channel_daily_quota_reached(
+                        c.name, c.url, account_email=acc_email, extra_seconds=extra
+                    ):
                         return False
                 except Exception:
                     pass
@@ -1880,7 +1927,11 @@ class WatchingWorker:
             if ch_name and getattr(self, "config_mgr", None):
                 try:
                     from .warmup_manager import WarmupManager
-                    WarmupManager(self.config_mgr).record_channel_watch_time(ch_name, watch_seconds)
+                    acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
+                    ch_url = self._resolve_channel_url(ch_name)
+                    WarmupManager(self.config_mgr).record_channel_watch_time(
+                        ch_name, watch_seconds, channel_url=ch_url, account_email=acc_email
+                    )
                 except Exception as cw_err:
                     logging.debug(f"Could not record channel warm-up watch time: {cw_err}")
         except Exception as exc:
@@ -2743,6 +2794,8 @@ class WatchingWorker:
             if current_ch_name:
                 if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(current_ch_name):
                     return "channel_target_achieved"
+                if self._is_channel_warmup_quota_reached_live(current_ch_name):
+                    return "channel_warmup_quota_reached"
                 active_names = {c.name.lower() for c in self.get_target_channels()}
                 if current_ch_name.lower() not in active_names:
                     return "channel_disabled"
@@ -3411,6 +3464,8 @@ class WatchingWorker:
         registered_task = self._ensure_video_in_queue(task)
 
         def _is_short_channel_disabled() -> Optional[str]:
+            if self._is_channel_warmup_quota_reached_live(ch_name):
+                return "channel_warmup_quota_reached"
             target_channels = self.get_target_channels()
             ch_names = {c.name.strip().lower() for c in target_channels if c.name}
             if ch_name.strip().lower() not in ch_names and ch_name != "Shorts Channel":
@@ -4394,6 +4449,8 @@ class WatchingWorker:
                 self.channel_tracker.set_active_channel(ch_display)
 
                 def _is_short_channel_disabled() -> Optional[str]:
+                    if self._is_channel_warmup_quota_reached_live(ch_display):
+                        return "channel_warmup_quota_reached"
                     target_ch_list = self.get_target_channels()
                     ch_names = {c.name.strip().lower() for c in target_ch_list if c.name}
                     if ch_display.strip().lower() not in ch_names and ch_display != "Target Channel":
@@ -4995,7 +5052,8 @@ class WatchingWorker:
                 if enabled_channels:
                     warmup_channels = [c for c in enabled_channels if wm.get_channel_config(c.name, c.url).enabled and not wm.get_channel_config(c.name, c.url).is_warmed_up]
                     if warmup_channels and len(warmup_channels) == len(enabled_channels):
-                        if all(wm.is_channel_daily_quota_reached(c.name, c.url) for c in warmup_channels):
+                        acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
+                        if all(wm.is_channel_daily_quota_reached(c.name, c.url, account_email=acc_email) for c in warmup_channels):
                             emit(
                                 self.log_queue,
                                 f"🔥 [Channel Warm-Up Daily Quota Reached] All {len(warmup_channels)} tracked channels reached their daily warm-up quotas for today.",

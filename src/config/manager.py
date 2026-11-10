@@ -217,7 +217,7 @@ class ConfigManager:
             "WarmupDefaultTargetHours": 15,
             "WarmupDefaultDailyIncrementHours": 1,
             "WarmupAutoEnableNewChannels": True,
-            "WarmupChannelDefaultTargetHours": 15,
+            "WarmupChannelDefaultTargetHours": 30,
             "WarmupChannelDefaultDailyIncrementHours": 1,
         },
         "accounts": [],
@@ -847,9 +847,9 @@ class ConfigManager:
             if auto_enabled:
                 if "channel_warmup" not in self.data or not isinstance(self.data["channel_warmup"], dict):
                     self.data["channel_warmup"] = {}
-                raw_target = settings_dict.get("WarmupChannelDefaultTargetHours", 15)
+                raw_target = settings_dict.get("WarmupChannelDefaultTargetHours", 30)
                 raw_inc = settings_dict.get("WarmupChannelDefaultDailyIncrementHours", 1)
-                th = safe_float(raw_target, default=15.0)
+                th = safe_float(raw_target, default=30.0)
                 target_h = int(th) if th.is_integer() else th
                 inc = safe_float(raw_inc, default=1.0)
                 inc_h = int(inc) if inc.is_integer() else inc
@@ -871,6 +871,7 @@ class ConfigManager:
                                 "is_warmed_up": False,
                                 "last_active_date": today_str,
                                 "watched_today_seconds": 0.0,
+                                "watched_today_by_account": {},
                                 "total_watched_seconds": 0.0,
                             }
 

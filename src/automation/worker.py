@@ -345,6 +345,17 @@ class AutomationWorker:
                             if found_ch.target_achieved:
                                 emit(self.log_queue, f"Channel '{ch_name}' target watch time achieved. Stopping playback.")
                                 return "channel_target_achieved"
+                            try:
+                                from .warmup_manager import WarmupManager
+                                curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
+                                acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
+                                if WarmupManager(self.config_mgr).is_channel_daily_quota_reached(
+                                    found_ch.name, found_ch.url, account_email=acc_email, extra_seconds=curr_watch
+                                ):
+                                    emit(self.log_queue, f"Channel '{ch_name}' daily warm-up quota reached. Stopping playback.")
+                                    return "channel_warmup_quota_reached"
+                            except Exception:
+                                pass
 
                     return None
 
@@ -406,6 +417,24 @@ class AutomationWorker:
                     if hasattr(self, "channel_tracker") and self.channel_tracker and (outcome.watched_seconds > 0 or outcome.success):
                         is_s = getattr(task, "is_short", False) or ("/shorts/" in (getattr(task, "url", "") or ""))
                         self.channel_tracker.record_video_watched(is_short=is_s, channel_name=task.channel, source="search")
+                    if getattr(result, "watched_seconds", 0.0) > 0 and task.channel and self.config_mgr is not None:
+                        try:
+                            from .warmup_manager import WarmupManager
+                            clean_ch = task.channel.strip().lower().lstrip("@")
+                            matched_url = ""
+                            matched_raw = None
+                            for c_dict in self.config_mgr.get_channels() or []:
+                                if isinstance(c_dict, dict) and (c_dict.get("name") or "").strip().lower().lstrip("@") == clean_ch:
+                                    matched_raw = c_dict
+                                    matched_url = str(c_dict.get("url") or "")
+                                    break
+                            if matched_raw is not None:
+                                acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
+                                WarmupManager(self.config_mgr).record_channel_watch_time(
+                                    task.channel, float(result.watched_seconds), channel_url=matched_url, account_email=acc_email
+                                )
+                        except Exception as cw_err:
+                            logging.debug(f"Could not record channel warm-up watch time in AutomationWorker: {cw_err}")
                     if result.interrupted:
                         outcome.interrupted = True
                         return outcome
@@ -539,6 +568,22 @@ class AutomationWorker:
                         if self.dispatcher is not None:
                             self.dispatcher.release_task(task)
                         continue
+                    if matching_ch:
+                        try:
+                            from .warmup_manager import WarmupManager
+                            acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
+                            if WarmupManager(self.config_mgr).is_channel_daily_quota_reached(
+                                matching_ch[0].name, matching_ch[0].url, account_email=acc_email
+                            ):
+                                emit(
+                                    self.log_queue,
+                                    f"Skipping task '{task.title or task.keywords or task.url}': channel '{task.channel}' reached daily warm-up quota for this account.",
+                                )
+                                if self.dispatcher is not None:
+                                    self.dispatcher.release_task(task)
+                                continue
+                        except Exception:
+                            pass
 
                 cooldown_h = self.config_mgr.get_float('VideoCooldownHours', 18.0)
                 eligible, unrunnable_reason = check_video_task_eligibility(

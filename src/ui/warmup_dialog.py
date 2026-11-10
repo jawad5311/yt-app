@@ -276,7 +276,8 @@ class WarmupDialog(tk.Toplevel):
     def _on_values_changed(self) -> None:
         """Dynamically update status banner when input values change."""
         try:
-            th_str = self.target_entry.get().strip() or "15"
+            default_target = "30" if self.is_channel else "15"
+            th_str = self.target_entry.get().strip() or default_target
             inc_str = self.inc_entry.get().strip() or "1"
             th = max(0.5, float(th_str))
             inc = max(0.1, float(inc_str))
@@ -289,13 +290,15 @@ class WarmupDialog(tk.Toplevel):
 
     def _refresh_status_ui(self) -> None:
         """Render badge color and status text matching the gradient specifications."""
-        info = self.cfg.get_status_info()
+        n_accounts = self.warmup_mgr.get_total_accounts_count() if self.is_channel else 1
+        info = self.cfg.get_status_info(account_count=n_accounts) if self.is_channel else self.cfg.get_status_info()
         color = info["color"]
         text_fg = info["text_fg"]
+        entity_noun = "Channel" if self.is_channel else "Account"
 
         if not self.cfg.enabled:
             self.status_badge.configure(text="Warm-Up Disabled", bg="#4b5563", fg="#ffffff")
-            self.status_detail_lbl.configure(text="Warm-up restriction is disabled. Account watches continuous loops normally.")
+            self.status_detail_lbl.configure(text=f"Warm-up restriction is disabled. {entity_noun} watches continuous loops normally.")
             return
 
         tgt_str = format_hours(self.cfg.target_hours)
@@ -304,16 +307,22 @@ class WarmupDialog(tk.Toplevel):
         if self.cfg.is_warmed_up:
             self.status_badge.configure(text="✅ Fully Warmed Up", bg=color, fg=text_fg)
             self.status_detail_lbl.configure(
-                text=f"Target daily capacity ({tgt_str}) achieved!\nAccount is fully mature."
+                text=f"Target daily capacity ({tgt_str}) achieved!\n{entity_noun} is fully mature."
             )
         else:
             self.status_badge.configure(text=f"🔥 {info['stage_label']}", bg=color, fg=text_fg)
             daily_limit_str = format_hours(info["daily_allowed_hours"])
             watched_str = format_hours(info["watched_today_hours"])
             rem_str = format_hours(info["remaining_today_hours"])
-            self.status_detail_lbl.configure(
-                text=f"Today's Quota: {watched_str} / {daily_limit_str} ({rem_str} left)\nTarget Goal: {tgt_str} daily • Ladder: +{inc_str}/day"
-            )
+            if self.is_channel and n_accounts > 1:
+                per_acc_str = info.get("per_account_daily_allowed_hours_str", format_hours(info["daily_allowed_hours"] / n_accounts))
+                detail_text = (
+                    f"Today's Combined Quota: {watched_str} / {daily_limit_str} ({rem_str} left)\n"
+                    f"Per-Account Limit (÷ {n_accounts} accounts): {per_acc_str}/account • Goal: {tgt_str} (+{inc_str}/day)"
+                )
+            else:
+                detail_text = f"Today's Quota: {watched_str} / {daily_limit_str} ({rem_str} left)\nTarget Goal: {tgt_str} daily • Ladder: +{inc_str}/day"
+            self.status_detail_lbl.configure(text=detail_text)
 
     def _mark_as_warmed_up(self) -> None:
         """Immediately graduate account to fully warmed up."""
