@@ -3408,15 +3408,20 @@ class WatchingWorker:
                     }
 
                     var selectors = [
+                        '#navigation-button-down button[aria-label*="Next" i]',
                         '#navigation-button-down button[aria-label="Next video"]',
                         '#navigation-button-down button[aria-label="Next"]',
                         '#navigation-button-down button',
                         'ytd-shorts #navigation-button-down button',
                         'ytd-shorts [id="navigation-button-down"] button',
+                        '[id="navigation-button-down"] yt-icon-button button',
                         '#navigation-button-down tp-yt-paper-icon-button',
+                        'button[aria-label*="Next" i]',
+                        'button[aria-label*="next" i]',
                         'button[aria-label="Next video"]',
                         'button[aria-label="Next Short"]',
                         'button[aria-label="Next"]',
+                        'ytd-shorts-player-controls-view-model [aria-label*="Next" i]',
                         '.navigation-button#navigation-button-down button',
                         'button.navigation-button-down',
                         '[id="navigation-button-down"]'
@@ -3435,7 +3440,6 @@ class WatchingWorker:
                     if (active && active.nextElementSibling) {
                         try {
                             active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                            return true;
                         } catch(e) {}
                     }
 
@@ -3443,16 +3447,27 @@ class WatchingWorker:
                                     document.querySelector('ytd-shorts') ||
                                     document.querySelector('#shorts-inner-container');
                     if (container && container.scrollTop !== undefined) {
-                        container.scrollTop += (window.innerHeight || 800);
+                        try { container.scrollTop += (window.innerHeight || 800); } catch(e) {}
                     }
+
+                    try {
+                        var wheelTarget = container || document.body;
+                        wheelTarget.dispatchEvent(new WheelEvent('wheel', {
+                            deltaY: window.innerHeight || 800,
+                            deltaMode: 0,
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        }));
+                    } catch(e) {}
 
                     ['keydown', 'keyup'].forEach(function(evtType) {
                         try {
                             var e = new KeyboardEvent(evtType, {
-                                key: 'PageDown',
-                                code: 'PageDown',
-                                keyCode: 34,
-                                which: 34,
+                                key: 'ArrowDown',
+                                code: 'ArrowDown',
+                                keyCode: 40,
+                                which: 40,
                                 bubbles: true,
                                 cancelable: true
                             });
@@ -3467,36 +3482,61 @@ class WatchingWorker:
         except Exception:
             clicked = False
 
+        try:
+            self.driver.execute_script(r"""
+                try {
+                    var v = document.querySelector('ytd-reel-video-renderer[is-active] video') ||
+                            document.querySelector('ytd-shorts video') ||
+                            document.querySelector('ytd-reel-video-renderer[is-active]') ||
+                            document.querySelector('#shorts-container');
+                    if (v) { v.focus(); }
+                } catch(e) {}
+            """)
+        except Exception:
+            pass
+
         if not clicked:
-            try:
-                nav_btns = self.driver.find_elements(
-                    By.CSS_SELECTOR,
-                    "#navigation-button-down button, button[aria-label='Next video'], button[aria-label='Next'], #navigation-button-down"
-                )
-                for nb in nav_btns:
-                    if nb.is_displayed():
-                        ActionChains(self.driver).move_to_element(nb).pause(0.05).click().perform()
-                        clicked = True
+            nav_selectors = [
+                "#navigation-button-down button",
+                "ytd-shorts #navigation-button-down button",
+                "ytd-shorts [id='navigation-button-down'] button",
+                "[id='navigation-button-down'] yt-icon-button button",
+                "button[aria-label*='Next' i]",
+                "button[aria-label*='next' i]",
+                "button[aria-label='Next video']",
+                "button[aria-label='Next']",
+                "#navigation-button-down",
+            ]
+            for sel in nav_selectors:
+                try:
+                    nav_btns = self.driver.find_elements(By.CSS_SELECTOR, sel)
+                    for nb in nav_btns:
+                        if nb.is_displayed():
+                            ActionChains(self.driver).move_to_element(nb).pause(0.05).click().perform()
+                            clicked = True
+                            break
+                    if clicked:
                         break
+                except Exception:
+                    pass
+
+        try:
+            active_el = self.driver.switch_to.active_element
+            if active_el:
+                active_el.send_keys(Keys.ARROW_DOWN)
+        except Exception:
+            pass
+
+        try:
+            ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
+        except Exception:
+            try:
+                ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
             except Exception:
                 pass
 
-        if not clicked:
-            try:
-                active_el = self.driver.switch_to.active_element
-                if active_el:
-                    active_el.send_keys(Keys.PAGE_DOWN)
-            except Exception:
-                try:
-                    ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
-                except Exception:
-                    try:
-                        self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.PAGE_DOWN)
-                    except Exception:
-                        pass
-
         scrolled = False
-        for attempt in range(12):
+        for attempt in range(15):
             time.sleep(0.2)
             curr = getattr(self.driver, "current_url", "")
             curr_vid = extract_video_id(curr) if curr else ""
@@ -3504,17 +3544,32 @@ class WatchingWorker:
                 scrolled = True
                 break
 
-            if attempt == 4:
+            if attempt in (3, 7):
+                try:
+                    ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
+                except Exception:
+                    pass
                 try:
                     ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
                 except Exception:
-                    try:
-                        self.driver.execute_script("var c = document.querySelector('#shorts-container') || document.querySelector('ytd-shorts'); if (c) c.scrollTop += 800;")
-                    except Exception:
-                        pass
-            elif attempt == 8:
+                    pass
+            elif attempt in (5, 9):
                 try:
-                    ActionChains(self.driver).send_keys("j").perform()
+                    self.driver.execute_script(r"""
+                        var btn = document.querySelector('#navigation-button-down button, ytd-shorts #navigation-button-down button, button[aria-label*="Next" i], [id="navigation-button-down"] button');
+                        if (btn) { btn.click(); }
+                    """)
+                except Exception:
+                    pass
+            elif attempt == 11:
+                try:
+                    self.driver.execute_script(r"""
+                        var nextRenderer = document.querySelector('ytd-reel-video-renderer[is-active] + ytd-reel-video-renderer');
+                        if (nextRenderer) {
+                            var link = nextRenderer.querySelector('a[href*="/shorts/"]');
+                            if (link) { link.click(); }
+                        }
+                    """)
                 except Exception:
                     pass
 
@@ -3906,13 +3961,25 @@ class WatchingWorker:
             # Prevent double-counting or re-dwelling if the reel has not advanced yet
             if current_video_key and current_video_key == last_seen_video_key:
                 consecutive_same_video_count += 1
-                if consecutive_same_video_count <= 3:
+                if consecutive_same_video_count <= 4:
                     emit(
                         self.log_queue,
                         f"Still on same Short '{title}' ({current_video_key}) from '{ch_name or 'Unknown'}'. Advancing immediately to next Short (attempt {consecutive_same_video_count})...",
                         logging.INFO,
                     )
                     self.scroll_to_next_short(prev_url=full_url or getattr(self.driver, "current_url", ""))
+                    if consecutive_same_video_count >= 3:
+                        try:
+                            self.driver.execute_script(r"""
+                                var nextRenderer = document.querySelector('ytd-reel-video-renderer[is-active] + ytd-reel-video-renderer') ||
+                                                   document.querySelector('ytd-reel-video-renderer[is-active] ~ ytd-reel-video-renderer');
+                                if (nextRenderer) {
+                                    var link = nextRenderer.querySelector('a[href*="/shorts/"]');
+                                    if (link) { link.click(); }
+                                }
+                            """)
+                        except Exception:
+                            pass
                     human_like_delay(0.5, 1.0)
                     continue
                 else:
@@ -5386,23 +5453,24 @@ class WatchingWorker:
 
     def _check_account_login_before_play(self, content_type: str = "video", content_title: str = "") -> bool:
         """Verify account login status before playing every video or short."""
-        if not self.account or not getattr(self.account, "email", None):
+        account = getattr(self, "account", None)
+        if not account or not getattr(account, "email", None):
             return True
         if self.stop_event.is_set():
             return False
-        emit(self.log_queue, f"[Account Check] Verifying login state for {self.account.email} before playing {content_type}...", logging.DEBUG)
+        emit(self.log_queue, f"[Account Check] Verifying login state for {account.email} before playing {content_type}...", logging.DEBUG)
         ok = check_account_logged_in(
             driver=self.driver,
-            account=self.account,
-            config_mgr=self.config_mgr,
+            account=account,
+            config_mgr=getattr(self, "config_mgr", None),
             log_queue=self.log_queue,
             stop_event=self.stop_event,
-            alert_callback=self._send_critical_alert,
+            alert_callback=getattr(self, "_send_critical_alert", None),
             content_type=content_type,
             content_title=content_title,
         )
         if not ok and not self.stop_event.is_set():
-            self._report_status(f"Manual action needed on this PC for {self.account.email}.", "error")
+            self._report_status(f"Manual action needed on this PC for {account.email}.", "error")
         return ok
 
     def _send_critical_alert(self, alert_type: str, details: str) -> None:
