@@ -239,17 +239,73 @@ def _get_cfg_float(mgr: Any, key: str, default: float) -> float:
         return default
 
 
-def compute_task_search_rank(task: VideoTask, query: str) -> Optional[int]:
+def get_task_status_badges(task: VideoTask, channel_enabled: bool = True) -> str:
+    """Return status badge strings (e.g. '[DISABLED]', '[MAX VIEWS REACHED]') for a task."""
+    badges: List[str] = []
+    if not channel_enabled and not getattr(task, "enabled", True):
+        badges.extend(["[CHANNEL & VIDEO DISABLED]", "[CHANNEL DISABLED]", "[DISABLED]"])
+    elif not channel_enabled:
+        badges.extend(["[CHANNEL DISABLED]", "[DISABLED]"])
+    elif not getattr(task, "enabled", True):
+        badges.append("[DISABLED]")
+
+    try:
+        dur = getattr(task, "duration_seconds", 0.0) or 0.0
+        rec_dur = getattr(task, "recognized_duration_sec", 0.0) or 0.0
+        eff_dur = float(rec_dur if rec_dur > 0 else dur)
+        current_runs = getattr(task, "total_runs", 0) or 0
+        watch_sec = getattr(task, "total_watch_seconds", 0.0) or 0.0
+
+        is_limit = False
+        if hasattr(task, "is_target_reached"):
+            is_limit = task.is_target_reached(
+                current_runs=current_runs,
+                watch_seconds=watch_sec,
+                video_duration=eff_dur,
+            )
+        if is_limit:
+            badges.append("[LIMIT REACHED]")
+            if getattr(task, "is_short", False):
+                badges.append("[MAX VIEWS REACHED]")
+            else:
+                mult = getattr(task, "target_multiplier", 0.0) or 0.0
+                target_hit = mult > 0 and eff_dur > 0 and (watch_sec / eff_dur) >= mult
+                max_runs = getattr(task, "max_runs", 0) or 0
+                views_hit = max_runs > 0 and current_runs >= max_runs
+                if target_hit and views_hit:
+                    badges.extend(["[TARGET & MAX VIEWS REACHED]", "[TARGET MULTIPLIER REACHED]", "[MAX VIEWS REACHED]"])
+                elif target_hit:
+                    badges.append("[TARGET MULTIPLIER REACHED]")
+                elif views_hit:
+                    badges.append("[MAX VIEWS REACHED]")
+                else:
+                    badges.append("[MAX VIEWS REACHED]")
+    except Exception:
+        pass
+
+    return " ".join(badges)
+
+
+def _normalize_brackets(text: str) -> str:
+    """Replace brackets, braces, and parentheses with spaces and normalize whitespace."""
+    if not text:
+        return ""
+    t = text.replace("[", " ").replace("]", " ").replace("(", " ").replace(")", " ").replace("{", " ").replace("}", " ")
+    return " ".join(t.split())
+
+
+def compute_task_search_rank(task: VideoTask, query: str, channel_enabled: bool = True) -> Optional[int]:
     """Calculate search match rank for a video task against a search query.
 
     Matches against titles (title, title_2, title_3), keywords (keywords, keywords_2, keywords_3),
-    channel name, and URL.
+    channel name, URL, and status badges (e.g. [DISABLED], [MAX VIEWS REACHED]).
+    Supports finding words inside square brackets `[]` whether queried with or without brackets.
 
     Ranking:
-        0: Exact substring match in title/keywords (highest priority)
+        0: Exact substring match in title, keywords, or status badges (highest priority)
         1: Exact substring match in channel name or URL
-        2: Word match in title/keywords (all query words present in any order)
-        3: Word match across all fields (all query words present across title, channel, keywords, URL)
+        2: Word match in title, keywords, or status badges (all query words present in any order)
+        3: Word match across all fields (all query words present across title, channel, keywords, URL, status)
         None: No match (task filtered out)
     """
     clean_query = (query or "").strip().lower()
@@ -260,24 +316,50 @@ def compute_task_search_rank(task: VideoTask, query: str) -> Optional[int]:
     keywords_text = f"{task.keywords or ''} {task.keywords_2 or ''} {task.keywords_3 or ''}".lower()
     channel_text = (task.channel or "").lower()
     url_text = (task.url or "").lower()
-    title_and_kw = f"{title_text} {keywords_text}".strip()
+    status_text = get_task_status_badges(task, channel_enabled=channel_enabled).lower()
+
+    title_and_kw = f"{title_text} {keywords_text} {status_text}".strip()
     full_text = f"{title_and_kw} {channel_text} {url_text}".strip()
 
+    title_unbracketed = _normalize_brackets(f"{title_text} {keywords_text} {status_text}")
+    full_unbracketed = _normalize_brackets(full_text)
+    channel_unbracketed = _normalize_brackets(channel_text)
+    url_unbracketed = _normalize_brackets(url_text)
+
+    q_unbracketed = _normalize_brackets(clean_query)
+    q_stripped = clean_query.strip("[](){}")
+
     # Tier 1: Exact Substring Matches (First priority)
-    if clean_query in title_and_kw:
+    if (
+        clean_query in title_and_kw
+        or (q_unbracketed and q_unbracketed in title_unbracketed)
+        or (q_stripped and (q_stripped in title_and_kw or q_stripped in title_unbracketed))
+    ):
         return 0
-    if clean_query in channel_text or clean_query in url_text:
+
+    if (
+        clean_query in channel_text
+        or clean_query in url_text
+        or (q_unbracketed and (q_unbracketed in channel_unbracketed or q_unbracketed in url_unbracketed))
+        or (q_stripped and (q_stripped in channel_text or q_stripped in url_text))
+    ):
         return 1
 
     # Tier 2: Word Matching (all query words present in any order)
-    words = clean_query.split()
-    if len(words) > 1:
-        if all(w in title_and_kw for w in words):
+    query_words = [w.strip("[](){},.") for w in q_unbracketed.split() if w.strip("[](){},.")]
+    if not query_words:
+        query_words = clean_query.split()
+
+    if len(query_words) > 1:
+        if all(w in title_and_kw or w in title_unbracketed for w in query_words):
             return 2
-        if all(w in full_text for w in words):
+        if all(w in full_text or w in full_unbracketed for w in query_words):
             return 3
-    elif len(words) == 1:
-        if words[0] in full_text:
+    elif len(query_words) == 1:
+        w = query_words[0]
+        if w in title_and_kw or w in title_unbracketed:
+            return 0
+        if w in full_text or w in full_unbracketed:
             return 1
 
     return None
@@ -433,6 +515,10 @@ class QueueView(Frame):
         self.search_entry.bind("<KeyRelease>", self._on_search_key_release)
         self.search_entry.bind("<Return>", lambda e: self._apply_search_filter())
         self.search_entry.bind("<Escape>", lambda e: self.clear_search())
+        for key in ("<Control-BackSpace>", "<Control-Key-BackSpace>", "<Control-w>", "<Control-Key-w>"):
+            self.search_entry.bind(key, self._on_search_ctrl_backspace)
+            if hasattr(self.search_entry, "_entry") and self.search_entry._entry:
+                self.search_entry._entry.bind(key, self._on_search_ctrl_backspace)
 
         reset_btn = ctk.CTkButton(
             btn_frame,
@@ -539,10 +625,11 @@ class QueueView(Frame):
             channel_counts = []
             uncat_count = 0
             for group in groups:
+                ch_enabled = group.channel.enabled if not group.is_uncategorized else True
                 ch_matching = [
                     t for _, t in group.videos
                     if (t.is_short if is_shorts else not t.is_short) and (
-                        not query or compute_task_search_rank(t, query) is not None
+                        not query or compute_task_search_rank(t, query, channel_enabled=ch_enabled) is not None
                     )
                 ]
                 count = len(ch_matching)
@@ -622,6 +709,56 @@ class QueueView(Frame):
             val = self.search_entry.get()
             return val.strip() if val else ""
         return ""
+
+    def _on_search_ctrl_backspace(self, event=None):
+        """Delete preceding word/bracket token on Ctrl+Backspace and trigger real-time search."""
+        entry_widget = getattr(self.search_entry, "_entry", self.search_entry)
+        try:
+            # If text is selected, delete selection
+            if hasattr(entry_widget, "select_present") and entry_widget.select_present():
+                entry_widget.delete("sel.first", "sel.last")
+                self._schedule_search_filter()
+                return "break"
+
+            cursor = entry_widget.index("insert")
+            if cursor == 0:
+                return "break"
+
+            text = entry_widget.get()
+            if not text:
+                return "break"
+
+            idx = cursor
+            # 1. Skip trailing spaces
+            while idx > 0 and text[idx - 1].isspace():
+                idx -= 1
+            if idx > 0:
+                char = text[idx - 1]
+                if char in "])}":
+                    matching = {"]": "[", ")": "(", "}": "{"}[char]
+                    open_pos = text.rfind(matching, 0, idx)
+                    if open_pos != -1 and " " not in text[open_pos:idx]:
+                        idx = open_pos
+                    else:
+                        idx -= 1
+                        while idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] in "_-"):
+                            idx -= 1
+                        if idx > 0 and text[idx - 1] in "([{\"'":
+                            idx -= 1
+                elif char.isalnum() or char in "_-":
+                    while idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] in "_-"):
+                        idx -= 1
+                    if idx > 0 and text[idx - 1] in "([{\"'":
+                        idx -= 1
+                else:
+                    while idx > 0 and not (text[idx - 1].isalnum() or text[idx - 1] in "_-") and not text[idx - 1].isspace():
+                        idx -= 1
+
+            entry_widget.delete(idx, cursor)
+            self._schedule_search_filter()
+            return "break"
+        except Exception:
+            return "break"
 
     def _on_search_key_release(self, event=None):
         """Handle key release in search entry with real-time debouncing."""
@@ -1601,9 +1738,10 @@ class QueueView(Frame):
 
             if query:
                 # Score each task: 0 = exact title/kw match, 1 = exact ch/url match, 2 = word title match, 3 = word full match
+                channel_enabled = group.channel.enabled if not group.is_uncategorized else True
                 ranked_videos = []
                 for idx, t in type_videos:
-                    rank = compute_task_search_rank(t, query)
+                    rank = compute_task_search_rank(t, query, channel_enabled=channel_enabled)
                     if rank is not None:
                         ranked_videos.append((rank, idx, t))
 

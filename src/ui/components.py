@@ -288,6 +288,9 @@ class Entry(ttk.Entry):
             self.bind("<FocusIn>", self._clear_placeholder, add="+")
             self.bind("<FocusOut>", self._restore_placeholder, add="+")
 
+        for key in ("<Control-BackSpace>", "<Control-Key-BackSpace>", "<Control-w>", "<Control-Key-w>"):
+            self.bind(key, self._on_ctrl_backspace)
+
     def configure(self, **kwargs):
         for k in ("corner_radius", "border_width", "border_color", "fg_color", "text_color", "height", "bg_color"):
             kwargs.pop(k, None)
@@ -337,6 +340,48 @@ class Entry(ttk.Entry):
     def delete(self, first, last=None):
         self._has_placeholder = False
         super().delete(first, last)
+
+    def _on_ctrl_backspace(self, event=None):
+        try:
+            if self._has_placeholder:
+                return "break"
+            if self.select_present():
+                self.delete("sel.first", "sel.last")
+                return "break"
+            cursor = self.index("insert")
+            if cursor == 0:
+                return "break"
+            text = self.get()
+            if not text:
+                return "break"
+            idx = cursor
+            while idx > 0 and text[idx - 1].isspace():
+                idx -= 1
+            if idx > 0:
+                char = text[idx - 1]
+                if char in "])}":
+                    matching = {"]": "[", ")": "(", "}": "{"}[char]
+                    open_pos = text.rfind(matching, 0, idx)
+                    if open_pos != -1 and " " not in text[open_pos:idx]:
+                        idx = open_pos
+                    else:
+                        idx -= 1
+                        while idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] in "_-"):
+                            idx -= 1
+                        if idx > 0 and text[idx - 1] in "([{\"'":
+                            idx -= 1
+                elif char.isalnum() or char in "_-":
+                    while idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] in "_-"):
+                        idx -= 1
+                    if idx > 0 and text[idx - 1] in "([{\"'":
+                        idx -= 1
+                else:
+                    while idx > 0 and not (text[idx - 1].isalnum() or text[idx - 1] in "_-") and not text[idx - 1].isspace():
+                        idx -= 1
+            self.delete(idx, cursor)
+            return "break"
+        except Exception:
+            return "break"
 
 
 _ALL_SWITCHES: weakref.WeakSet[AppleToggleSwitch] = weakref.WeakSet()

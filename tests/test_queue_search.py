@@ -283,3 +283,189 @@ def test_empty_search_results_message(ctk_app):
     assert "Matching: 0 of 1" in view.get_queue_stats_summary()
 
     view.destroy()
+
+
+# ---------------------------------------------------------------------------
+# 4. Words Inside Square Brackets [] Matching Tests
+# ---------------------------------------------------------------------------
+
+def test_compute_task_search_rank_words_inside_brackets():
+    """Verify words inside brackets [] in title match whether query has brackets or not."""
+    task = VideoTask(
+        title="Rick Astley - Never Gonna Give You Up [Official Music Video] [4K]",
+        keywords="pop music [remastered]",
+        channel="RickAstleyVEVO",
+    )
+    # Search word inside brackets without brackets
+    assert compute_task_search_rank(task, "official") == 0
+    assert compute_task_search_rank(task, "music") == 0
+    assert compute_task_search_rank(task, "video") == 0
+    assert compute_task_search_rank(task, "4k") == 0
+    assert compute_task_search_rank(task, "remastered") == 0
+
+    # Search word inside brackets with brackets
+    assert compute_task_search_rank(task, "[official]") == 0
+    assert compute_task_search_rank(task, "[music]") == 0
+    assert compute_task_search_rank(task, "[video]") == 0
+    assert compute_task_search_rank(task, "[4k]") == 0
+    assert compute_task_search_rank(task, "[remastered]") == 0
+
+    # Search multi-word bracket phrase
+    assert compute_task_search_rank(task, "[official music video]") == 0
+    assert compute_task_search_rank(task, "official music video") == 0
+
+    # Words in any order across bracket boundaries
+    assert compute_task_search_rank(task, "[4k] astley") == 2
+    assert compute_task_search_rank(task, "astley [4k]") == 2
+    assert compute_task_search_rank(task, "[official] rick") == 2
+
+
+def test_compute_task_search_rank_status_badges_in_brackets():
+    """Verify status badges inside brackets [DISABLED], [MAX VIEWS REACHED] match queries."""
+    disabled_task = VideoTask(
+        title="Regular Video Title",
+        channel="MyChannel",
+        enabled=False,
+    )
+    assert compute_task_search_rank(disabled_task, "[disabled]") == 0
+    assert compute_task_search_rank(disabled_task, "disabled") == 0
+
+    channel_disabled_task = VideoTask(
+        title="Another Video",
+        channel="DisabledChannel",
+        enabled=True,
+    )
+    assert compute_task_search_rank(channel_disabled_task, "[channel disabled]", channel_enabled=False) == 0
+    assert compute_task_search_rank(channel_disabled_task, "channel disabled", channel_enabled=False) == 0
+
+    # Max views reached task
+    limit_task = VideoTask(
+        title="Short Task",
+        channel="ShortsCh",
+        is_short_override=True,
+        max_runs=5,
+    )
+    limit_task.total_runs = 10
+    assert compute_task_search_rank(limit_task, "[max views reached]") == 0
+    assert compute_task_search_rank(limit_task, "max views") == 0
+    assert compute_task_search_rank(limit_task, "[max views]") == 0
+
+
+def test_queue_filters_bracketed_words_in_real_time(ctk_app):
+    """QueueView displays matching tasks when searching words inside brackets."""
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_setting.return_value = "Full Video"
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.on_queue_changed = MagicMock()
+    app.stats_store = None
+    app.queued_video_tasks = []
+
+    view = QueueView(app, app, shorts_only=False)
+    t1 = VideoTask(title="Avengers Endgame Trailer [Official 4K]", channel="Marvel")
+    t2 = VideoTask(title="Avengers Assemble Clip [1080p]", channel="Marvel")
+    t3 = VideoTask(title="Batman Behind The Scenes", channel="DC")
+    view.video_tasks = [t1, t2, t3]
+
+    # Search for "[4K]"
+    view.search_entry.delete(0, "end")
+    view.search_entry.insert(0, "[4k]")
+    view.refresh_list()
+    assert len(view.displayed_tasks) == 1
+    assert view.displayed_tasks[0].title == "Avengers Endgame Trailer [Official 4K]"
+
+    # Search for "official" (without brackets)
+    view.search_entry.delete(0, "end")
+    view.search_entry.insert(0, "official")
+    view.refresh_list()
+    assert len(view.displayed_tasks) == 1
+    assert view.displayed_tasks[0].title == "Avengers Endgame Trailer [Official 4K]"
+
+    # Search for "[1080p]"
+    view.search_entry.delete(0, "end")
+    view.search_entry.insert(0, "[1080p]")
+    view.refresh_list()
+    assert len(view.displayed_tasks) == 1
+    assert view.displayed_tasks[0].title == "Avengers Assemble Clip [1080p]"
+
+    view.destroy()
+
+
+# ---------------------------------------------------------------------------
+# 5. Control + Backspace Whole Word Deletion Tests
+# ---------------------------------------------------------------------------
+
+def test_ctrl_backspace_deletes_whole_word_in_search_entry(ctk_app):
+    """Ctrl+Backspace deletes entire preceding words, trailing spaces, and bracket tokens."""
+    app = ctk_app
+    app.config_mgr = MagicMock()
+    app.config_mgr.get_setting.return_value = "Full Video"
+    app.config_mgr.get_channels.return_value = []
+    app.config_mgr.get_video_queue.return_value = []
+    app.on_queue_changed = MagicMock()
+    app.stats_store = None
+    app.queued_video_tasks = []
+
+    view = QueueView(app, app, shorts_only=False)
+    inner = getattr(view.search_entry, "_entry", view.search_entry)
+
+    # 1. Plain words
+    inner.delete(0, "end")
+    inner.insert(0, "one two three")
+    inner.icursor("end")
+
+    res = view._on_search_ctrl_backspace(None)
+    assert res == "break"
+    assert inner.get() == "one two "
+
+    view._on_search_ctrl_backspace(None)
+    assert inner.get() == "one "
+
+    view._on_search_ctrl_backspace(None)
+    assert inner.get() == ""
+
+    # 2. Trailing spaces
+    inner.insert(0, "word   ")
+    inner.icursor("end")
+    view._on_search_ctrl_backspace(None)
+    assert inner.get() == ""
+
+    # 3. Bracketed word token
+    inner.insert(0, "trailer [4K]")
+    inner.icursor("end")
+    view._on_search_ctrl_backspace(None)
+    assert inner.get() == "trailer "
+
+    # 4. Multi-word bracketed token
+    inner.insert("end", "[official video]")
+    inner.icursor("end")
+    view._on_search_ctrl_backspace(None)
+    assert inner.get() == "trailer [official "
+    view._on_search_ctrl_backspace(None)
+    assert inner.get() == "trailer "
+
+    # 5. Selection deletion on Ctrl+Backspace
+    inner.delete(0, "end")
+    inner.insert(0, "selected text here")
+    inner.selection_range(0, 8)
+    view._on_search_ctrl_backspace(None)
+    assert inner.get() == " text here"
+
+    view.destroy()
+
+
+def test_components_entry_ctrl_backspace(ctk_app):
+    """components.Entry also handles Ctrl+Backspace correctly."""
+    from src.ui.components import Entry
+
+    entry = Entry(ctk_app, placeholder_text="Enter text...")
+    entry.delete(0, "end")
+    entry.insert(0, "hello world")
+    entry.icursor("end")
+
+    res = entry._on_ctrl_backspace(None)
+    assert res == "break"
+    assert entry.get() == "hello "
+
+    entry.destroy()
