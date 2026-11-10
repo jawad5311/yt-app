@@ -800,10 +800,96 @@ class SettingsView(Frame):
             self.save_btn,
             "Save and apply all configuration settings.",
         )
+        self._install_change_listeners()
+        self._take_saved_snapshot()
 
     def _on_appearance_change(self, mode: str) -> None:
         if hasattr(self.app_controller, 'apply_appearance_mode'):
             self.app_controller.apply_appearance_mode(mode, persist=False)
+        self._check_form_dirty()
+
+    def _get_form_snapshot(self) -> Dict[str, Any]:
+        """Collect current values from all settings widgets."""
+        snapshot: Dict[str, Any] = {}
+        for attr, widget in list(self.__dict__.items()):
+            if attr.startswith("_") or attr in ("save_btn", "btn_test_api", "test_email_btn", "tabview", "action_bar"):
+                continue
+            if hasattr(widget, "get") and callable(widget.get):
+                try:
+                    val = widget.get()
+                    if isinstance(val, str):
+                        snapshot[attr] = val.strip()
+                    elif isinstance(val, (int, bool)):
+                        snapshot[attr] = int(val)
+                    else:
+                        snapshot[attr] = val
+                except Exception:
+                    pass
+        return snapshot
+
+    def _is_form_dirty(self) -> bool:
+        """Check if any setting in the UI differs from the saved baseline."""
+        if not hasattr(self, "_saved_snapshot"):
+            return False
+        return self._get_form_snapshot() != self._saved_snapshot
+
+    def _update_save_btn_state(self, dirty: bool) -> None:
+        """Update save button clickable state based on whether settings have changed."""
+        if hasattr(self, "save_btn") and self.save_btn:
+            try:
+                self.save_btn.configure(state="normal" if dirty else "disabled")
+            except Exception:
+                pass
+
+    def _check_form_dirty(self, event=None) -> None:
+        """Evaluate form dirty state and update Save Settings button state."""
+        self._update_save_btn_state(self._is_form_dirty())
+
+    def _take_saved_snapshot(self) -> None:
+        """Capture the current state of all settings as the saved baseline."""
+        self._saved_snapshot = self._get_form_snapshot()
+        self._update_save_btn_state(dirty=False)
+
+    def _on_entry_return(self, event=None) -> str:
+        """Handle Enter key press in any setting entry: save settings immediately and notify."""
+        self.save_settings()
+        return "break"
+
+    def _install_change_listeners(self) -> None:
+        """Bind modification listeners to all entry, switch, and dropdown setting widgets."""
+        for name, widget in list(self.__dict__.items()):
+            if name.startswith("_") or name in ("save_btn", "btn_test_api", "test_email_btn", "tabview", "action_bar"):
+                continue
+            cls_name = getattr(widget, "__class__", None).__name__
+            if "Entry" in cls_name:
+                widget.bind("<KeyRelease>", self._check_form_dirty, add="+")
+                widget.bind("<Return>", self._on_entry_return)
+                widget.bind("<FocusOut>", self._check_form_dirty, add="+")
+            elif "Switch" in cls_name or "Toggle" in cls_name or "CheckBox" in cls_name:
+                var = getattr(widget, "_var", None)
+                if var is not None and hasattr(var, "trace_add"):
+                    try:
+                        var.trace_add("write", lambda *a: self._check_form_dirty())
+                    except Exception:
+                        pass
+                elif var is not None and hasattr(var, "trace"):
+                    try:
+                        var.trace("w", lambda *a: self._check_form_dirty())
+                    except Exception:
+                        pass
+            elif "OptionMenu" in cls_name or "Combobox" in cls_name:
+                widget.bind("<<ComboboxSelected>>", lambda e: self._check_form_dirty(), add="+")
+                var = getattr(widget, "_var", None)
+                if var is not None and hasattr(var, "trace_add"):
+                    try:
+                        var.trace_add("write", lambda *a: self._check_form_dirty())
+                    except Exception:
+                        pass
+                elif var is not None and hasattr(var, "trace"):
+                    try:
+                        var.trace("w", lambda *a: self._check_form_dirty())
+                    except Exception:
+                        pass
 
     def save_settings(self):
         validated: Dict[str, Any] = {}
@@ -1127,7 +1213,9 @@ class SettingsView(Frame):
         if hasattr(self.app_controller, "apply_appearance_mode"):
             self.app_controller.apply_appearance_mode(selected_appearance, persist=False)
 
+        self._take_saved_snapshot()
         self._notify_result(True)
+        return True
 
     def _notify_result(self, success: bool, reason: str = "") -> None:
         """Handle save settings notification via in-app self-dismissing bubble/balloon notification."""
