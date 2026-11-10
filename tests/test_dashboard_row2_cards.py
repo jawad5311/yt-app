@@ -45,7 +45,8 @@ def test_dashboard_row2_cards_initialization(tk_root):
 
     assert hasattr(view, "card_target_videos")
     assert view.card_target_videos.cget("text") == "0 Vids · 0 Shorts"
-    assert view.card_target_videos.card_title == "Targeted Watched"
+    assert view.card_target_videos.card_title == "Targeted Watched This Session"
+    assert "TARGETED WATCHED THIS SESSION" in view.card_target_videos.title_label.cget("text")
 
     assert hasattr(view, "card_slot4")
     assert view.card_slot4.cget("text") == "—"

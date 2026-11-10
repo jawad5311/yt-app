@@ -129,7 +129,7 @@ class DashboardView(Frame):
         self.card_slot2 = self.card_session_duration
 
         self.card_target_videos = self._create_card(
-            title="Targeted Watched",
+            title="Targeted Watched This Session",
             initial_value="0 Vids · 0 Shorts",
             row=2,
             col=2,
