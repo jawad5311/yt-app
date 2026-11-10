@@ -239,7 +239,7 @@ def _get_cfg_float(mgr: Any, key: str, default: float) -> float:
         return default
 
 
-def get_task_status_badges(task: VideoTask, channel_enabled: bool = True) -> str:
+def get_task_status_badges(task: VideoTask, channel_enabled: bool = True, stats_store: Any = None) -> str:
     """Return status badge strings (e.g. '[DISABLED]', '[MAX VIEWS REACHED]') for a task."""
     badges: List[str] = []
     if not channel_enabled and not getattr(task, "enabled", True):
@@ -250,11 +250,16 @@ def get_task_status_badges(task: VideoTask, channel_enabled: bool = True) -> str
         badges.append("[DISABLED]")
 
     try:
-        dur = getattr(task, "duration_seconds", 0.0) or 0.0
-        rec_dur = getattr(task, "recognized_duration_sec", 0.0) or 0.0
-        eff_dur = float(rec_dur if rec_dur > 0 else dur)
-        current_runs = getattr(task, "total_runs", 0) or 0
-        watch_sec = getattr(task, "total_watch_seconds", 0.0) or 0.0
+        record = stats_store.find_for_task(task) if (stats_store and hasattr(stats_store, "find_for_task")) else None
+        current_runs = getattr(record, "runs", None)
+        if current_runs is None:
+            current_runs = getattr(task, "total_runs", getattr(task, "runs", 0)) or 0
+        watch_sec = getattr(record, "watch_seconds", None)
+        if watch_sec is None:
+            watch_sec = getattr(task, "total_watch_seconds", getattr(task, "watch_seconds", 0.0)) or 0.0
+        rec_dur = getattr(record, "video_duration", 0.0) if record else 0.0
+        task_dur = getattr(task, "duration_seconds", 0.0) or 0.0
+        eff_dur = float(rec_dur if rec_dur and rec_dur > 0 else (task_dur if isinstance(task_dur, (int, float)) else 0.0))
 
         is_limit = False
         if hasattr(task, "is_target_reached"):
@@ -294,7 +299,7 @@ def _normalize_brackets(text: str) -> str:
     return " ".join(t.split())
 
 
-def compute_task_search_rank(task: VideoTask, query: str, channel_enabled: bool = True) -> Optional[int]:
+def compute_task_search_rank(task: VideoTask, query: str, channel_enabled: bool = True, stats_store: Any = None) -> Optional[int]:
     """Calculate search match rank for a video task against a search query.
 
     Matches against titles (title, title_2, title_3), keywords (keywords, keywords_2, keywords_3),
@@ -316,7 +321,7 @@ def compute_task_search_rank(task: VideoTask, query: str, channel_enabled: bool 
     keywords_text = f"{task.keywords or ''} {task.keywords_2 or ''} {task.keywords_3 or ''}".lower()
     channel_text = (task.channel or "").lower()
     url_text = (task.url or "").lower()
-    status_text = get_task_status_badges(task, channel_enabled=channel_enabled).lower()
+    status_text = get_task_status_badges(task, channel_enabled=channel_enabled, stats_store=stats_store).lower()
 
     title_and_kw = f"{title_text} {keywords_text} {status_text}".strip()
     full_text = f"{title_and_kw} {channel_text} {url_text}".strip()
@@ -607,10 +612,11 @@ class QueueView(Frame):
         total_count = len(matching_tasks)
 
         query = self.get_search_query() if hasattr(self, "get_search_query") else ""
+        stats_store = self._stats()
         if query:
             search_matched = [
                 t for t in matching_tasks
-                if compute_task_search_rank(t, query) is not None
+                if compute_task_search_rank(t, query, stats_store=stats_store) is not None
             ]
             parts = [f"Matching: {len(search_matched)} of {total_count}"]
         else:
@@ -629,7 +635,7 @@ class QueueView(Frame):
                 ch_matching = [
                     t for _, t in group.videos
                     if (t.is_short if is_shorts else not t.is_short) and (
-                        not query or compute_task_search_rank(t, query, channel_enabled=ch_enabled) is not None
+                        not query or compute_task_search_rank(t, query, channel_enabled=ch_enabled, stats_store=stats_store) is not None
                     )
                 ]
                 count = len(ch_matching)
@@ -1739,9 +1745,10 @@ class QueueView(Frame):
             if query:
                 # Score each task: 0 = exact title/kw match, 1 = exact ch/url match, 2 = word title match, 3 = word full match
                 channel_enabled = group.channel.enabled if not group.is_uncategorized else True
+                stats_store = self._stats()
                 ranked_videos = []
                 for idx, t in type_videos:
-                    rank = compute_task_search_rank(t, query, channel_enabled=channel_enabled)
+                    rank = compute_task_search_rank(t, query, channel_enabled=channel_enabled, stats_store=stats_store)
                     if rank is not None:
                         ranked_videos.append((rank, idx, t))
 
