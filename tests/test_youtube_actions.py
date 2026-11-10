@@ -72,6 +72,7 @@ def test_watch_video_cutoff_is_not_a_full_run():
         end_buffer_seconds=10.0,
         completion_ratio=0.9,
         enable_interactivity=False,
+        ensure_start_at_beginning=False,
     )
 
     assert result.completed is True
@@ -249,6 +250,7 @@ def test_watch_video_logs_the_configured_cutoff():
         log_queue=log_q,
         enable_interactivity=False,
         end_buffer_seconds=10,
+        ensure_start_at_beginning=False,
     )
 
     assert result.completed is True
@@ -286,6 +288,8 @@ def run_scripted_watch(monkeypatch, states, sleep_hook=None, wall_clock=None, **
             except StopIteration:
                 stop.set()
                 return {"found": False}
+        if script == module.ENSURE_VIDEO_AT_START_JS:
+            return {"found": True, "is_ad": False, "rewound": True, "previousTime": 0.0, "currentTime": 0.0}
         return None
 
     driver.execute_script.side_effect = execute
@@ -300,6 +304,7 @@ def run_scripted_watch(monkeypatch, states, sleep_hook=None, wall_clock=None, **
     monkeypatch.setattr(module, "time", SimpleNamespace(
         time=wall_clock or (lambda: clock[0]), monotonic=lambda: clock[0], sleep=sleep,
     ))
+    kwargs.setdefault("ensure_start_at_beginning", False)
     ticks = []
     result = module.watch_video(
         driver, stop_event=stop, enable_interactivity=False,
@@ -589,3 +594,143 @@ def test_watching_progress_stalled_triggers_skip_ad_when_ad_displaying(monkeypat
 
     # trigger_skip_ad must have been called when progress was detected as stalled during ad display
     assert "ad detected. Attempting to skip ad..." in log_text
+
+
+def test_ensure_video_at_start_rewinds_when_resumed():
+    from src.automation.youtube_actions import ensure_video_at_start
+    import queue
+    driver = MagicMock()
+    log_q = queue.Queue()
+    driver.execute_script.return_value = {
+        "found": True,
+        "is_ad": False,
+        "rewound": True,
+        "previousTime": 3863.0,
+        "currentTime": 0.0,
+    }
+    rewound = ensure_video_at_start(driver, log_queue=log_q)
+    assert rewound is True
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    assert any("Rewound to 0:00" in l for l in logs)
+
+
+def test_ensure_video_at_start_does_not_rewind_ad():
+    from src.automation.youtube_actions import ensure_video_at_start
+    driver = MagicMock()
+    driver.execute_script.return_value = {
+        "found": True,
+        "is_ad": True,
+        "rewound": False,
+        "currentTime": 15.0,
+    }
+    assert ensure_video_at_start(driver) is False
+
+
+def test_ensure_video_at_start_does_not_rewind_if_already_at_start():
+    from src.automation.youtube_actions import ensure_video_at_start
+    driver = MagicMock()
+    driver.execute_script.return_value = {
+        "found": True,
+        "is_ad": False,
+        "rewound": False,
+        "currentTime": 0.5,
+    }
+    assert ensure_video_at_start(driver) is False
+
+
+def test_watch_video_rewinds_resumed_video_at_cutoff(monkeypatch):
+    """When a video resumes at 94% without being watched, watch_video rewinds to 0:00 instead of completing."""
+    import queue
+    from src.automation import youtube_actions as module
+
+    log_q = queue.Queue()
+    states = [
+        playback_state(3863.0, duration=4100.0),  # Resumed at 94%
+        playback_state(0.0, duration=4100.0),     # Rewound to start
+        playback_state(3.0, duration=4100.0),
+        playback_state(6.0, duration=4100.0),
+        playback_state(9.0, duration=4100.0),
+    ]
+
+    result, ticks = run_scripted_watch(
+        monkeypatch,
+        states,
+        duration_seconds=9,
+        ensure_start_at_beginning=True,
+        log_queue=log_q,
+    )
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    assert "Rewinding to 0:00" in log_text
+    assert result.completed is True
+    assert result.reason == "duration_reached"
+    assert result.watched_seconds == 9.0
+
+
+def test_watch_video_rewinds_when_ended_at_start_from_history(monkeypatch):
+    """When a video is marked ended at start from previous watch history, watch_video rewinds to 0:00."""
+    import queue
+    from src.automation import youtube_actions as module
+
+    log_q = queue.Queue()
+    states = [
+        playback_state(0.0, duration=4100.0, ended=True),   # Marked ended from history
+        playback_state(0.0, duration=4100.0, ended=False),  # Rewound to start
+        playback_state(3.0, duration=4100.0),
+        playback_state(6.0, duration=4100.0),
+    ]
+
+    result, ticks = run_scripted_watch(
+        monkeypatch,
+        states,
+        duration_seconds=6,
+        ensure_start_at_beginning=True,
+        log_queue=log_q,
+    )
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    assert "Video was marked ended from previous watch history" in log_text
+    assert result.completed is True
+    assert result.watched_seconds == 6.0
+
+
+def test_watch_video_rewinds_async_history_jump_during_early_playback(monkeypatch):
+    """When YouTube asynchronously jumps to history position during early playback, watch_video rewinds."""
+    import queue
+    from src.automation import youtube_actions as module
+
+    log_q = queue.Queue()
+    states = [
+        playback_state(0.0, duration=4100.0),   # Initial 0s
+        playback_state(150.0, duration=4100.0), # Async jump to 150s before 5s watched
+        playback_state(0.0, duration=4100.0),   # Rewound to 0s
+        playback_state(3.0, duration=4100.0),
+        playback_state(6.0, duration=4100.0),
+    ]
+
+    result, ticks = run_scripted_watch(
+        monkeypatch,
+        states,
+        duration_seconds=6,
+        ensure_start_at_beginning=True,
+        log_queue=log_q,
+    )
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    assert "Video playback resumed at 02:30 from account history. Rewinding to 0:00..." in log_text
+    assert result.completed is True
+    assert result.watched_seconds == 6.0

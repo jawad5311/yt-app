@@ -56,6 +56,7 @@ from .navigation import (
 from .youtube_actions import (
     DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS,
     click_element,
+    ensure_video_at_start,
     ensure_video_playing,
     watch_short,
     watch_video,
@@ -2562,6 +2563,10 @@ class WatchingWorker:
         human_like_delay(2.0, 3.5)
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
         ensure_video_playing(self.driver, log_queue=self.log_queue)
+        try:
+            ensure_video_at_start(self.driver, log_queue=self.log_queue)
+        except Exception:
+            pass
 
         if not self._check_account_login_before_play(content_type="random video", content_title=title):
             return False
@@ -2690,17 +2695,11 @@ class WatchingWorker:
         human_like_delay(2.0, 3.5)
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
         ensure_video_playing(self.driver, log_queue=self.log_queue)
-
         try:
-            # If video opened at a resume position (> 5s) while starting fresh, seek back to beginning
-            self.driver.execute_script(r"""
-                var v = document.querySelector('video');
-                if (v && v.currentTime > 5) {
-                    try { v.currentTime = 0; } catch(e) {}
-                }
-            """)
+            ensure_video_at_start(self.driver, log_queue=self.log_queue)
         except Exception:
             pass
+
 
         try:
             init_dur = self.driver.execute_script("""

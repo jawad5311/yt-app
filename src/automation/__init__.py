@@ -27,7 +27,7 @@ from .navigation import (
 )
 from .watching_worker import WatchingWorker, match_channel
 from .worker import AutomationWorker
-from .youtube_actions import ensure_video_playing, watch_short, watch_video
+from .youtube_actions import ensure_video_at_start, ensure_video_playing, watch_short, watch_video
 
 __all__ = [
     "setup_driver",
@@ -45,6 +45,7 @@ __all__ = [
     "like_active_short",
     "is_short_liked",
     "ensure_video_playing",
+    "ensure_video_at_start",
     "AutomationWorker",
     "BrowsingWorker",
     "WatchingWorker",
