@@ -8,35 +8,55 @@ from typing import Any, Callable, Optional
 
 from ..automation.warmup_manager import (
     WarmupAccountConfig,
+    WarmupChannelConfig,
     WarmupManager,
     format_hours,
     format_number,
     get_warmup_gradient_color,
 )
 from ..models.account import Account
+from ..models.channel import Channel
 from .components import Button, CheckBox, Entry, Font, Frame, Label
 from .theme import get_font, get_theme_colors
 from .tooltip import add_tooltip
 
 
 class WarmupDialog(tk.Toplevel):
-    """Themed pop-up window for editing account warm-up settings and manual overrides."""
+    """Themed pop-up window for editing account or channel warm-up settings and manual overrides."""
 
     def __init__(
         self,
         parent: tk.Misc,
-        account: Account,
-        config_mgr: Any,
+        account: Optional[Account] = None,
+        channel: Optional[Any] = None,
+        config_mgr: Any = None,
         on_save_callback: Optional[Callable[[], None]] = None,
         mode: Optional[str] = None,
     ):
         super().__init__(parent)
         self.parent = parent
         self.account = account
+        self.channel = channel
+        self.is_channel = channel is not None
         self.config_mgr = config_mgr
         self.on_save_callback = on_save_callback
         self.warmup_mgr = WarmupManager(config_mgr)
-        self.cfg: WarmupAccountConfig = self.warmup_mgr.get_account_config(account.email)
+
+        if self.is_channel:
+            cname = getattr(channel, "name", "") or str(channel)
+            curl = getattr(channel, "url", "") or ""
+            self.cfg = self.warmup_mgr.get_channel_config(cname, curl)
+            entity_title = f"Channel: {cname}"
+            dialog_title = f"Warm Up Settings - {cname}"
+            header_title = "Channel Warm-Up Progression"
+            cb_label = "Enable Warm-Up for this channel"
+        else:
+            email = account.email if account else "Default"
+            self.cfg = self.warmup_mgr.get_account_config(email)
+            entity_title = f"Profile: {email}"
+            dialog_title = f"Warm Up Settings - {email}"
+            header_title = "Account Warm-Up Progression"
+            cb_label = "Enable Warm-Up for this account"
 
         self._mode = mode or "Dark"
         colors = get_theme_colors(self._mode)
@@ -46,7 +66,7 @@ class WarmupDialog(tk.Toplevel):
         fg = colors.get("fg", "#ffffff")
         fg_dim = colors.get("fg_dim", "#d4d4d8")
 
-        self.title(f"Warm Up Settings - {account.email}")
+        self.title(dialog_title)
         self.configure(bg=bg)
         self.resizable(False, False)
 
@@ -84,7 +104,7 @@ class WarmupDialog(tk.Toplevel):
 
         tk.Label(
             title_box,
-            text="Account Warm-Up Progression",
+            text=header_title,
             font=get_font(size=14, weight="bold"),
             bg=card_bg,
             fg=fg,
@@ -92,7 +112,7 @@ class WarmupDialog(tk.Toplevel):
 
         tk.Label(
             title_box,
-            text=f"Profile: {account.email}",
+            text=entity_title,
             font=get_font(size=9),
             bg=card_bg,
             fg=fg_dim,
@@ -129,7 +149,7 @@ class WarmupDialog(tk.Toplevel):
         self.enabled_var = tk.BooleanVar(value=self.cfg.enabled)
         enabled_cb = tk.Checkbutton(
             form,
-            text="Enable Warm-Up for this account",
+            text=cb_label,
             variable=self.enabled_var,
             bg=card_bg,
             fg=fg,
@@ -320,7 +340,10 @@ class WarmupDialog(tk.Toplevel):
         self.cfg.daily_increment_hours = int(inc) if inc.is_integer() else inc
         self.cfg.enabled = self.enabled_var.get()
 
-        self.warmup_mgr.save_account_config(self.cfg)
+        if self.is_channel:
+            self.warmup_mgr.save_channel_config(self.cfg)
+        else:
+            self.warmup_mgr.save_account_config(self.cfg)
 
         if self.on_save_callback:
             try:

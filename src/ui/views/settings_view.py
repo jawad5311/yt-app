@@ -824,6 +824,9 @@ class SettingsView(Frame):
         scroll_warmup = SmoothScrollableFrame(tab_warmup)
         scroll_warmup.pack(fill="both", expand=True, padx=5, pady=5)
 
+        Label(scroll_warmup, text="Accounts Warm-Up Settings:", font=Font(size=14, weight="bold")).pack(
+            anchor="w", padx=15, pady=(10, 4)
+        )
         self.warmup_auto_enable_switch = Switch(
             scroll_warmup,
             text="Automatically enable Warm-Up for newly added accounts",
@@ -833,7 +836,7 @@ class SettingsView(Frame):
             self.warmup_auto_enable_switch.select()
         else:
             self.warmup_auto_enable_switch.deselect()
-        self.warmup_auto_enable_switch.pack(anchor="w", padx=15, pady=(10, 2))
+        self.warmup_auto_enable_switch.pack(anchor="w", padx=15, pady=(4, 2))
         Label(
             scroll_warmup,
             text="When enabled, any new Google account added will automatically be enrolled in progressive warm-up.",
@@ -868,6 +871,55 @@ class SettingsView(Frame):
         def_inc = self.config_mgr.get_setting("WarmupDefaultDailyIncrementHours", 1) if self.config_mgr else 1
         self.warmup_default_inc_entry.insert(0, format_number(def_inc))
         self.warmup_default_inc_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        # Channels warm-up section
+        Label(scroll_warmup, text="Channels Warm-Up Settings:", font=Font(size=14, weight="bold")).pack(
+            anchor="w", padx=15, pady=(15, 4)
+        )
+        self.warmup_channel_auto_enable_switch = Switch(
+            scroll_warmup,
+            text="Automatically enable Warm-Up for newly added channels",
+        )
+        ch_auto = self.config_mgr.get_bool("WarmupAutoEnableNewChannels", True) if self.config_mgr else True
+        if ch_auto:
+            self.warmup_channel_auto_enable_switch.select()
+        else:
+            self.warmup_channel_auto_enable_switch.deselect()
+        self.warmup_channel_auto_enable_switch.pack(anchor="w", padx=15, pady=(4, 2))
+        Label(
+            scroll_warmup,
+            text="When enabled, any new channel added will automatically be enrolled in progressive warm-up.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_warmup, text="Default Channel Total Warm-Up Target Limit (Hours):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_warmup,
+            text="Daily watch time capacity target where a channel is considered fully mature.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.warmup_channel_default_target_entry = Entry(scroll_warmup, width=150)
+        def_ch_target = self.config_mgr.get_setting("WarmupChannelDefaultTargetHours", 15) if self.config_mgr else 15
+        self.warmup_channel_default_target_entry.insert(0, format_number(def_ch_target))
+        self.warmup_channel_default_target_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_warmup, text="Default Channel Per-Day Increment (Hours):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_warmup,
+            text="Hours added to the channel's daily allowed watch time each calendar day.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.warmup_channel_default_inc_entry = Entry(scroll_warmup, width=150)
+        def_ch_inc = self.config_mgr.get_setting("WarmupChannelDefaultDailyIncrementHours", 1) if self.config_mgr else 1
+        self.warmup_channel_default_inc_entry.insert(0, format_number(def_ch_inc))
+        self.warmup_channel_default_inc_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         Label(
             scroll_warmup,
@@ -1322,6 +1374,32 @@ class SettingsView(Frame):
                 validated["WarmupDefaultDailyIncrementHours"] = int(inc_val) if inc_val.is_integer() else inc_val
             except (ValueError, TypeError):
                 self._notify_result(False, "Default Per-Day Increment must be a valid number greater than 0.")
+                return
+
+        # 14b. Channels Warm-Up global default settings
+        if hasattr(self, "warmup_channel_auto_enable_switch"):
+            validated["WarmupAutoEnableNewChannels"] = bool(self.warmup_channel_auto_enable_switch.get())
+
+        if hasattr(self, "warmup_channel_default_target_entry"):
+            raw_ch_target = self.warmup_channel_default_target_entry.get().strip()
+            try:
+                ch_target_val = float(raw_ch_target)
+                if ch_target_val <= 0 or not math.isfinite(ch_target_val):
+                    raise ValueError
+                validated["WarmupChannelDefaultTargetHours"] = int(ch_target_val) if ch_target_val.is_integer() else ch_target_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Channel Total Warm-Up Limit must be a valid number greater than 0.")
+                return
+
+        if hasattr(self, "warmup_channel_default_inc_entry"):
+            raw_ch_inc = self.warmup_channel_default_inc_entry.get().strip()
+            try:
+                ch_inc_val = float(raw_ch_inc)
+                if ch_inc_val <= 0 or not math.isfinite(ch_inc_val):
+                    raise ValueError
+                validated["WarmupChannelDefaultDailyIncrementHours"] = int(ch_inc_val) if ch_inc_val.is_integer() else ch_inc_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Channel Per-Day Increment must be a valid number greater than 0.")
                 return
 
         # 15. Appearance mode

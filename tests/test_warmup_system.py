@@ -13,6 +13,7 @@ import pytest
 
 from src.automation.warmup_manager import (
     WarmupAccountConfig,
+    WarmupChannelConfig,
     WarmupManager,
     calculate_seconds_until_midnight,
     format_hours,
@@ -21,6 +22,7 @@ from src.automation.warmup_manager import (
 )
 from src.config.manager import ConfigManager
 from src.models.account import Account
+from src.models.channel import Channel
 from src.ui.views.settings_view import SettingsView
 from src.ui.warmup_dialog import WarmupDialog
 
@@ -272,3 +274,134 @@ def test_calculate_seconds_until_midnight():
     sec = calculate_seconds_until_midnight()
     assert sec >= 60.0
     assert sec <= 86400.0 + 120.0
+
+
+def test_channel_warmup_ladder_and_rollover():
+    """Verify WarmupChannelConfig ladder quota enforcement, rollover, and overrides."""
+    cfg = WarmupChannelConfig(
+        channel_name="TechLead",
+        channel_url="https://www.youtube.com/@techlead",
+        target_hours=10,
+        daily_increment_hours=2,
+        current_day=1,
+        last_active_date="2026-11-10",
+    )
+    assert cfg.total_steps == 5  # ceil(10 / 2)
+    assert cfg.get_daily_allowed_seconds() == 7200.0  # Day 1: 2 hours
+
+    # Watch 3600s -> not yet reached
+    cfg.record_watch_seconds(3600.0, today_str="2026-11-10")
+    assert not cfg.is_daily_quota_reached()
+
+    # Watch another 3600s -> 7200s -> reached!
+    cfg.record_watch_seconds(3600.0, today_str="2026-11-10")
+    assert cfg.is_daily_quota_reached()
+
+    # Rollover to next day
+    assert cfg.check_and_rollover(today_str="2026-11-11") is True
+    assert cfg.current_day == 2
+    assert cfg.get_daily_allowed_seconds() == 14400.0  # Day 2: 4 hours
+    assert not cfg.is_daily_quota_reached()
+
+    # Manual override
+    cfg.mark_as_warmed_up()
+    assert cfg.is_warmed_up is True
+    assert cfg.current_day == 5
+    assert cfg.get_status_info()["color"].lower() == "#15803d"
+
+
+def test_channel_warmup_auto_enroll_and_manager(tmp_path):
+    """Verify auto-enrollment for new channels in ConfigManager and WarmupManager tracking."""
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_setting("WarmupAutoEnableNewChannels", True)
+    mgr.set_setting("WarmupChannelDefaultTargetHours", 12)
+    mgr.set_setting("WarmupChannelDefaultDailyIncrementHours", 3)
+
+    mgr.set_channels([{"name": "CodeMonkey", "url": "https://www.youtube.com/@codemonkey"}])
+
+    w_cfg = mgr.get_channel_warmup("codemonkey")
+    assert w_cfg is not None
+    assert w_cfg["enabled"] is True
+    assert w_cfg["target_hours"] == 12
+    assert w_cfg["daily_increment_hours"] == 3
+
+    # Test record watch time via WarmupManager
+    wm = WarmupManager(mgr)
+    updated = wm.record_channel_watch_time("CodeMonkey", 1800.0)
+    assert updated.watched_today_seconds == 1800.0
+
+
+def test_channel_warmup_dialog_ui_and_save(ctk_app, tmp_path):
+    """Verify WarmupDialog properly handles channel objects, UI text, and persistence."""
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    channel = Channel(name="PythonPro", url="https://youtube.com/@pythonpro")
+
+    mgr.set_channel_warmup("pythonpro", {
+        "channel_name": "PythonPro",
+        "channel_url": "https://youtube.com/@pythonpro",
+        "enabled": True,
+        "target_hours": 15,
+        "daily_increment_hours": 1,
+        "current_day": 1,
+        "is_warmed_up": False,
+        "watched_today_seconds": 0.0,
+    })
+
+    saved_calls = []
+    dialog = WarmupDialog(
+        ctk_app,
+        channel=channel,
+        config_mgr=mgr,
+        on_save_callback=lambda: saved_calls.append(True),
+    )
+
+    assert "PythonPro" in dialog.title()
+    assert dialog.is_channel is True
+    assert dialog.target_entry.get() == "15"
+    assert dialog.inc_entry.get() == "1"
+
+    # Modify with whole number and save
+    dialog.target_entry.delete(0, tk.END)
+    dialog.target_entry.insert(0, "25")
+    dialog.inc_entry.delete(0, tk.END)
+    dialog.inc_entry.insert(0, "2")
+    dialog.save()
+
+    assert len(saved_calls) == 1
+    persisted = mgr.get_channel_warmup("pythonpro")
+    assert persisted["target_hours"] == 25
+    assert persisted["daily_increment_hours"] == 2
+
+
+def test_settings_view_channel_warmup_persistence(ctk_app, tmp_path):
+    """Verify SettingsView persists channel warm-up settings."""
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_setting("SystemName", "TestPC")
+    app = ctk_app
+    app.config_mgr = mgr
+    app.appearance_mode = "Dark"
+    app.apply_appearance_mode = MagicMock()
+
+    view = SettingsView(app, app)
+
+    assert hasattr(view, "warmup_channel_auto_enable_switch")
+    assert hasattr(view, "warmup_channel_default_target_entry")
+    assert hasattr(view, "warmup_channel_default_inc_entry")
+
+    view.warmup_channel_default_target_entry.delete(0, tk.END)
+    view.warmup_channel_default_target_entry.insert(0, "18")
+
+    view.warmup_channel_default_inc_entry.delete(0, tk.END)
+    view.warmup_channel_default_inc_entry.insert(0, "1.5")
+
+    success = view.save_settings()
+    assert success is True
+
+    assert mgr.get_int("WarmupChannelDefaultTargetHours") == 18
+    assert mgr.get_float("WarmupChannelDefaultDailyIncrementHours") == 1.5
+    assert mgr.data["settings"]["WarmupChannelDefaultTargetHours"] == 18
+    assert mgr.data["settings"]["WarmupChannelDefaultDailyIncrementHours"] == 1.5
+    view.destroy()

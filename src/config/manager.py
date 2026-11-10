@@ -216,11 +216,15 @@ class ConfigManager:
             "WarmupAutoEnableNewAccounts": True,
             "WarmupDefaultTargetHours": 15,
             "WarmupDefaultDailyIncrementHours": 1,
+            "WarmupAutoEnableNewChannels": True,
+            "WarmupChannelDefaultTargetHours": 15,
+            "WarmupChannelDefaultDailyIncrementHours": 1,
         },
         "accounts": [],
         "videos": [],
         "channels": [],
         "account_warmup": {},
+        "channel_warmup": {},
     }
 
     def __init__(self, config_file: Optional[Path] = None):
@@ -694,6 +698,32 @@ class ConfigManager:
             warmup_store = self.data.get("account_warmup", {})
             return copy.deepcopy(warmup_store) if isinstance(warmup_store, dict) else {}
 
+    def get_channel_warmup(self, channel_id: str) -> Optional[Dict[str, Any]]:
+        """Return warm-up settings dictionary for the normalized channel identifier, or None."""
+        key = (channel_id or "").strip().lower().lstrip("@")
+        with self._lock:
+            warmup_store = self.data.get("channel_warmup", {})
+            if isinstance(warmup_store, dict):
+                val = warmup_store.get(key)
+                return copy.deepcopy(val) if val else None
+            return None
+
+    def set_channel_warmup(self, channel_id: str, warmup_data: Dict[str, Any]) -> None:
+        """Persist warm-up configuration for a channel into settings.json."""
+        key = (channel_id or "").strip().lower().lstrip("@")
+        with self._lock:
+            if "channel_warmup" not in self.data or not isinstance(self.data["channel_warmup"], dict):
+                self.data["channel_warmup"] = {}
+            clean_data = copy.deepcopy(warmup_data)
+            self.data["channel_warmup"][key] = clean_data
+            self._save_unlocked()
+
+    def get_all_channel_warmup(self) -> Dict[str, Dict[str, Any]]:
+        """Return all stored channel warm-up profiles."""
+        with self._lock:
+            warmup_store = self.data.get("channel_warmup", {})
+            return copy.deepcopy(warmup_store) if isinstance(warmup_store, dict) else {}
+
     def _save_credentials_unlocked(self, accounts_list: List[Dict[str, str]]) -> None:
         self.credentials_file.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self.credentials_file.with_suffix(".tmp")
@@ -805,6 +835,45 @@ class ConfigManager:
                         if curr_sec is not None and curr_sec > float(incoming.get("watch_seconds", 0.0) or 0.0):
                             incoming["watch_seconds"] = curr_sec
             self.data["channels"] = self._sanitize_channels(channel_list)
+
+            # Auto-enable warm-up for newly added channels if configured
+            settings_dict = self.data.get("settings", {})
+            auto_val = settings_dict.get("WarmupAutoEnableNewChannels", True)
+            if isinstance(auto_val, bool):
+                auto_enabled = auto_val
+            else:
+                auto_enabled = str(auto_val).strip().lower() in ("true", "1", "yes", "on")
+
+            if auto_enabled:
+                if "channel_warmup" not in self.data or not isinstance(self.data["channel_warmup"], dict):
+                    self.data["channel_warmup"] = {}
+                raw_target = settings_dict.get("WarmupChannelDefaultTargetHours", 15)
+                raw_inc = settings_dict.get("WarmupChannelDefaultDailyIncrementHours", 1)
+                th = safe_float(raw_target, default=15.0)
+                target_h = int(th) if th.is_integer() else th
+                inc = safe_float(raw_inc, default=1.0)
+                inc_h = int(inc) if inc.is_integer() else inc
+                today_str = datetime.now().strftime("%Y-%m-%d")
+
+                for ch_item in self.data["channels"]:
+                    if isinstance(ch_item, dict):
+                        ch_name = (ch_item.get("name") or "").strip()
+                        ch_url = (ch_item.get("url") or "").strip()
+                        key = ch_name.lower().lstrip("@")
+                        if key and key not in self.data["channel_warmup"]:
+                            self.data["channel_warmup"][key] = {
+                                "channel_name": ch_name,
+                                "channel_url": ch_url,
+                                "enabled": True,
+                                "target_hours": target_h,
+                                "daily_increment_hours": inc_h,
+                                "current_day": 1,
+                                "is_warmed_up": False,
+                                "last_active_date": today_str,
+                                "watched_today_seconds": 0.0,
+                                "total_watched_seconds": 0.0,
+                            }
+
             try:
                 self._save_unlocked()
             except Exception:

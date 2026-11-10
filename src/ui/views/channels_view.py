@@ -32,6 +32,8 @@ from ...utils.helpers import extract_video_id
 from ...utils.scroll_helper import setup_smooth_scrolling
 from ..confirm_dialog import show_themed_confirm_dialog
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
+from ..warmup_dialog import WarmupDialog
+from ...automation.warmup_manager import WarmupManager
 from .channel_import_modal import ChannelImportModal
 from .queue_view import format_exact_published_datetime, format_published_date
 
@@ -3681,6 +3683,30 @@ class ChannelsView(Frame):
                     new_lbl.pack(side="left")
                     new_lbl.bind("<Button-1>", _on_channel_click)
 
+                # Channel warm-up badge
+                cfg_mgr = getattr(self.app_controller, "config_mgr", None)
+                if cfg_mgr:
+                    try:
+                        wm = WarmupManager(cfg_mgr)
+                        cw_cfg = wm.get_channel_config(channel.name, channel.url)
+                        if cw_cfg.enabled:
+                            cw_info = cw_cfg.get_status_info()
+                            sep_w = " • " if (totals_text or has_new) else ""
+                            badge_lbl = "✅ Warmed Up" if cw_cfg.is_warmed_up else f"🔥 {cw_info['stage_label']}"
+                            w_lbl = ctk.CTkLabel(
+                                meta_frame,
+                                text=f"{sep_w}{badge_lbl}",
+                                font=ctk.CTkFont(size=9, weight="bold"),
+                                justify="left",
+                                anchor="w",
+                                cursor="hand2",
+                                text_color=cw_info["color"],
+                            )
+                            w_lbl.pack(side="left")
+                            w_lbl.bind("<Button-1>", _on_channel_click)
+                    except Exception:
+                        pass
+
             action_frame = ctk.CTkFrame(row, fg_color="transparent")
             action_frame.grid(row=0, column=2, padx=10, pady=8, sticky="e")
 
@@ -3757,7 +3783,7 @@ class ChannelsView(Frame):
                 action_frame,
                 text="⚡ Sync Recent",
                 width=92,
-                height=46,
+                height=22,
                 font=ctk.CTkFont(size=9, weight="bold"),
                 fg_color="#0D9488" if has_new else "gray30",
                 hover_color="#0F766E" if has_new else "gray30",
@@ -3766,10 +3792,26 @@ class ChannelsView(Frame):
             sync_btn.configure(
                 command=with_button_feedback(sync_btn, "Syncing...", lambda ch=channel: self.sync_single_channel_data(ch))
             )
-            sync_btn.grid(row=0, column=1, rowspan=2, padx=(0, 6), sticky="ns")
+            sync_btn.grid(row=0, column=1, padx=(0, 6), pady=(0, 2), sticky="ew")
             add_tooltip(
                 sync_btn,
                 "Fetch newly published videos or shorts\navailable on YouTube for this channel.",
+            )
+
+            warmup_btn = ctk.CTkButton(
+                action_frame,
+                text="🔥 Warm Up",
+                width=92,
+                height=22,
+                font=ctk.CTkFont(size=9, weight="bold"),
+                fg_color="#F97316",
+                hover_color="#EA580C",
+                command=lambda ch=channel: self.open_channel_warmup_dialog(ch),
+            )
+            warmup_btn.grid(row=1, column=1, padx=(0, 6), pady=(2, 0), sticky="ew")
+            add_tooltip(
+                warmup_btn,
+                "Configure progressive daily warm-up targets and ladder for this channel.",
             )
 
             sync_all_btn = ctk.CTkButton(
@@ -3867,3 +3909,9 @@ class ChannelsView(Frame):
                 del_btn,
                 "Permanently delete this channel\nand remove it from your saved list.",
             )
+
+    def open_channel_warmup_dialog(self, channel: Channel) -> None:
+        """Open the Warm Up Settings pop-up window for a channel."""
+        cfg_mgr = getattr(self.app_controller, "config_mgr", None)
+        mode = getattr(self.app_controller, "appearance_mode", "Dark")
+        WarmupDialog(self, channel=channel, config_mgr=cfg_mgr, on_save_callback=self.refresh_list, mode=mode)

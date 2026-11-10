@@ -265,6 +265,181 @@ def calculate_seconds_until_midnight(now: Optional[datetime] = None) -> float:
     return max(60.0, seconds_left)
 
 
+def normalize_channel_id(channel_name: str, channel_url: str = "") -> str:
+    """Normalize channel name or canonical URL into a unique dictionary key."""
+    if channel_url:
+        u = channel_url.strip().lower()
+        if "://" in u:
+            u = u.split("://", 1)[1]
+        if u.startswith("www."):
+            u = u[4:]
+        if u.startswith("youtube.com/"):
+            u = u[12:]
+        elif u.startswith("m.youtube.com/"):
+            u = u[14:]
+        u = u.rstrip("/")
+        for suffix in ("/videos", "/shorts", "/featured", "/streams", "/community"):
+            if u.endswith(suffix):
+                u = u[:-len(suffix)]
+        canon = u.rstrip("/")
+        if canon:
+            return canon
+    return (channel_name or "").strip().lower().lstrip("@")
+
+
+@dataclass
+class WarmupChannelConfig:
+    channel_name: str
+    channel_url: str = ""
+    enabled: bool = True
+    target_hours: Union[int, float] = 15
+    daily_increment_hours: Union[int, float] = 1
+    current_day: int = 1
+    is_warmed_up: bool = False
+    last_active_date: str = ""
+    watched_today_seconds: float = 0.0
+    total_watched_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.channel_name = (self.channel_name or "").strip()
+        self.channel_url = (self.channel_url or "").strip()
+        th = max(0.5, float(self.target_hours))
+        self.target_hours = int(th) if th.is_integer() else th
+        inc = max(0.1, float(self.daily_increment_hours))
+        self.daily_increment_hours = int(inc) if inc.is_integer() else inc
+        self.current_day = max(1, int(self.current_day))
+        if not self.last_active_date:
+            self.last_active_date = datetime.now().strftime("%Y-%m-%d")
+
+    @property
+    def identifier(self) -> str:
+        return normalize_channel_id(self.channel_name, self.channel_url)
+
+    @property
+    def total_steps(self) -> int:
+        if float(self.target_hours) <= float(self.daily_increment_hours):
+            return 1
+        steps = math.ceil(float(self.target_hours) / float(self.daily_increment_hours))
+        return max(1, steps)
+
+    def get_daily_allowed_seconds(self) -> float:
+        if self.is_warmed_up:
+            return float(self.target_hours) * 3600.0
+        allowed_hours = min(float(self.target_hours), self.current_day * float(self.daily_increment_hours))
+        return allowed_hours * 3600.0
+
+    def check_and_rollover(self, today_str: Optional[str] = None) -> bool:
+        if today_str is None:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+        if self.last_active_date != today_str:
+            if self.watched_today_seconds > 0 and not self.is_warmed_up:
+                self.current_day += 1
+                if self.current_day >= self.total_steps:
+                    self.is_warmed_up = True
+            self.watched_today_seconds = 0.0
+            self.last_active_date = today_str
+            return True
+        return False
+
+    def record_watch_seconds(self, seconds: float, today_str: Optional[str] = None) -> None:
+        if seconds <= 0:
+            return
+        self.check_and_rollover(today_str)
+        self.watched_today_seconds += seconds
+        self.total_watched_seconds += seconds
+        daily_limit = self.get_daily_allowed_seconds()
+        if not self.is_warmed_up and self.current_day >= self.total_steps and self.watched_today_seconds >= daily_limit:
+            self.is_warmed_up = True
+
+    def is_daily_quota_reached(self) -> bool:
+        if not self.enabled:
+            return False
+        self.check_and_rollover()
+        if self.is_warmed_up:
+            return False
+        return self.watched_today_seconds >= self.get_daily_allowed_seconds()
+
+    def mark_as_warmed_up(self) -> None:
+        self.is_warmed_up = True
+        self.current_day = self.total_steps
+
+    def reset_warmup(self) -> None:
+        self.is_warmed_up = False
+        self.current_day = 1
+        self.watched_today_seconds = 0.0
+        self.last_active_date = datetime.now().strftime("%Y-%m-%d")
+
+    def get_status_info(self) -> Dict[str, Any]:
+        self.check_and_rollover()
+        tot_steps = self.total_steps
+        color, stage_label, text_fg = get_warmup_gradient_color(self.current_day, tot_steps, self.is_warmed_up)
+        daily_allowed_sec = self.get_daily_allowed_seconds()
+        watched_sec = self.watched_today_seconds
+        remaining_sec = max(0.0, daily_allowed_sec - watched_sec)
+        pct = 100.0 if self.is_warmed_up else min(99.0, max(0.0, ((self.current_day - 1) / max(1, tot_steps - 1)) * 100.0))
+        daily_allowed_h = daily_allowed_sec / 3600.0
+        watched_today_h = watched_sec / 3600.0
+        tot_watched_h = self.total_watched_seconds / 3600.0
+        remaining_h = remaining_sec / 3600.0
+
+        return {
+            "channel_name": self.channel_name,
+            "channel_url": self.channel_url,
+            "identifier": self.identifier,
+            "enabled": self.enabled,
+            "is_warmed_up": self.is_warmed_up,
+            "current_day": self.current_day,
+            "total_steps": tot_steps,
+            "target_hours": self.target_hours,
+            "daily_increment_hours": self.daily_increment_hours,
+            "daily_allowed_seconds": daily_allowed_sec,
+            "watched_today_seconds": watched_sec,
+            "remaining_today_seconds": remaining_sec,
+            "daily_allowed_hours": daily_allowed_h,
+            "watched_today_hours": watched_today_h,
+            "total_watched_hours": tot_watched_h,
+            "remaining_today_hours": remaining_h,
+            "color": color,
+            "text_fg": text_fg,
+            "stage_label": stage_label,
+            "progress_percent": pct,
+            "target_hours_str": format_number(self.target_hours),
+            "daily_increment_hours_str": format_number(self.daily_increment_hours),
+            "daily_allowed_hours_str": format_hours(daily_allowed_h),
+            "watched_today_hours_str": format_hours(watched_today_h),
+            "remaining_today_hours_str": format_hours(remaining_h),
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        th = float(self.target_hours)
+        d["target_hours"] = int(th) if th.is_integer() else th
+        inc = float(self.daily_increment_hours)
+        d["daily_increment_hours"] = int(inc) if inc.is_integer() else inc
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any], channel_name: str = "", channel_url: str = "") -> "WarmupChannelConfig":
+        cname = data.get("channel_name") or channel_name or ""
+        curl = data.get("channel_url") or channel_url or ""
+        raw_target = data.get("target_hours", 15)
+        raw_inc = data.get("daily_increment_hours", 1)
+        th = float(raw_target)
+        inc = float(raw_inc)
+        return cls(
+            channel_name=cname,
+            channel_url=curl,
+            enabled=bool(data.get("enabled", True)),
+            target_hours=int(th) if th.is_integer() else th,
+            daily_increment_hours=int(inc) if inc.is_integer() else inc,
+            current_day=int(data.get("current_day", 1)),
+            is_warmed_up=bool(data.get("is_warmed_up", False)),
+            last_active_date=str(data.get("last_active_date", "")),
+            watched_today_seconds=float(data.get("watched_today_seconds", 0.0)),
+            total_watched_seconds=float(data.get("total_watched_seconds", 0.0)),
+        )
+
+
 class WarmupManager:
     """Manages warm-up persistence and querying against ConfigManager."""
 
@@ -316,5 +491,55 @@ class WarmupManager:
     def is_daily_quota_reached(self, email: str) -> bool:
         """Check if active account reached its warm-up daily quota."""
         cfg = self.get_account_config(email)
+        return cfg.is_daily_quota_reached()
+
+    def get_channel_config(self, channel_name: str, channel_url: str = "") -> WarmupChannelConfig:
+        """Retrieve warm-up configuration for a channel, initializing defaults if absent."""
+        ident = normalize_channel_id(channel_name, channel_url)
+        raw = self.config_mgr.get_channel_warmup(ident) if hasattr(self.config_mgr, "get_channel_warmup") else None
+        if not raw and hasattr(self.config_mgr, "get_channel_warmup"):
+            raw = self.config_mgr.get_channel_warmup(normalize_channel_id(channel_name))
+        if raw:
+            return WarmupChannelConfig.from_dict(raw, channel_name=channel_name, channel_url=channel_url)
+
+        # Fallback to defaults from global config
+        raw_target = self.config_mgr.get_setting("WarmupChannelDefaultTargetHours", 15) if hasattr(self.config_mgr, "get_setting") else 15
+        raw_inc = self.config_mgr.get_setting("WarmupChannelDefaultDailyIncrementHours", 1) if hasattr(self.config_mgr, "get_setting") else 1
+        target_f = float(raw_target)
+        inc_f = float(raw_inc)
+        target_h = int(target_f) if target_f.is_integer() else target_f
+        inc_h = int(inc_f) if inc_f.is_integer() else inc_f
+        auto_enabled = bool(self.config_mgr.get_bool("WarmupAutoEnableNewChannels", True)) if hasattr(self.config_mgr, "get_bool") else True
+
+        cfg = WarmupChannelConfig(
+            channel_name=channel_name,
+            channel_url=channel_url,
+            enabled=auto_enabled,
+            target_hours=target_h,
+            daily_increment_hours=inc_h,
+            current_day=1,
+            is_warmed_up=False,
+        )
+        if hasattr(self.config_mgr, "set_channel_warmup"):
+            self.config_mgr.set_channel_warmup(ident, cfg.to_dict())
+        return cfg
+
+    def save_channel_config(self, cfg: WarmupChannelConfig) -> None:
+        """Persist channel warm-up configuration to settings."""
+        if hasattr(self.config_mgr, "set_channel_warmup"):
+            self.config_mgr.set_channel_warmup(cfg.identifier, cfg.to_dict())
+
+    def record_channel_watch_time(self, channel_name: str, seconds: float, channel_url: str = "") -> Optional[WarmupChannelConfig]:
+        """Record watched seconds for the channel and save state."""
+        cfg = self.get_channel_config(channel_name, channel_url)
+        if not cfg.enabled:
+            return cfg
+        cfg.record_watch_seconds(seconds)
+        self.save_channel_config(cfg)
+        return cfg
+
+    def is_channel_daily_quota_reached(self, channel_name: str, channel_url: str = "") -> bool:
+        """Check if channel reached its warm-up daily quota."""
+        cfg = self.get_channel_config(channel_name, channel_url)
         return cfg.is_daily_quota_reached()
 

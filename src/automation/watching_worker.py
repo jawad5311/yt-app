@@ -1221,6 +1221,13 @@ class WatchingWorker:
                 return False
             if c.target_achieved:
                 return False
+            if cfg is not None:
+                try:
+                    from .warmup_manager import WarmupManager
+                    if WarmupManager(cfg).is_channel_daily_quota_reached(c.name, c.url):
+                        return False
+                except Exception:
+                    pass
             return True
 
         cfg = getattr(self, "config_mgr", None)
@@ -1831,6 +1838,15 @@ class WatchingWorker:
                     WarmupManager(self.config_mgr).record_watch_time(self.account.email, watch_seconds)
                 except Exception as w_err:
                     logging.debug(f"Could not record warm-up watch time: {w_err}")
+
+            # Record channel warm-up watch seconds if channel is tracked
+            ch_name = getattr(task, "channel", None) or ""
+            if ch_name and getattr(self, "config_mgr", None):
+                try:
+                    from .warmup_manager import WarmupManager
+                    WarmupManager(self.config_mgr).record_channel_watch_time(ch_name, watch_seconds)
+                except Exception as cw_err:
+                    logging.debug(f"Could not record channel warm-up watch time: {cw_err}")
         except Exception as exc:
             emit(self.log_queue, f"Could not record watching stats: {exc}", logging.WARNING)
 
@@ -4834,44 +4850,61 @@ class WatchingWorker:
         return True
 
     def _check_and_enter_warmup_sleep(self, session_watched_keys: Set[str]) -> bool:
-        """Check if active account reached its progressive warm-up daily quota.
+        """Check if active account or all active channels reached progressive warm-up daily quota.
         If reached, closes browser, sends notification, and enters sleep mode until midnight rollover.
         """
-        if not getattr(self, "account", None) or not getattr(self.account, "email", None):
-            return False
-        if not getattr(self, "config_mgr", None):
-            return False
+        if getattr(self, "account", None) and getattr(self.account, "email", None) and getattr(self, "config_mgr", None):
+            try:
+                from .warmup_manager import WarmupManager
+                wm = WarmupManager(self.config_mgr)
+                w_cfg = wm.get_account_config(self.account.email)
+                if w_cfg.enabled and not w_cfg.is_warmed_up and w_cfg.is_daily_quota_reached():
+                    info = w_cfg.get_status_info()
+                    daily_limit_str = info.get("daily_allowed_hours_str", f"{info['daily_allowed_hours']}h")
+                    watched_today_str = info.get("watched_today_hours_str", f"{info['watched_today_hours']}h")
+                    cur_day = info["current_day"]
+                    tot_steps = info["total_steps"]
 
-        try:
-            from .warmup_manager import WarmupManager
-            wm = WarmupManager(self.config_mgr)
-            w_cfg = wm.get_account_config(self.account.email)
-            if not w_cfg.enabled or w_cfg.is_warmed_up:
-                return False
+                    emit(
+                        self.log_queue,
+                        f"🔥 [Warm-Up Daily Quota Reached] Account {self.account.email} reached today's limit of {daily_limit_str} (watched {watched_today_str}, Day {cur_day}/{tot_steps}).",
+                        logging.INFO,
+                    )
+                    emit(
+                        self.log_queue,
+                        "Entering sleep mode until midnight (00:00). Browser closed to preserve profile resources.",
+                        logging.INFO,
+                    )
+                    return self._execute_warmup_sleep_cycle(w_cfg, session_watched_keys)
+            except Exception as exc:
+                logging.debug(f"Error checking account warm-up quota: {exc}")
 
-            if not w_cfg.is_daily_quota_reached():
-                return False
+        # Also check if all active tracked channels reached their daily warm-up quota
+        if getattr(self, "config_mgr", None):
+            try:
+                from .warmup_manager import WarmupManager
+                wm = WarmupManager(self.config_mgr)
+                raw_channels = self.config_mgr.get_channels() or []
+                enabled_channels = [Channel.from_dict(c) for c in raw_channels if isinstance(c, dict) and c.get("enabled") and not c.get("archived") and not c.get("target_achieved")]
+                if enabled_channels:
+                    warmup_channels = [c for c in enabled_channels if wm.get_channel_config(c.name, c.url).enabled and not wm.get_channel_config(c.name, c.url).is_warmed_up]
+                    if warmup_channels and len(warmup_channels) == len(enabled_channels):
+                        if all(wm.is_channel_daily_quota_reached(c.name, c.url) for c in warmup_channels):
+                            emit(
+                                self.log_queue,
+                                f"🔥 [Channel Warm-Up Daily Quota Reached] All {len(warmup_channels)} tracked channels reached their daily warm-up quotas for today.",
+                                logging.INFO,
+                            )
+                            emit(
+                                self.log_queue,
+                                "Entering sleep mode until midnight (00:00). All channels will roll over to their next day's quotas after midnight.",
+                                logging.INFO,
+                            )
+                            return self._execute_channel_warmup_sleep_cycle(session_watched_keys)
+            except Exception as c_err:
+                logging.debug(f"Error checking channel warm-up quotas: {c_err}")
 
-            info = w_cfg.get_status_info()
-            daily_limit_str = info.get("daily_allowed_hours_str", f"{info['daily_allowed_hours']}h")
-            watched_today_str = info.get("watched_today_hours_str", f"{info['watched_today_hours']}h")
-            cur_day = info["current_day"]
-            tot_steps = info["total_steps"]
-
-            emit(
-                self.log_queue,
-                f"🔥 [Warm-Up Daily Quota Reached] Account {self.account.email} reached today's limit of {daily_limit_str} (watched {watched_today_str}, Day {cur_day}/{tot_steps}).",
-                logging.INFO,
-            )
-            emit(
-                self.log_queue,
-                "Entering sleep mode until midnight (00:00). Browser closed to preserve profile resources.",
-                logging.INFO,
-            )
-            return self._execute_warmup_sleep_cycle(w_cfg, session_watched_keys)
-        except Exception as exc:
-            logging.debug(f"Error checking warm-up quota: {exc}")
-            return False
+        return False
 
     def _execute_warmup_sleep_cycle(self, w_cfg: Any, session_watched_keys: Set[str]) -> bool:
         """Execute sleep mode until midnight when warm-up daily quota is reached."""
@@ -4994,6 +5027,119 @@ class WatchingWorker:
         login_ok = self._ensure_signed_in_and_wait()
         if not login_ok and not self.stop_event.is_set():
             emit(self.log_queue, f"Notice: Google sign-in verification check after warm-up rollover for {self.account.email}.", logging.WARNING)
+
+        emit(self.log_queue, "Browser relaunched successfully. Resuming warm-up browsing...", logging.INFO)
+        self._report_status("Browsing YouTube Home feed...", "info")
+        return True
+
+    def _execute_channel_warmup_sleep_cycle(self, session_watched_keys: Set[str]) -> bool:
+        """Execute sleep mode until midnight when all tracked channels reached their warm-up daily quota."""
+        if self.stop_event.is_set():
+            return False
+
+        from .warmup_manager import calculate_seconds_until_midnight, WarmupManager
+        sleep_seconds = calculate_seconds_until_midnight()
+        wake_up_time = datetime.now() + timedelta(seconds=sleep_seconds)
+        sleep_hours = sleep_seconds / 3600.0
+        wake_str = wake_up_time.strftime("%I:%M %p")
+        self._report_status(f"🔥 Channels Warm-Up Daily Limit: Sleeping until midnight ({wake_str})", "info")
+
+        if self.driver:
+            try:
+                emit(self.log_queue, "Closing YouTube browser session during channel warm-up sleep...", logging.INFO)
+                close_driver(self.driver, log_queue=self.log_queue)
+            except Exception as e:
+                emit(self.log_queue, f"Notice while closing browser before warm-up sleep: {e}", logging.DEBUG)
+            self.driver = None
+
+        try:
+            self._send_session_report(
+                status="Channel Warm-Up Daily Limit Reached",
+                is_sleep_notification=True,
+                sleep_mode_type="warmup",
+                sleep_cycle_number=1,
+                sleep_duration_hours=sleep_hours,
+                wake_up_time=wake_up_time,
+            )
+            self.cycle_report_dispatched = True
+        except Exception as e:
+            emit(self.log_queue, f"Error sending channel warm-up sleep notification: {e}", logging.WARNING)
+
+        self.is_sleeping = True
+        emit(
+            self.log_queue,
+            f"Bot is now sleeping until midnight ({wake_str}, ~{sleep_hours:.1f} hours). It will wake up after midnight with the next warm-up increment.",
+            logging.INFO,
+        )
+
+        while not self.stop_event.is_set():
+            if datetime.now() >= wake_up_time:
+                break
+            time.sleep(0.5)
+
+        self.is_sleeping = False
+        if self.stop_event.is_set():
+            emit(self.log_queue, "Channel warm-up sleep interrupted by user stop.", logging.INFO)
+            self._report_status("Stopped by user", "info")
+            return False
+
+        # Roll over all channels after midnight
+        try:
+            wm = WarmupManager(self.config_mgr)
+            raw_channels = self.config_mgr.get_channels() or []
+            for ch_dict in raw_channels:
+                if isinstance(ch_dict, dict):
+                    c_name = ch_dict.get("name") or ""
+                    c_url = ch_dict.get("url") or ""
+                    if c_name:
+                        c_cfg = wm.get_channel_config(c_name, c_url)
+                        c_cfg.check_and_rollover()
+                        wm.save_channel_config(c_cfg)
+            emit(
+                self.log_queue,
+                "☀️ [Midnight Rollover] All channel warm-up ladders advanced to the next day with fresh watch quotas!",
+                logging.INFO,
+            )
+        except Exception as exc:
+            logging.debug(f"Error rolling over channel warm-up dates: {exc}")
+
+        try:
+            self._send_session_report(
+                status="Channel Warm-Up Session Resumed",
+                is_sleep_notification=True,
+                sleep_mode_type="warmup_resume",
+                sleep_cycle_number=1,
+                sleep_duration_hours=sleep_hours,
+                wake_up_time=wake_up_time,
+            )
+        except Exception as e:
+            emit(self.log_queue, f"Error sending channel warm-up resume email: {e}", logging.WARNING)
+
+        session_watched_keys.clear()
+        self.cycle_report_dispatched = False
+        self.target_attempts = 0
+        self.watched_count = 0
+
+        if hasattr(self, "channel_tracker") and self.channel_tracker:
+            self.channel_tracker = SessionChannelTracker(
+                config_mgr=self.config_mgr,
+                stats_store=self.stats_store,
+                channels=self.channels,
+                emit_event=self._emit_event,
+                log_queue=self.log_queue,
+            )
+
+        known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
+        known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
+        self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
+        self.has_started_browsing = True
+
+        if self.stop_event.is_set():
+            return False
+
+        login_ok = self._ensure_signed_in_and_wait()
+        if not login_ok and not self.stop_event.is_set():
+            emit(self.log_queue, "Notice: Google sign-in verification check after warm-up rollover.", logging.WARNING)
 
         emit(self.log_queue, "Browser relaunched successfully. Resuming warm-up browsing...", logging.INFO)
         self._report_status("Browsing YouTube Home feed...", "info")
