@@ -341,6 +341,27 @@ class ChannelsView(Frame):
         except (TclError, AttributeError):
             return False
 
+    @classmethod
+    def _safe_destroy(cls, widget) -> None:
+        """Safely release modal grab and destroy widget without freezing event pump."""
+        if widget is None:
+            return
+        try:
+            if hasattr(widget, "grab_release"):
+                widget.grab_release()
+        except Exception:
+            pass
+        try:
+            if hasattr(widget, "stop"):
+                widget.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(widget, "destroy"):
+                widget.destroy()
+        except Exception:
+            pass
+
     def _channel_is_current(self, channel, name, url) -> bool:
         return (
             any(saved is channel for saved in self.channels)
@@ -351,9 +372,7 @@ class ChannelsView(Frame):
     def _submit_channel_job(self, loading, progress_bar, work, done, *, current=lambda: True, on_error_cleanup=None):
         """Bridge plain network results to live dialogs on the main thread."""
         def close_loading():
-            if self._widget_exists(loading):
-                progress_bar.stop()
-                loading.destroy()
+            self._safe_destroy(loading)
             if callable(on_error_cleanup):
                 try:
                     on_error_cleanup()
@@ -2182,9 +2201,7 @@ class ChannelsView(Frame):
             return results
 
         def _close():
-            if self._widget_exists(toast):
-                prog.stop()
-                toast.destroy()
+            self._safe_destroy(toast)
 
         def _done(results):
             _close()
@@ -2305,9 +2322,7 @@ class ChannelsView(Frame):
             return names
 
         def _close():
-            if self._widget_exists(toast):
-                prog.stop()
-                toast.destroy()
+            self._safe_destroy(toast)
 
         def _done(names):
             _close()
@@ -2431,17 +2446,31 @@ class ChannelsView(Frame):
         """Perform a fast live pre-check to query real-time shorts and videos count for each channel without freezing the UI."""
         config_mgr = getattr(self.app_controller, "config_mgr", None)
         import time
+        import threading
         from concurrent.futures import ThreadPoolExecutor
 
         toast = None
         lbl = None
         prog = None
+        cancel_ev = threading.Event()
+        top_level = None
+
         if hasattr(self, "winfo_exists") and self.winfo_exists() and hasattr(self, "winfo_ismapped") and self.winfo_ismapped():
             try:
-                toast = ctk.CTkToplevel(self)
+                top_level = self.winfo_toplevel()
+                toast = ctk.CTkToplevel(top_level)
                 toast.title("Checking Channel Content...")
                 toast.geometry("380x130")
-                toast.attributes("-topmost", True)
+                toast.transient(top_level)
+                toast.resizable(False, False)
+                try:
+                    toast.update_idletasks()
+                    px, py = top_level.winfo_rootx(), top_level.winfo_rooty()
+                    pw, ph = top_level.winfo_width(), top_level.winfo_height()
+                    toast.geometry(f"+{px + max(0, (pw - 380) // 2)}+{py + max(0, (ph - 130) // 2)}")
+                except Exception:
+                    pass
+
                 lbl = ctk.CTkLabel(
                     toast,
                     text=f"Connecting to YouTube to check {len(channels_to_sync)} channels...",
@@ -2452,20 +2481,27 @@ class ChannelsView(Frame):
                 prog = ctk.CTkProgressBar(toast, mode="indeterminate", width=280)
                 prog.pack(pady=(0, 10))
                 prog.start()
-                if hasattr(self, "update_idletasks"):
-                    self.update_idletasks()
-                if hasattr(self, "update"):
-                    self.update()
+
+                def _on_cancel():
+                    cancel_ev.set()
+
+                toast.protocol("WM_DELETE_WINDOW", _on_cancel)
+                if hasattr(toast, "update_idletasks"):
+                    toast.update_idletasks()
             except Exception:
                 toast = None
 
         def _check_channel(ch: Channel):
+            if cancel_ev.is_set():
+                return
             try:
                 res = fetch_channel_data(
                     ch.url,
                     video_limit=None,
                     shorts_limit=None,
+                    timeout=5,
                     config_mgr=config_mgr,
+                    cancel_event=cancel_ev,
                 )
                 ts = getattr(res, "total_shorts", None)
                 if ts is not None and isinstance(ts, (int, float)):
@@ -2481,7 +2517,11 @@ class ChannelsView(Frame):
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(_check_channel, ch) for ch in channels_to_sync]
                 completed = 0
+                start_t = time.time()
                 while not all(f.done() for f in futures):
+                    if cancel_ev.is_set() or (time.time() - start_t > 8.0):
+                        cancel_ev.set()
+                        break
                     done_cnt = sum(1 for f in futures if f.done())
                     if done_cnt != completed and lbl is not None and toast is not None and self._widget_exists(toast):
                         completed = done_cnt
@@ -2490,26 +2530,23 @@ class ChannelsView(Frame):
                         except Exception:
                             pass
                     try:
-                        if hasattr(self, "update_idletasks"):
+                        if top_level is not None and self._widget_exists(top_level):
+                            top_level.update_idletasks()
+                            top_level.update()
+                        elif hasattr(self, "update_idletasks"):
                             self.update_idletasks()
-                        if hasattr(self, "update"):
                             self.update()
                     except Exception:
                         pass
-                    time.sleep(0.02)
+                    time.sleep(0.01)
                 for f in futures:
                     try:
-                        f.result()
+                        f.result(timeout=0.05)
                     except Exception:
                         pass
 
         if toast is not None and self._widget_exists(toast):
-            try:
-                if prog is not None:
-                    prog.stop()
-                toast.destroy()
-            except Exception:
-                pass
+            self._safe_destroy(toast)
 
         try:
             self.app_controller.config_mgr.set_channels([ch.to_dict() for ch in self.channels], preserve_counters=True)
@@ -2579,10 +2616,23 @@ class ChannelsView(Frame):
             ):
                 return
 
-        toast = ctk.CTkToplevel(self)
+        top_level = self.winfo_toplevel()
+        toast = ctk.CTkToplevel(top_level)
         toast.title("Syncing All Channels...")
         toast.geometry("420x150")
-        toast.grab_set()
+        toast.transient(top_level)
+        toast.resizable(False, False)
+        try:
+            toast.update_idletasks()
+            px, py = top_level.winfo_rootx(), top_level.winfo_rooty()
+            pw, ph = top_level.winfo_width(), top_level.winfo_height()
+            toast.geometry(f"+{px + max(0, (pw - 420) // 2)}+{py + max(0, (ph - 150) // 2)}")
+        except Exception:
+            pass
+        try:
+            toast.grab_set()
+        except Exception:
+            pass
 
         lbl = ctk.CTkLabel(
             toast,
@@ -2596,6 +2646,13 @@ class ChannelsView(Frame):
         prog.pack(pady=(0, 15))
         prog.start()
 
+        cancel_ev = threading.Event()
+
+        def _on_cancel():
+            cancel_ev.set()
+
+        toast.protocol("WM_DELETE_WINDOW", _on_cancel)
+
         snapshots = [(ch, ch.name, ch.url) for ch in channels_to_sync]
 
         config_mgr = getattr(self.app_controller, "config_mgr", None)
@@ -2603,6 +2660,8 @@ class ChannelsView(Frame):
         def _bg_sync(report):
             results = []
             for i, (ch, name, url) in enumerate(snapshots, 1):
+                if cancel_ev.is_set():
+                    break
                 report((i, name, "starting", 0))
 
                 def _prog(count, kind):
@@ -2622,9 +2681,7 @@ class ChannelsView(Frame):
             return results
 
         def _close():
-            if self._widget_exists(toast):
-                prog.stop()
-                toast.destroy()
+            self._safe_destroy(toast)
 
         def _done(results):
             _close()
@@ -2633,7 +2690,7 @@ class ChannelsView(Frame):
                 messagebox.showerror(
                     "YouTube API Error",
                     "The following issue(s) occurred while contacting YouTube API:\n\n" + "\n".join(api_errors),
-                    parent=self,
+                    parent=top_level,
                 )
             current_tasks = getattr(self.app_controller, "queued_video_tasks", None)
             if current_tasks is None:
@@ -2747,7 +2804,7 @@ class ChannelsView(Frame):
             if total_updated > 0:
                 msg += f"\n• Updated metadata for {total_updated} existing item(s)."
 
-            messagebox.showinfo("Sync All Content Complete", msg, parent=self)
+            messagebox.showinfo("Sync All Content Complete", msg, parent=top_level)
 
         def _progress(data):
             if isinstance(data, tuple) and len(data) == 4:
@@ -2764,7 +2821,7 @@ class ChannelsView(Frame):
 
         def _failed(exc):
             _close()
-            messagebox.showerror("Sync Error", f"Failed to sync all channel data:\n{exc}", parent=self)
+            messagebox.showerror("Sync Error", f"Failed to sync all channel data:\n{exc}", parent=top_level)
 
         self.app_controller.background_jobs.submit(
             _bg_sync,
@@ -2827,10 +2884,23 @@ class ChannelsView(Frame):
             ):
                 return
 
-        toast = ctk.CTkToplevel(self)
+        top_level = self.winfo_toplevel()
+        toast = ctk.CTkToplevel(top_level)
         toast.title("Syncing All Channels Shorts...")
         toast.geometry("420x150")
-        toast.grab_set()
+        toast.transient(top_level)
+        toast.resizable(False, False)
+        try:
+            toast.update_idletasks()
+            px, py = top_level.winfo_rootx(), top_level.winfo_rooty()
+            pw, ph = top_level.winfo_width(), top_level.winfo_height()
+            toast.geometry(f"+{px + max(0, (pw - 420) // 2)}+{py + max(0, (ph - 150) // 2)}")
+        except Exception:
+            pass
+        try:
+            toast.grab_set()
+        except Exception:
+            pass
 
         lbl = ctk.CTkLabel(
             toast,
@@ -2844,12 +2914,21 @@ class ChannelsView(Frame):
         prog.pack(pady=(0, 15))
         prog.start()
 
+        cancel_ev = threading.Event()
+
+        def _on_cancel():
+            cancel_ev.set()
+
+        toast.protocol("WM_DELETE_WINDOW", _on_cancel)
+
         snapshots = [(ch, ch.name, ch.url) for ch in channels_to_sync]
         config_mgr = getattr(self.app_controller, "config_mgr", None)
 
         def _bg_sync(report):
             results = []
             for i, (ch, name, url) in enumerate(snapshots, 1):
+                if cancel_ev.is_set():
+                    break
                 report(("checking", i, name, None))
 
                 def _prog(count, kind):
@@ -2864,6 +2943,7 @@ class ChannelsView(Frame):
                         video_limit=None,
                         shorts_limit=0,
                         config_mgr=config_mgr,
+                        cancel_event=cancel_ev,
                         progress_callback=_prog,
                     )
                     results.append((ch, res))
@@ -2872,9 +2952,7 @@ class ChannelsView(Frame):
             return results
 
         def _close():
-            if self._widget_exists(toast):
-                prog.stop()
-                toast.destroy()
+            self._safe_destroy(toast)
 
         def _done(results):
             _close()
@@ -2883,7 +2961,7 @@ class ChannelsView(Frame):
                 messagebox.showerror(
                     "YouTube API Error",
                     "The following issue(s) occurred while contacting YouTube API:\n\n" + "\n".join(api_errors),
-                    parent=self,
+                    parent=top_level,
                 )
             current_tasks = getattr(self.app_controller, "queued_video_tasks", None)
             if current_tasks is None:
@@ -2987,7 +3065,7 @@ class ChannelsView(Frame):
             if total_updated > 0:
                 msg += f"\n• Updated metadata for {total_updated} existing short(s)."
 
-            messagebox.showinfo("Sync All Channels Shorts Complete", msg, parent=self)
+            messagebox.showinfo("Sync All Channels Shorts Complete", msg, parent=top_level)
 
         def _progress(data):
             if isinstance(data, tuple) and len(data) == 4:
@@ -3004,7 +3082,7 @@ class ChannelsView(Frame):
 
         def _failed(exc):
             _close()
-            messagebox.showerror("Sync Error", f"Failed to sync all channels shorts:\n{exc}", parent=self)
+            messagebox.showerror("Sync Error", f"Failed to sync all channels shorts:\n{exc}", parent=top_level)
 
         self.app_controller.background_jobs.submit(
             _bg_sync,
@@ -3017,16 +3095,29 @@ class ChannelsView(Frame):
 
     def sync_channel_all(self, channel: Channel) -> None:
         """Fully sync all videos and shorts for a specific channel in batches of 50 until completed."""
+        top_level = self.winfo_toplevel()
         if not channel.url:
-            messagebox.showinfo("Missing URL", f"Channel '{channel.name}' has no URL configured.", parent=self)
+            messagebox.showinfo("Missing URL", f"Channel '{channel.name}' has no URL configured.", parent=top_level)
             return
 
         cancel_ev = threading.Event()
 
-        loading = ctk.CTkToplevel(self)
+        loading = ctk.CTkToplevel(top_level)
         loading.title("Syncing All Videos & Shorts...")
         loading.geometry("440x190")
-        loading.grab_set()
+        loading.transient(top_level)
+        loading.resizable(False, False)
+        try:
+            loading.update_idletasks()
+            px, py = top_level.winfo_rootx(), top_level.winfo_rooty()
+            pw, ph = top_level.winfo_width(), top_level.winfo_height()
+            loading.geometry(f"+{px + max(0, (pw - 440) // 2)}+{py + max(0, (ph - 190) // 2)}")
+        except Exception:
+            pass
+        try:
+            loading.grab_set()
+        except Exception:
+            pass
 
         status_lbl = ctk.CTkLabel(
             loading,
@@ -3039,7 +3130,7 @@ class ChannelsView(Frame):
 
         batch_info_lbl = ctk.CTkLabel(
             loading,
-            text="Fetching videos and shorts...",
+            text="Connecting to YouTube...",
             font=ctk.CTkFont(size=12),
             text_color=("gray40", "gray60"),
             justify="center",
@@ -3052,8 +3143,13 @@ class ChannelsView(Frame):
 
         def _on_cancel():
             cancel_ev.set()
-            cancel_btn.configure(text="Cancelling...", state="disabled")
-            batch_info_lbl.configure(text="Cancelling after current batch...")
+            try:
+                cancel_btn.configure(text="Cancelling...", state="disabled")
+                batch_info_lbl.configure(text="Cancelling after current batch...")
+            except Exception:
+                pass
+
+        loading.protocol("WM_DELETE_WINDOW", _on_cancel)
 
         cancel_btn = ctk.CTkButton(
             loading,
@@ -3070,21 +3166,22 @@ class ChannelsView(Frame):
         )
 
         def _close_loading():
-            try:
-                if loading.winfo_exists():
-                    prog.stop()
-                    loading.destroy()
-            except Exception:
-                pass
+            self._safe_destroy(loading)
 
         def _on_progress(data):
             try:
-                if not loading.winfo_exists():
+                if not self._widget_exists(loading):
                     return
                 if isinstance(data, (tuple, list)) and len(data) >= 2:
                     c, k = data[0], data[1]
                     if k == "durations":
                         batch_info_lbl.configure(text=f"Enriching video durations ({c} processed)...")
+                    elif k == "shorts_count":
+                        batch_info_lbl.configure(text=f"Found {c} short(s). Fetching items...")
+                    elif k == "shorts":
+                        batch_info_lbl.configure(text=f"Fetched {c} short(s) so far...")
+                    elif k == "videos":
+                        batch_info_lbl.configure(text=f"Fetched {c} video(s) so far...")
                     else:
                         batch_info_lbl.configure(text=f"Fetched {c} {k} so far...")
                 elif isinstance(data, str):
@@ -3098,7 +3195,7 @@ class ChannelsView(Frame):
                 messagebox.showerror(
                     "Sync Error",
                     f"Failed to sync all channel data:\n{res.error}",
-                    parent=self,
+                    parent=top_level,
                 )
                 return
 
@@ -3112,7 +3209,7 @@ class ChannelsView(Frame):
                 msg = f"No public videos or shorts found for '{channel.name}'."
                 if res.status == "interrupted":
                     msg = "Sync cancelled by user."
-                messagebox.showinfo("Sync Complete", msg, parent=self)
+                messagebox.showinfo("Sync Complete", msg, parent=top_level)
                 return
 
             current_tasks = getattr(self.app_controller, "queued_video_tasks", None)
@@ -3240,24 +3337,27 @@ class ChannelsView(Frame):
             if updated_count > 0:
                 lines.append(f"• Updated metadata for {updated_count} existing item(s).")
 
-            messagebox.showinfo("Sync All Complete", "\n".join(lines), parent=self)
+            messagebox.showinfo("Sync All Complete", "\n".join(lines), parent=top_level)
 
         url = channel.url
         config_mgr = getattr(self.app_controller, "config_mgr", None)
 
         def _bg_fetch(report):
+            def _prog(count, kind):
+                report((count, kind))
+
             return fetch_channel_data(
                 url,
                 video_limit=0,
                 shorts_limit=0,
                 config_mgr=config_mgr,
                 cancel_event=cancel_ev,
-                progress_callback=report,
+                progress_callback=_prog,
             )
 
         def _on_error(exc):
             _close_loading()
-            messagebox.showerror("Sync Error", f"Failed to sync all channel data:\n{exc}", parent=self)
+            messagebox.showerror("Sync Error", f"Failed to sync all channel data:\n{exc}", parent=top_level)
 
         self.app_controller.background_jobs.submit(
             _bg_fetch,
@@ -3277,8 +3377,9 @@ class ChannelsView(Frame):
 
     def sync_single_channel_data(self, channel: Channel) -> None:
         """Sync new available videos and/or shorts for a specific channel directly into the queue."""
+        top_level = self.winfo_toplevel()
         if not channel.url:
-            messagebox.showinfo("Missing URL", f"Channel '{channel.name}' has no URL configured.", parent=self)
+            messagebox.showinfo("Missing URL", f"Channel '{channel.name}' has no URL configured.", parent=top_level)
             return
 
         has_v = getattr(channel, "has_new_videos", False)
@@ -3303,10 +3404,22 @@ class ChannelsView(Frame):
 
         cancel_ev = threading.Event()
 
-        loading = ctk.CTkToplevel(self)
+        loading = ctk.CTkToplevel(top_level)
         loading.title("Syncing Channel...")
         loading.geometry("420x170")
-        loading.grab_set()
+        loading.transient(top_level)
+        loading.resizable(False, False)
+        try:
+            loading.update_idletasks()
+            px, py = top_level.winfo_rootx(), top_level.winfo_rooty()
+            pw, ph = top_level.winfo_width(), top_level.winfo_height()
+            loading.geometry(f"+{px + max(0, (pw - 420) // 2)}+{py + max(0, (ph - 170) // 2)}")
+        except Exception:
+            pass
+        try:
+            loading.grab_set()
+        except Exception:
+            pass
 
         status_text = f"Syncing {fetch_desc} for\n'{channel.name}'..."
         ctk.CTkLabel(
@@ -3319,7 +3432,7 @@ class ChannelsView(Frame):
 
         batch_info_lbl = ctk.CTkLabel(
             loading,
-            text="Fetching items...",
+            text="Connecting to YouTube...",
             font=ctk.CTkFont(size=12),
             text_color=("gray40", "gray60"),
             justify="center",
@@ -3330,22 +3443,28 @@ class ChannelsView(Frame):
         prog.pack(pady=(0, 15))
         prog.start()
 
+        def _on_cancel():
+            cancel_ev.set()
+
+        loading.protocol("WM_DELETE_WINDOW", _on_cancel)
+
         def _close_loading():
-            try:
-                if loading.winfo_exists():
-                    prog.stop()
-                    loading.destroy()
-            except Exception:
-                pass
+            self._safe_destroy(loading)
 
         def _on_progress(data):
             try:
-                if not loading.winfo_exists():
+                if not self._widget_exists(loading):
                     return
                 if isinstance(data, (tuple, list)) and len(data) >= 2:
                     c, k = data[0], data[1]
                     if k == "durations":
                         batch_info_lbl.configure(text=f"Enriching video durations ({c} processed)...")
+                    elif k == "shorts_count":
+                        batch_info_lbl.configure(text=f"Found {c} short(s). Fetching items...")
+                    elif k == "shorts":
+                        batch_info_lbl.configure(text=f"Fetched {c} short(s) so far...")
+                    elif k == "videos":
+                        batch_info_lbl.configure(text=f"Fetched {c} video(s) so far...")
                     else:
                         batch_info_lbl.configure(text=f"Fetched {c} {k} so far...")
                 elif isinstance(data, str):
@@ -3493,24 +3612,27 @@ class ChannelsView(Frame):
             if updated_count > 0:
                 lines.append(f"• Updated metadata for {updated_count} existing item(s).")
 
-            messagebox.showinfo("Sync Complete", "\n".join(lines), parent=self)
+            messagebox.showinfo("Sync Complete", "\n".join(lines), parent=top_level)
 
         url = channel.url
         config_mgr = getattr(self.app_controller, "config_mgr", None)
 
         def _bg_fetch(report):
+            def _prog(count, kind):
+                report((count, kind))
+
             return fetch_channel_data(
                 url,
                 video_limit=v_limit,
                 shorts_limit=s_limit,
                 config_mgr=config_mgr,
                 cancel_event=cancel_ev,
-                progress_callback=report,
+                progress_callback=_prog,
             )
 
         def _on_error(exc):
             _close_loading()
-            messagebox.showerror("Sync Error", f"Failed to sync channel data:\n{exc}", parent=self)
+            messagebox.showerror("Sync Error", f"Failed to sync channel data:\n{exc}", parent=top_level)
 
         self.app_controller.background_jobs.submit(
             _bg_fetch,
