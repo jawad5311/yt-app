@@ -19,7 +19,7 @@ class DashboardView(Frame):
         self.app_controller = app_controller
 
         self.grid_columnconfigure((0, 1, 2, 3), weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
 
         # -------------------------------------------------------------
         # 1. Header Bar (Apple Large Title & System Status Pill)
@@ -70,7 +70,7 @@ class DashboardView(Frame):
         self.system_pill_text.pack(side="left", padx=(0, 10), pady=5)
 
         # -------------------------------------------------------------
-        # 2. Stats Widget Grid (Apple macOS Widgets)
+        # 2. Stats Widget Grid (Apple macOS Widgets) - Row 1
         # -------------------------------------------------------------
         self.card_accounts = self._create_card(
             title="Loaded Accounts",
@@ -106,10 +106,47 @@ class DashboardView(Frame):
         )
 
         # -------------------------------------------------------------
+        # 2b. Stats Widget Grid (Apple macOS Widgets) - Row 2
+        # -------------------------------------------------------------
+        self.card_session_watch_time = self._create_card(
+            title="Session Watch Time",
+            initial_value="0s",
+            row=2,
+            col=0,
+            category_icon="⏱",
+            footer_text="Current session delivered",
+        )
+        self.card_slot1 = self.card_session_watch_time
+        self.card_slot2 = self._create_card(
+            title="Box 2",
+            initial_value="—",
+            row=2,
+            col=1,
+            category_icon="📊",
+            footer_text="Awaiting assignment",
+        )
+        self.card_slot3 = self._create_card(
+            title="Box 3",
+            initial_value="—",
+            row=2,
+            col=2,
+            category_icon="📈",
+            footer_text="Awaiting assignment",
+        )
+        self.card_slot4 = self._create_card(
+            title="Box 4",
+            initial_value="—",
+            row=2,
+            col=3,
+            category_icon="🎯",
+            footer_text="Awaiting assignment",
+        )
+
+        # -------------------------------------------------------------
         # 3. Action Frame (Apple Control Center Card)
         # -------------------------------------------------------------
         self.action_frame = Frame(self, style="AppleCard.TFrame")
-        self.action_frame.grid(row=2, column=0, columnspan=4, padx=16, pady=(6, 16), sticky="nsew")
+        self.action_frame.grid(row=3, column=0, columnspan=4, padx=16, pady=(6, 16), sticky="nsew")
         self.action_frame.grid_columnconfigure(0, weight=1)
 
         # Section Header: CONTROL CENTER
@@ -330,7 +367,41 @@ class DashboardView(Frame):
         if "Status" in title:
             self._status_card_footer = f_lbl
 
+        # Store widget references for dynamic reconfiguration
+        v_lbl.card_frame = card
+        v_lbl.title_label = t_lbl
+        v_lbl.footer_label = f_lbl
+        v_lbl.category_icon = category_icon
+        v_lbl.card_title = title
+
         return v_lbl
+
+    def update_session_watch_time(self, formatted_duration: str) -> None:
+        """Current session watch time delivered."""
+        if hasattr(self, "card_session_watch_time"):
+            self.card_session_watch_time.configure(text=formatted_duration)
+
+    def set_card_content(
+        self,
+        card_lbl: Label,
+        value: Optional[str] = None,
+        title: Optional[str] = None,
+        footer: Optional[str] = None,
+        category_icon: Optional[str] = None,
+    ) -> None:
+        """Update any card's value, title, icon, or footer caption dynamically."""
+        if value is not None:
+            card_lbl.configure(text=str(value))
+        if title is not None or category_icon is not None:
+            icon = category_icon if category_icon is not None else getattr(card_lbl, "category_icon", "")
+            t = title if title is not None else getattr(card_lbl, "card_title", "")
+            card_lbl.card_title = t
+            card_lbl.category_icon = icon
+            hdr = f"{icon}  {t.upper()}" if icon else t.upper()
+            if hasattr(card_lbl, "title_label"):
+                card_lbl.title_label.configure(text=hdr)
+        if footer is not None and hasattr(card_lbl, "footer_label"):
+            card_lbl.footer_label.configure(text=footer)
 
     def update_stats(self, accounts_count: int, videos_count: int, status: str):
         self.card_accounts.configure(text=str(accounts_count))
