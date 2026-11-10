@@ -77,9 +77,24 @@ return {
 """
 
 
-def pick_skip_delay() -> float:
-    """Randomised skip window: skip an ad after 5-10 seconds randomly."""
-    return random.uniform(SKIP_AFTER_MIN, SKIP_AFTER_MAX)
+def get_randomized_max_ad_seconds(base_seconds: float) -> float:
+    """Calculate ±20% randomized ad watch duration.
+
+    For example, 10 seconds yields a random value between 8.0 and 12.0 seconds.
+    If base_seconds <= 0, returns 0.0 (unlimited ad watch).
+    """
+    if base_seconds <= 0:
+        return 0.0
+    low = base_seconds * 0.8
+    high = base_seconds * 1.2
+    return round(random.uniform(low, high), 2)
+
+
+def pick_skip_delay(max_ad_seconds: Optional[float] = None) -> float:
+    """Randomised skip window: ±20% around max_ad_seconds, or 5-10s fallback."""
+    if max_ad_seconds is not None and max_ad_seconds > 0:
+        return get_randomized_max_ad_seconds(max_ad_seconds)
+    return round(random.uniform(SKIP_AFTER_MIN, SKIP_AFTER_MAX), 2)
 
 
 @dataclass
@@ -90,6 +105,7 @@ class AdWatchState:
     break_ad_seconds: float = 0.0
     ad_breaks: int = 0
     _skip_target: Optional[float] = field(default=None, repr=False)
+    _base_max_ad_seconds: Optional[float] = field(default=None, repr=False)
 
     def tick(self, is_ad: bool, dt: float) -> None:
         """Advance the clock by ``dt`` seconds for the current player state."""
@@ -105,25 +121,40 @@ class AdWatchState:
             self.break_ad_seconds = 0.0
             self._skip_target = None
 
-    @property
-    def skip_target(self) -> float:
-        """Seconds this ad break must reach before a monetising skip (30-35s)."""
+    def get_skip_target(self, max_ad_seconds: Optional[float] = None) -> float:
+        """Seconds this ad break must reach before skipping (±20% randomized around max_ad_seconds)."""
         if self._skip_target is None:
-            self._skip_target = pick_skip_delay()
+            target_base = max_ad_seconds if (max_ad_seconds is not None and max_ad_seconds > 0) else self._base_max_ad_seconds
+            try:
+                self._skip_target = pick_skip_delay(target_base)
+            except TypeError:
+                self._skip_target = pick_skip_delay()
         return self._skip_target
 
-    def skip_reason(self, skip_ads: bool, max_ad_seconds: int) -> Optional[str]:
+    @property
+    def skip_target(self) -> float:
+        """Seconds this ad break must reach before a skip."""
+        if self._skip_target is None:
+            self._skip_target = self.get_skip_target()
+        return self._skip_target
+
+    def skip_reason(self, skip_ads: bool, max_ad_seconds: float) -> Optional[str]:
         """Return a human-readable reason to click Skip, or ``None`` to keep waiting.
 
-        ``skip_ads=True``  -> skip once this break passed the 30-35s window.
+        ``skip_ads=True``  -> skip once this break reaches the ±20% randomized
+        Max Ad Watch Time window (e.g. 8-12s for a 10s setting).
         ``skip_ads=False`` -> never skip before ``max_ad_seconds`` of cumulative
         ad time (0 disables the escape entirely).
         """
+        if max_ad_seconds > 0:
+            self._base_max_ad_seconds = float(max_ad_seconds)
+
         if skip_ads:
-            if self.break_ad_seconds >= self.skip_target:
+            target = self.get_skip_target(max_ad_seconds)
+            if self.break_ad_seconds >= target:
                 return (
                     f"monetisation skip window reached "
-                    f"({self.break_ad_seconds:.0f}s of ~{self.skip_target:.0f}s)"
+                    f"({self.break_ad_seconds:.0f}s of ~{target:.0f}s)"
                 )
             return None
 

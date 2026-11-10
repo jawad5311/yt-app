@@ -995,10 +995,11 @@ def watch_video(
             if now - last_ad_log >= 30:
                 last_ad_log = now
                 if skip_ads:
+                    skip_t = ad_state.get_skip_target(max_ad_seconds)
                     emit(
                         log_queue,
                         f"Ad playing: {ad_state.break_ad_seconds:.0f}s into this break "
-                        f"(skip at ~{ad_state.skip_target:.0f}s).",
+                        f"(skip at ~{skip_t:.0f}s).",
                     )
                 else:
                     emit(

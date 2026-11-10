@@ -589,12 +589,12 @@ class SettingsView(Frame):
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 15))
-        Label(scroll_ads, text="Max Ad Watch Time (seconds; 0 = unlimited):", font=Font(weight="bold")).pack(
+        Label(scroll_ads, text="Max Ad Watch Time (±20% randomized; seconds, 0 = unlimited):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
         Label(
             scroll_ads,
-            text="Maximum duration to watch an ad before attempting to skip it. 0 = watch entire ad.",
+            text="Duration in seconds to watch an ad before attempting to close or skip it (±20% randomized, e.g. 10s -> 8-12s). 0 = watch entire ad.",
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
