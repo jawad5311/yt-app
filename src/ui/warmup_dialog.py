@@ -1,11 +1,18 @@
 """Themed Apple HIG modal dialog for configuring account warm-up parameters and manual overrides."""
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Callable, Optional
 
-from ..automation.warmup_manager import WarmupAccountConfig, WarmupManager, get_warmup_gradient_color
+from ..automation.warmup_manager import (
+    WarmupAccountConfig,
+    WarmupManager,
+    format_hours,
+    format_number,
+    get_warmup_gradient_color,
+)
 from ..models.account import Account
 from .components import Button, CheckBox, Entry, Font, Frame, Label
 from .theme import get_font, get_theme_colors
@@ -137,23 +144,16 @@ class WarmupDialog(tk.Toplevel):
         # Total Target Hours
         tk.Label(form, text="Total Warm-Up Target Limit (Hours):", font=get_font(size=9, weight="bold"), bg=card_bg, fg=fg).pack(anchor="w", pady=(2, 2))
         self.target_entry = ttk.Entry(form, width=30)
-        self.target_entry.insert(0, str(self.cfg.target_hours))
+        self.target_entry.insert(0, format_number(self.cfg.target_hours))
         self.target_entry.pack(anchor="w", pady=(0, 8))
         self.target_entry.bind("<KeyRelease>", lambda e: self._on_values_changed())
 
         # Daily Increment Hours
         tk.Label(form, text="Per-Day Increment (Hours):", font=get_font(size=9, weight="bold"), bg=card_bg, fg=fg).pack(anchor="w", pady=(2, 2))
         self.inc_entry = ttk.Entry(form, width=30)
-        self.inc_entry.insert(0, str(self.cfg.daily_increment_hours))
+        self.inc_entry.insert(0, format_number(self.cfg.daily_increment_hours))
         self.inc_entry.pack(anchor="w", pady=(0, 8))
         self.inc_entry.bind("<KeyRelease>", lambda e: self._on_values_changed())
-
-        # Starting Day 1 Watch Time
-        tk.Label(form, text="Starting Watch Time - Day 1 (Hours):", font=get_font(size=9, weight="bold"), bg=card_bg, fg=fg).pack(anchor="w", pady=(2, 2))
-        self.start_entry = ttk.Entry(form, width=30)
-        self.start_entry.insert(0, str(self.cfg.start_hours))
-        self.start_entry.pack(anchor="w", pady=(0, 8))
-        self.start_entry.bind("<KeyRelease>", lambda e: self._on_values_changed())
 
         # Manual Override Action Buttons
         override_frame = tk.Frame(card, bg=card_bg)
@@ -240,7 +240,7 @@ class WarmupDialog(tk.Toplevel):
     def _center_window(self) -> None:
         self.update_idletasks()
         w = max(440, self.winfo_reqwidth())
-        h = max(460, self.winfo_reqheight())
+        h = max(410, self.winfo_reqheight())
         try:
             px = self.parent.winfo_rootx()
             py = self.parent.winfo_rooty()
@@ -256,12 +256,12 @@ class WarmupDialog(tk.Toplevel):
     def _on_values_changed(self) -> None:
         """Dynamically update status banner when input values change."""
         try:
-            th = float(self.target_entry.get().strip() or 15.0)
-            inc = float(self.inc_entry.get().strip() or 1.0)
-            st = float(self.start_entry.get().strip() or 1.0)
-            self.cfg.target_hours = max(0.5, th)
-            self.cfg.daily_increment_hours = max(0.1, inc)
-            self.cfg.start_hours = max(0.1, st)
+            th_str = self.target_entry.get().strip() or "15"
+            inc_str = self.inc_entry.get().strip() or "1"
+            th = max(0.5, float(th_str))
+            inc = max(0.1, float(inc_str))
+            self.cfg.target_hours = int(th) if th.is_integer() else th
+            self.cfg.daily_increment_hours = int(inc) if inc.is_integer() else inc
             self.cfg.enabled = self.enabled_var.get()
         except Exception:
             pass
@@ -278,18 +278,21 @@ class WarmupDialog(tk.Toplevel):
             self.status_detail_lbl.configure(text="Warm-up restriction is disabled. Account watches continuous loops normally.")
             return
 
+        tgt_str = format_hours(self.cfg.target_hours)
+        inc_str = format_hours(self.cfg.daily_increment_hours)
+
         if self.cfg.is_warmed_up:
             self.status_badge.configure(text="✅ Fully Warmed Up", bg=color, fg=text_fg)
             self.status_detail_lbl.configure(
-                text=f"Target daily capacity ({self.cfg.target_hours:.1f}h) achieved!\nAccount is fully mature."
+                text=f"Target daily capacity ({tgt_str}) achieved!\nAccount is fully mature."
             )
         else:
             self.status_badge.configure(text=f"🔥 {info['stage_label']}", bg=color, fg=text_fg)
-            daily_limit_h = info["daily_allowed_hours"]
-            watched_h = info["watched_today_hours"]
-            rem_h = max(0.0, daily_limit_h - watched_h)
+            daily_limit_str = format_hours(info["daily_allowed_hours"])
+            watched_str = format_hours(info["watched_today_hours"])
+            rem_str = format_hours(info["remaining_today_hours"])
             self.status_detail_lbl.configure(
-                text=f"Today's Quota: {watched_h:.1f}h / {daily_limit_h:.1f}h ({rem_h:.1f}h left)\nTarget Goal: {self.cfg.target_hours:.1f}h daily • Ladder: +{self.cfg.daily_increment_hours:.1f}h/day"
+                text=f"Today's Quota: {watched_str} / {daily_limit_str} ({rem_str} left)\nTarget Goal: {tgt_str} daily • Ladder: +{inc_str}/day"
             )
 
     def _mark_as_warmed_up(self) -> None:
@@ -307,16 +310,14 @@ class WarmupDialog(tk.Toplevel):
         try:
             th = float(self.target_entry.get().strip())
             inc = float(self.inc_entry.get().strip())
-            st = float(self.start_entry.get().strip())
-            if th <= 0 or inc <= 0 or st <= 0:
+            if th <= 0 or inc <= 0 or not math.isfinite(th) or not math.isfinite(inc):
                 raise ValueError
         except Exception:
             messagebox.showerror("Error", "Hours values must be positive numbers greater than 0.")
             return
 
-        self.cfg.target_hours = th
-        self.cfg.daily_increment_hours = inc
-        self.cfg.start_hours = st
+        self.cfg.target_hours = int(th) if th.is_integer() else th
+        self.cfg.daily_increment_hours = int(inc) if inc.is_integer() else inc
         self.cfg.enabled = self.enabled_var.get()
 
         self.warmup_mgr.save_account_config(self.cfg)

@@ -214,9 +214,8 @@ class ConfigManager:
             "RdpUsername": "",
             "RdpPassword": "",
             "WarmupAutoEnableNewAccounts": True,
-            "WarmupDefaultTargetHours": 15.0,
-            "WarmupDefaultDailyIncrementHours": 1.0,
-            "WarmupDefaultStartHours": 1.0,
+            "WarmupDefaultTargetHours": 15,
+            "WarmupDefaultDailyIncrementHours": 1,
         },
         "accounts": [],
         "videos": [],
@@ -642,9 +641,12 @@ class ConfigManager:
             if auto_enabled:
                 if "account_warmup" not in self.data or not isinstance(self.data["account_warmup"], dict):
                     self.data["account_warmup"] = {}
-                target_h = safe_float(settings_dict.get("WarmupDefaultTargetHours", 15.0), default=15.0)
-                inc_h = safe_float(settings_dict.get("WarmupDefaultDailyIncrementHours", 1.0), default=1.0)
-                start_h = safe_float(settings_dict.get("WarmupDefaultStartHours", 1.0), default=1.0)
+                raw_target = settings_dict.get("WarmupDefaultTargetHours", 15)
+                raw_inc = settings_dict.get("WarmupDefaultDailyIncrementHours", 1)
+                th = safe_float(raw_target, default=15.0)
+                target_h = int(th) if th.is_integer() else th
+                inc = safe_float(raw_inc, default=1.0)
+                inc_h = int(inc) if inc.is_integer() else inc
                 today_str = datetime.now().strftime("%Y-%m-%d")
                 for item in clean_list:
                     em = item["email"]
@@ -654,7 +656,6 @@ class ConfigManager:
                             "enabled": True,
                             "target_hours": target_h,
                             "daily_increment_hours": inc_h,
-                            "start_hours": start_h,
                             "current_day": 1,
                             "is_warmed_up": False,
                             "last_active_date": today_str,

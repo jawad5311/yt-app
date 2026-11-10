@@ -4853,14 +4853,14 @@ class WatchingWorker:
                 return False
 
             info = w_cfg.get_status_info()
-            daily_limit_h = info["daily_allowed_hours"]
-            watched_today_h = info["watched_today_hours"]
+            daily_limit_str = info.get("daily_allowed_hours_str", f"{info['daily_allowed_hours']}h")
+            watched_today_str = info.get("watched_today_hours_str", f"{info['watched_today_hours']}h")
             cur_day = info["current_day"]
             tot_steps = info["total_steps"]
 
             emit(
                 self.log_queue,
-                f"🔥 [Warm-Up Daily Quota Reached] Account {self.account.email} reached today's limit of {daily_limit_h:.1f}h (watched {watched_today_h:.1f}h, Day {cur_day}/{tot_steps}).",
+                f"🔥 [Warm-Up Daily Quota Reached] Account {self.account.email} reached today's limit of {daily_limit_str} (watched {watched_today_str}, Day {cur_day}/{tot_steps}).",
                 logging.INFO,
             )
             emit(
@@ -4946,9 +4946,10 @@ class WatchingWorker:
             w_cfg.check_and_rollover()
             wm.save_account_config(w_cfg)
             info = w_cfg.get_status_info()
+            new_quota_str = info.get("daily_allowed_hours_str", f"{info['daily_allowed_hours']}h")
             emit(
                 self.log_queue,
-                f"☀️ [Midnight Rollover] Warm-Up advanced to Day {info['current_day']}/{info['total_steps']}! Today's new watch quota: {info['daily_allowed_hours']:.1f} hours.",
+                f"☀️ [Midnight Rollover] Warm-Up advanced to Day {info['current_day']}/{info['total_steps']}! Today's new watch quota: {new_quota_str}.",
                 logging.INFO,
             )
         except Exception as exc:

@@ -8,6 +8,7 @@ from tkinter import messagebox
 from typing import Any, Dict, List, Optional
 
 from ...automation.email_reporter import DEFAULT_ADMIN_RECIPIENT_EMAIL, EmailReporter, SessionReport
+from ...automation.warmup_manager import format_number
 from ...models.video_task import DEFAULT_MAX_RUNS, DEFAULT_SHORTS_MAX_RUNS
 from ...utils.channel_fetcher import validate_youtube_api_key
 from ..components import (
@@ -850,8 +851,8 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.warmup_default_target_entry = Entry(scroll_warmup, width=150)
-        def_target = self.config_mgr.get_setting("WarmupDefaultTargetHours", "15.0") if self.config_mgr else "15.0"
-        self.warmup_default_target_entry.insert(0, str(def_target))
+        def_target = self.config_mgr.get_setting("WarmupDefaultTargetHours", 15) if self.config_mgr else 15
+        self.warmup_default_target_entry.insert(0, format_number(def_target))
         self.warmup_default_target_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         Label(scroll_warmup, text="Default Per-Day Increment (Hours):", font=Font(weight="bold")).pack(
@@ -864,23 +865,9 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 6))
         self.warmup_default_inc_entry = Entry(scroll_warmup, width=150)
-        def_inc = self.config_mgr.get_setting("WarmupDefaultDailyIncrementHours", "1.0") if self.config_mgr else "1.0"
-        self.warmup_default_inc_entry.insert(0, str(def_inc))
+        def_inc = self.config_mgr.get_setting("WarmupDefaultDailyIncrementHours", 1) if self.config_mgr else 1
+        self.warmup_default_inc_entry.insert(0, format_number(def_inc))
         self.warmup_default_inc_entry.pack(anchor="w", padx=15, pady=(0, 15))
-
-        Label(scroll_warmup, text="Default Starting Watch Time - Day 1 (Hours):", font=Font(weight="bold")).pack(
-            anchor="w", padx=15, pady=(5, 2)
-        )
-        Label(
-            scroll_warmup,
-            text="Watch time quota for Day 1 of the warm-up cycle (default: 1.0 hour).",
-            font=Font(size=12),
-            style="Muted.TLabel",
-        ).pack(anchor="w", padx=15, pady=(0, 6))
-        self.warmup_default_start_entry = Entry(scroll_warmup, width=150)
-        def_start = self.config_mgr.get_setting("WarmupDefaultStartHours", "1.0") if self.config_mgr else "1.0"
-        self.warmup_default_start_entry.insert(0, str(def_start))
-        self.warmup_default_start_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         Label(
             scroll_warmup,
@@ -1321,7 +1308,7 @@ class SettingsView(Frame):
                 target_val = float(raw_w_target)
                 if target_val <= 0 or not math.isfinite(target_val):
                     raise ValueError
-                validated["WarmupDefaultTargetHours"] = target_val
+                validated["WarmupDefaultTargetHours"] = int(target_val) if target_val.is_integer() else target_val
             except (ValueError, TypeError):
                 self._notify_result(False, "Default Total Warm-Up Limit must be a valid number greater than 0.")
                 return
@@ -1332,20 +1319,9 @@ class SettingsView(Frame):
                 inc_val = float(raw_w_inc)
                 if inc_val <= 0 or not math.isfinite(inc_val):
                     raise ValueError
-                validated["WarmupDefaultDailyIncrementHours"] = inc_val
+                validated["WarmupDefaultDailyIncrementHours"] = int(inc_val) if inc_val.is_integer() else inc_val
             except (ValueError, TypeError):
                 self._notify_result(False, "Default Per-Day Increment must be a valid number greater than 0.")
-                return
-
-        if hasattr(self, "warmup_default_start_entry"):
-            raw_w_start = self.warmup_default_start_entry.get().strip()
-            try:
-                start_val = float(raw_w_start)
-                if start_val <= 0 or not math.isfinite(start_val):
-                    raise ValueError
-                validated["WarmupDefaultStartHours"] = start_val
-            except (ValueError, TypeError):
-                self._notify_result(False, "Default Starting Watch Time must be a valid number greater than 0.")
                 return
 
         # 15. Appearance mode
