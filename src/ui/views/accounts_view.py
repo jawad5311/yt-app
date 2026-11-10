@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import List
 
+from ...automation.warmup_manager import WarmupManager
 from ...models.account import Account
 from ..components import Button, Font, Frame, InputDialog, Label, ScrollableFrame
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
+from ..warmup_dialog import WarmupDialog
 
 
 class AccountsView(Frame):
@@ -214,6 +217,8 @@ class AccountsView(Frame):
             ).pack(pady=30)
             return
 
+        warmup_mgr = WarmupManager(self.app_controller.config_mgr) if hasattr(self.app_controller, "config_mgr") else None
+
         for idx, acc in enumerate(self.accounts):
             row = Frame(self.scroll_frame, style="Card.TFrame")
             row.pack(fill="x", padx=5, pady=4)
@@ -223,7 +228,34 @@ class AccountsView(Frame):
                 text=f"👤  {idx + 1}.  {acc.email}",
                 font=Font(size=10, weight="bold"),
                 style="Card.TLabel",
-            ).pack(side="left", padx=15, pady=10)
+            ).pack(side="left", padx=(15, 8), pady=10)
+
+            # Warm-up gradient status pill badge
+            if warmup_mgr:
+                w_cfg = warmup_mgr.get_account_config(acc.email)
+                w_info = w_cfg.get_status_info()
+                badge_col = w_info["color"]
+                badge_fg = w_info["text_fg"]
+                if not w_cfg.enabled:
+                    badge_text = "Warm-Up Off"
+                    badge_col = "#4b5563"
+                    badge_fg = "#ffffff"
+                elif w_cfg.is_warmed_up:
+                    badge_text = "✅ Warmed Up"
+                else:
+                    badge_text = f"🔥 {w_info['stage_label']}"
+
+                badge = tk.Label(
+                    row,
+                    text=f" {badge_text} ",
+                    bg=badge_col,
+                    fg=badge_fg,
+                    font=("Segoe UI", 8, "bold"),
+                    padx=6,
+                    pady=2,
+                    relief="flat",
+                )
+                badge.pack(side="left", padx=(0, 10))
 
             rem_btn = Button(
                 row,
@@ -234,5 +266,23 @@ class AccountsView(Frame):
             rem_btn.configure(
                 command=with_button_feedback(rem_btn, "Removed", lambda i=idx: self.remove_account(i))
             )
-            rem_btn.pack(side="right", padx=10, pady=10)
+            rem_btn.pack(side="right", padx=(5, 10), pady=10)
             add_tooltip(rem_btn, f"Remove account {acc.email}.")
+
+            warmup_btn = Button(
+                row,
+                text="🔥 Warm Up",
+                width=85,
+                style="Primary.TButton",
+            )
+            warmup_btn.configure(
+                command=lambda a=acc: self.open_warmup_dialog(a)
+            )
+            warmup_btn.pack(side="right", padx=(5, 5), pady=10)
+            add_tooltip(warmup_btn, f"Configure warm-up settings and progression for {acc.email}.")
+
+    def open_warmup_dialog(self, account: Account) -> None:
+        """Open the Warm Up Settings pop-up window for an account."""
+        cfg_mgr = getattr(self.app_controller, "config_mgr", None)
+        mode = getattr(self.app_controller, "appearance_mode", "Dark")
+        WarmupDialog(self, account=account, config_mgr=cfg_mgr, on_save_callback=self.refresh_list, mode=mode)

@@ -24,7 +24,7 @@ class TestSettingsPlaybackVideoSeparation:
             pass
 
     def test_settings_tabs_exact_order(self, settings_view):
-        """Verify the exact tab order: General, Playback, Video, Shorts, Ads, Interactivity, Email & Reports, RDP/VPS."""
+        """Verify the exact tab order: General, Playback, Video, Shorts, Ads, Interactivity, Email & Reports, RDP/VPS, Warm Up."""
         tab_names = list(settings_view.tabview._segmented_button._buttons_dict.keys())
         expected_order = [
             "General",
@@ -35,6 +35,7 @@ class TestSettingsPlaybackVideoSeparation:
             "Interactivity",
             "Email & Reports",
             "RDP/VPS",
+            "Warm Up",
         ]
         assert tab_names == expected_order, f"Expected {expected_order}, got {tab_names}"
 

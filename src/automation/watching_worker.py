@@ -1823,6 +1823,14 @@ class WatchingWorker:
             )
             self.stats_store.record(outcome)
             self._emit_event(("channel_watch_time_updated",))
+
+            # Record warm-up watch seconds if account is active
+            if getattr(self, "account", None) and getattr(self.account, "email", None) and getattr(self, "config_mgr", None):
+                try:
+                    from .warmup_manager import WarmupManager
+                    WarmupManager(self.config_mgr).record_watch_time(self.account.email, watch_seconds)
+                except Exception as w_err:
+                    logging.debug(f"Could not record warm-up watch time: {w_err}")
         except Exception as exc:
             emit(self.log_queue, f"Could not record watching stats: {exc}", logging.WARNING)
 
@@ -4825,6 +4833,171 @@ class WatchingWorker:
         self._report_status("Browsing YouTube Home feed...", "info")
         return True
 
+    def _check_and_enter_warmup_sleep(self, session_watched_keys: Set[str]) -> bool:
+        """Check if active account reached its progressive warm-up daily quota.
+        If reached, closes browser, sends notification, and enters sleep mode until midnight rollover.
+        """
+        if not getattr(self, "account", None) or not getattr(self.account, "email", None):
+            return False
+        if not getattr(self, "config_mgr", None):
+            return False
+
+        try:
+            from .warmup_manager import WarmupManager
+            wm = WarmupManager(self.config_mgr)
+            w_cfg = wm.get_account_config(self.account.email)
+            if not w_cfg.enabled or w_cfg.is_warmed_up:
+                return False
+
+            if not w_cfg.is_daily_quota_reached():
+                return False
+
+            info = w_cfg.get_status_info()
+            daily_limit_h = info["daily_allowed_hours"]
+            watched_today_h = info["watched_today_hours"]
+            cur_day = info["current_day"]
+            tot_steps = info["total_steps"]
+
+            emit(
+                self.log_queue,
+                f"🔥 [Warm-Up Daily Quota Reached] Account {self.account.email} reached today's limit of {daily_limit_h:.1f}h (watched {watched_today_h:.1f}h, Day {cur_day}/{tot_steps}).",
+                logging.INFO,
+            )
+            emit(
+                self.log_queue,
+                "Entering sleep mode until midnight (00:00). Browser closed to preserve profile resources.",
+                logging.INFO,
+            )
+            return self._execute_warmup_sleep_cycle(w_cfg, session_watched_keys)
+        except Exception as exc:
+            logging.debug(f"Error checking warm-up quota: {exc}")
+            return False
+
+    def _execute_warmup_sleep_cycle(self, w_cfg: Any, session_watched_keys: Set[str]) -> bool:
+        """Execute sleep mode until midnight when warm-up daily quota is reached."""
+        if self.stop_event.is_set():
+            return False
+
+        from .warmup_manager import calculate_seconds_until_midnight, WarmupManager
+        sleep_seconds = calculate_seconds_until_midnight()
+        wake_up_time = datetime.now() + timedelta(seconds=sleep_seconds)
+        sleep_hours = sleep_seconds / 3600.0
+        wake_str = wake_up_time.strftime("%I:%M %p")
+        self._report_status(f"🔥 Warm-Up Daily Limit Reached: Sleeping until midnight ({wake_str})", "info")
+
+        # 1. Close main visible YouTube browser tab
+        if self.driver:
+            try:
+                emit(self.log_queue, "Closing YouTube browser session during warm-up sleep...", logging.INFO)
+                close_driver(self.driver, log_queue=self.log_queue)
+            except Exception as e:
+                emit(self.log_queue, f"Notice while closing browser before warm-up sleep: {e}", logging.DEBUG)
+            self.driver = None
+
+        # 2. Deliver session sleep notification email
+        try:
+            emit(
+                self.log_queue,
+                f"Sending Warm-Up sleep notification email under thread '{self.session_thread_subject}'...",
+                logging.INFO,
+            )
+            self._send_session_report(
+                status="Warm-Up Daily Limit Reached",
+                is_sleep_notification=True,
+                sleep_mode_type="warmup",
+                sleep_cycle_number=w_cfg.current_day,
+                sleep_duration_hours=sleep_hours,
+                wake_up_time=wake_up_time,
+            )
+            self.cycle_report_dispatched = True
+        except Exception as e:
+            emit(self.log_queue, f"Error sending warm-up sleep notification email: {e}", logging.WARNING)
+
+        if getattr(self, "reporting_driver", None):
+            try:
+                close_driver(self.reporting_driver, log_queue=self.log_queue)
+            except Exception:
+                pass
+            self.reporting_driver = None
+
+        # 3. Enter interruptible sleep loop until wake_up_time
+        self.is_sleeping = True
+        emit(
+            self.log_queue,
+            f"Bot is now sleeping until midnight ({wake_str}, ~{sleep_hours:.1f} hours). It will wake up after midnight with the next warm-up increment.",
+            logging.INFO,
+        )
+
+        while not self.stop_event.is_set():
+            if datetime.now() >= wake_up_time:
+                break
+            time.sleep(0.5)
+
+        self.is_sleeping = False
+        if self.stop_event.is_set():
+            emit(self.log_queue, "Warm-up sleep interrupted by user stop.", logging.INFO)
+            self._report_status("Stopped by user", "info")
+            return False
+
+        # 4. Midnight passed! Roll over to next day
+        try:
+            wm = WarmupManager(self.config_mgr)
+            w_cfg = wm.get_account_config(self.account.email)
+            w_cfg.check_and_rollover()
+            wm.save_account_config(w_cfg)
+            info = w_cfg.get_status_info()
+            emit(
+                self.log_queue,
+                f"☀️ [Midnight Rollover] Warm-Up advanced to Day {info['current_day']}/{info['total_steps']}! Today's new watch quota: {info['daily_allowed_hours']:.1f} hours.",
+                logging.INFO,
+            )
+        except Exception as exc:
+            logging.debug(f"Error rolling over warm-up date: {exc}")
+
+        # 5. Send wake-up / resumption notification
+        try:
+            self._send_session_report(
+                status="Warm-Up Session Resumed",
+                is_sleep_notification=True,
+                sleep_mode_type="warmup_resume",
+                sleep_cycle_number=w_cfg.current_day,
+                sleep_duration_hours=sleep_hours,
+                wake_up_time=wake_up_time,
+            )
+        except Exception as e:
+            emit(self.log_queue, f"Error sending warm-up resume email: {e}", logging.WARNING)
+
+        # 6. Reset session tracking and restart browser
+        session_watched_keys.clear()
+        self.cycle_report_dispatched = False
+        self.target_attempts = 0
+        self.watched_count = 0
+
+        if hasattr(self, "channel_tracker") and self.channel_tracker:
+            self.channel_tracker = SessionChannelTracker(
+                config_mgr=self.config_mgr,
+                stats_store=self.stats_store,
+                channels=self.channels,
+                emit_event=self._emit_event,
+                log_queue=self.log_queue,
+            )
+
+        known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
+        known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
+        self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
+        self.has_started_browsing = True
+
+        if self.stop_event.is_set():
+            return False
+
+        login_ok = self._ensure_signed_in_and_wait()
+        if not login_ok and not self.stop_event.is_set():
+            emit(self.log_queue, f"Notice: Google sign-in verification check after warm-up rollover for {self.account.email}.", logging.WARNING)
+
+        emit(self.log_queue, "Browser relaunched successfully. Resuming warm-up browsing...", logging.INFO)
+        self._report_status("Browsing YouTube Home feed...", "info")
+        return True
+
     def _enter_no_target_sleep_cycle(self, session_watched_keys: Set[str]) -> bool:
         """Handle sleep & wake-up cycle when no target videos or shorts are found.
 
@@ -5176,6 +5349,15 @@ class WatchingWorker:
 
                 # Check if local system time has reached scheduled Long Sleep / Night Mode
                 if self._check_and_enter_night_sleep(session_watched_keys=session_watched_keys):
+                    cycle_long_vids_watched = 0
+                    suggested_miss_count = 0
+                    consecutive_target_watched = 0
+                    channel_buffer_counts.clear()
+                    target_attempts = 0
+                    continue
+
+                # Check if active account reached its progressive warm-up daily quota
+                if self._check_and_enter_warmup_sleep(session_watched_keys=session_watched_keys):
                     cycle_long_vids_watched = 0
                     suggested_miss_count = 0
                     consecutive_target_watched = 0

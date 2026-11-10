@@ -32,7 +32,7 @@ def test_rdp_vps_tab_presence_and_order(settings_view):
     assert "RDP/VPS" in settings_view.tabview._tab_dict
     tab_names = list(settings_view.tabview._segmented_button._buttons_dict.keys())
     assert "RDP/VPS" in tab_names
-    assert tab_names[-1] == "RDP/VPS"
+    assert tab_names.index("RDP/VPS") == tab_names.index("Warm Up") - 1
 
 
 def test_rdp_vps_entries_and_explanatory_label(settings_view):

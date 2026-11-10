@@ -213,10 +213,15 @@ class ConfigManager:
             "SenderEmail": "",
             "RdpUsername": "",
             "RdpPassword": "",
+            "WarmupAutoEnableNewAccounts": True,
+            "WarmupDefaultTargetHours": 15.0,
+            "WarmupDefaultDailyIncrementHours": 1.0,
+            "WarmupDefaultStartHours": 1.0,
         },
         "accounts": [],
         "videos": [],
         "channels": [],
+        "account_warmup": {},
     }
 
     def __init__(self, config_file: Optional[Path] = None):
@@ -224,7 +229,7 @@ class ConfigManager:
             config_file = get_project_root() / "settings.json"
         self.config_file = Path(config_file)
         self.credentials_file = self.config_file.with_name("credentials.json")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.data: Dict[str, Any] = {}
         self.is_settings_corrupt: bool = False
         self.settings_load_error: Optional[str] = None
@@ -621,9 +626,72 @@ class ConfigManager:
                     seen[norm_email] = pwd
                     clean_list.append({"email": norm_email, "password": pwd})
             self._save_credentials_unlocked(clean_list)
+            save_needed = False
             if self.data.get("accounts"):
                 self.data["accounts"] = []
+                save_needed = True
+
+            # Auto-enable warm-up for new accounts if configured
+            settings_dict = self.data.get("settings", {})
+            auto_val = settings_dict.get("WarmupAutoEnableNewAccounts", True)
+            if isinstance(auto_val, bool):
+                auto_enabled = auto_val
+            else:
+                auto_enabled = str(auto_val).strip().lower() in ("true", "1", "yes", "on")
+
+            if auto_enabled:
+                if "account_warmup" not in self.data or not isinstance(self.data["account_warmup"], dict):
+                    self.data["account_warmup"] = {}
+                target_h = safe_float(settings_dict.get("WarmupDefaultTargetHours", 15.0), default=15.0)
+                inc_h = safe_float(settings_dict.get("WarmupDefaultDailyIncrementHours", 1.0), default=1.0)
+                start_h = safe_float(settings_dict.get("WarmupDefaultStartHours", 1.0), default=1.0)
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                for item in clean_list:
+                    em = item["email"]
+                    if em not in self.data["account_warmup"]:
+                        self.data["account_warmup"][em] = {
+                            "email": em,
+                            "enabled": True,
+                            "target_hours": target_h,
+                            "daily_increment_hours": inc_h,
+                            "start_hours": start_h,
+                            "current_day": 1,
+                            "is_warmed_up": False,
+                            "last_active_date": today_str,
+                            "watched_today_seconds": 0.0,
+                            "total_watched_seconds": 0.0,
+                        }
+                        save_needed = True
+
+            if save_needed:
                 self._save_unlocked()
+
+    def get_account_warmup(self, email: str) -> Optional[Dict[str, Any]]:
+        """Return warm-up settings dictionary for the normalized email, or None."""
+        norm_email = normalize_account_id(email)
+        with self._lock:
+            warmup_store = self.data.get("account_warmup", {})
+            if isinstance(warmup_store, dict):
+                val = warmup_store.get(norm_email)
+                return copy.deepcopy(val) if val else None
+            return None
+
+    def set_account_warmup(self, email: str, warmup_data: Dict[str, Any]) -> None:
+        """Persist warm-up configuration for an account into settings.json."""
+        norm_email = normalize_account_id(email)
+        with self._lock:
+            if "account_warmup" not in self.data or not isinstance(self.data["account_warmup"], dict):
+                self.data["account_warmup"] = {}
+            clean_data = copy.deepcopy(warmup_data)
+            clean_data["email"] = norm_email
+            self.data["account_warmup"][norm_email] = clean_data
+            self._save_unlocked()
+
+    def get_all_account_warmup(self) -> Dict[str, Dict[str, Any]]:
+        """Return all stored account warm-up profiles."""
+        with self._lock:
+            warmup_store = self.data.get("account_warmup", {})
+            return copy.deepcopy(warmup_store) if isinstance(warmup_store, dict) else {}
 
     def _save_credentials_unlocked(self, accounts_list: List[Dict[str, str]]) -> None:
         self.credentials_file.parent.mkdir(parents=True, exist_ok=True)

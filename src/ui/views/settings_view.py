@@ -137,6 +137,7 @@ class SettingsView(Frame):
         tab_interactivity = self.tabview.add("Interactivity")
         tab_email = self.tabview.add("Email & Reports")
         tab_rdp = self.tabview.add("RDP/VPS")
+        tab_warmup = self.tabview.add("Warm Up")
 
         # Compatibility aliases for code checking old tab names
         self.tabview._tab_dict["Playback & Video"] = tab_playback
@@ -817,6 +818,80 @@ class SettingsView(Frame):
         self.rdp_info_label.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
+        # Tab 9: Warm Up
+        # ---------------------------------------------------------
+        scroll_warmup = SmoothScrollableFrame(tab_warmup)
+        scroll_warmup.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.warmup_auto_enable_switch = Switch(
+            scroll_warmup,
+            text="Automatically enable Warm-Up for newly added accounts",
+        )
+        auto_enabled = self.config_mgr.get_bool("WarmupAutoEnableNewAccounts", True) if self.config_mgr else True
+        if auto_enabled:
+            self.warmup_auto_enable_switch.select()
+        else:
+            self.warmup_auto_enable_switch.deselect()
+        self.warmup_auto_enable_switch.pack(anchor="w", padx=15, pady=(10, 2))
+        Label(
+            scroll_warmup,
+            text="When enabled, any new Google account added will automatically be enrolled in progressive warm-up.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_warmup, text="Default Total Warm-Up Target Limit (Hours):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_warmup,
+            text="Daily watch time capacity target where an account is officially considered fully mature and warmed up.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.warmup_default_target_entry = Entry(scroll_warmup, width=150)
+        def_target = self.config_mgr.get_setting("WarmupDefaultTargetHours", "15.0") if self.config_mgr else "15.0"
+        self.warmup_default_target_entry.insert(0, str(def_target))
+        self.warmup_default_target_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_warmup, text="Default Per-Day Increment (Hours):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_warmup,
+            text="Hours added to the daily allowed watch time each calendar day (e.g. Day 1 = 1h, Day 2 = 2h, etc.).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.warmup_default_inc_entry = Entry(scroll_warmup, width=150)
+        def_inc = self.config_mgr.get_setting("WarmupDefaultDailyIncrementHours", "1.0") if self.config_mgr else "1.0"
+        self.warmup_default_inc_entry.insert(0, str(def_inc))
+        self.warmup_default_inc_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(scroll_warmup, text="Default Starting Watch Time - Day 1 (Hours):", font=Font(weight="bold")).pack(
+            anchor="w", padx=15, pady=(5, 2)
+        )
+        Label(
+            scroll_warmup,
+            text="Watch time quota for Day 1 of the warm-up cycle (default: 1.0 hour).",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 6))
+        self.warmup_default_start_entry = Entry(scroll_warmup, width=150)
+        def_start = self.config_mgr.get_setting("WarmupDefaultStartHours", "1.0") if self.config_mgr else "1.0"
+        self.warmup_default_start_entry.insert(0, str(def_start))
+        self.warmup_default_start_entry.pack(anchor="w", padx=15, pady=(0, 15))
+
+        Label(
+            scroll_warmup,
+            text="🌙 Daily Quota & Sleep Mode:\nWhen an account reaches its daily allowed warm-up watch quota, the app automatically closes the browser and enters sleep mode until midnight (00:00). After midnight, a new daily window begins with the incremented watch quota.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+            wraplength=650,
+            justify="left",
+        ).pack(anchor="w", padx=15, pady=(5, 15))
+
+        # ---------------------------------------------------------
         # Footer Action Bar: Save Button
         # ---------------------------------------------------------
         self.action_bar = Frame(self, style="Transparent.TFrame")
@@ -1236,7 +1311,44 @@ class SettingsView(Frame):
         if hasattr(self, "rdp_password_entry"):
             validated["RdpPassword"] = self.rdp_password_entry.get().strip()
 
-        # 14. Appearance mode
+        # 14. Warm-Up global default settings
+        if hasattr(self, "warmup_auto_enable_switch"):
+            validated["WarmupAutoEnableNewAccounts"] = bool(self.warmup_auto_enable_switch.get())
+
+        if hasattr(self, "warmup_default_target_entry"):
+            raw_w_target = self.warmup_default_target_entry.get().strip()
+            try:
+                target_val = float(raw_w_target)
+                if target_val <= 0 or not math.isfinite(target_val):
+                    raise ValueError
+                validated["WarmupDefaultTargetHours"] = target_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Total Warm-Up Limit must be a valid number greater than 0.")
+                return
+
+        if hasattr(self, "warmup_default_inc_entry"):
+            raw_w_inc = self.warmup_default_inc_entry.get().strip()
+            try:
+                inc_val = float(raw_w_inc)
+                if inc_val <= 0 or not math.isfinite(inc_val):
+                    raise ValueError
+                validated["WarmupDefaultDailyIncrementHours"] = inc_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Per-Day Increment must be a valid number greater than 0.")
+                return
+
+        if hasattr(self, "warmup_default_start_entry"):
+            raw_w_start = self.warmup_default_start_entry.get().strip()
+            try:
+                start_val = float(raw_w_start)
+                if start_val <= 0 or not math.isfinite(start_val):
+                    raise ValueError
+                validated["WarmupDefaultStartHours"] = start_val
+            except (ValueError, TypeError):
+                self._notify_result(False, "Default Starting Watch Time must be a valid number greater than 0.")
+                return
+
+        # 15. Appearance mode
         selected_appearance = self.appearance_menu.get()
         if selected_appearance not in APPEARANCE_OPTIONS:
             self._notify_result(False, f"Appearance Mode must be one of: {', '.join(APPEARANCE_OPTIONS)}.")

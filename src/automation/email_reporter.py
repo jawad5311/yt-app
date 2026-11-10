@@ -112,6 +112,12 @@ class SessionReport:
             title_header = "      ENTERTAINMENT HUB - LONG SLEEP / NIGHT NOTIFICATION      "
         elif self.sleep_mode_type == "night_resume":
             title_header = "    ENTERTAINMENT HUB - NIGHT MODE COMPLETED • MORNING RESUMPTION    "
+        elif self.sleep_mode_type == "warmup":
+            c_num = f" (DAY #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            title_header = f"   ENTERTAINMENT HUB - WARM-UP DAILY LIMIT REACHED • SLEEP{c_num}   "
+        elif self.sleep_mode_type == "warmup_resume":
+            c_num = f" (DAY #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            title_header = f"   ENTERTAINMENT HUB - WARM-UP RESUMED • NEW DAY UNLOCKED{c_num}   "
         elif self.sleep_mode_type == "nap_resume":
             c_num = f" (NAP CYCLE #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
             title_header = f"   ENTERTAINMENT HUB - NAP FINISHED • RESUMING SESSION{c_num}   "
@@ -149,6 +155,27 @@ class SessionReport:
                 f"Notice:               Nighttime sleep window has concluded. The bot has successfully",
                 f"                      woken up, refreshed session stats, verified account sign-in,",
                 f"                      and resumed daytime browsing for targeted channels.",
+            ])
+        elif self.sleep_mode_type == "warmup":
+            dur_str = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "N/A"
+            wake_str = self.wake_up_time.strftime("%Y-%m-%d %H:%M:%S") if self.wake_up_time else "N/A"
+            cycle_str = f"Day #{self.sleep_cycle_number}" if self.sleep_cycle_number else "N/A"
+            lines.extend([
+                f"Sleep Mode:           Account Warm-Up Daily Limit Reached (Sleeping until Midnight)",
+                f"Warm-Up Stage:        {cycle_str}",
+                f"Sleep Duration:       {dur_str}",
+                f"Estimated Wake-up:    {wake_str}",
+                f"Notice:               The account reached its allowed warm-up watch quota for today.",
+                f"                      Closed YouTube browser tab to preserve profile resources.",
+                f"                      The bot will wake up automatically after midnight to begin the next day.",
+            ])
+        elif self.sleep_mode_type == "warmup_resume":
+            cycle_str = f"Day #{self.sleep_cycle_number}" if self.sleep_cycle_number else "N/A"
+            lines.extend([
+                f"Sleep Mode:           Warm-Up Midnight Rollover • New Day Resumed",
+                f"Warm-Up Stage:        {cycle_str}",
+                f"Notice:               Midnight has passed! The account has advanced to the next warm-up",
+                f"                      ladder step with an incremented daily watch quota. Browsing resumed.",
             ])
         elif self.sleep_mode_type == "nap_resume":
             cycle_str = f"#{self.sleep_cycle_number}" if self.sleep_cycle_number else "N/A"
@@ -301,8 +328,10 @@ class SessionReport:
 
         is_night_sleep = (self.sleep_mode_type == "night")
         is_night_resume = (self.sleep_mode_type == "night_resume")
+        is_warmup_sleep = (self.sleep_mode_type == "warmup")
+        is_warmup_resume = (self.sleep_mode_type == "warmup_resume")
         is_nap_resume = (self.sleep_mode_type == "nap_resume")
-        is_nap_sleep = (self.sleep_mode_type == "nap" or (self.sleep_cycle_number is not None and not is_night_sleep and not is_night_resume and not is_nap_resume))
+        is_nap_sleep = (self.sleep_mode_type == "nap" or (self.sleep_cycle_number is not None and not is_night_sleep and not is_night_resume and not is_warmup_sleep and not is_warmup_resume and not is_nap_resume))
 
         if is_night_sleep:
             status_color = "#6366f1"
@@ -318,6 +347,22 @@ class SessionReport:
             kpi_label_1 = "Combined Entertainment Time (Fresh Pass)"
             kpi_label_2 = "Session Status"
             kpi_status_text = "☀️ Morning Wake-up: Daytime Browsing Resumed"
+        elif is_warmup_sleep:
+            status_color = "#ea580c"
+            cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            report_title = f"Warm-Up Daily Quota Reached • Sleep Mode{cycle_desc}"
+            activity_header = f"Warm-Up Cycle{cycle_desc} • Sleeping until Midnight"
+            kpi_label_1 = "Watch Time Completed Today"
+            kpi_label_2 = "Warm-Up Status"
+            kpi_status_text = "🔥 Daily Quota Reached: Sleeping until Midnight"
+        elif is_warmup_resume:
+            status_color = "#059669"
+            cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            report_title = f"Warm-Up Resumed • Midnight Rollover{cycle_desc}"
+            activity_header = f"Warm-Up Day #{self.sleep_cycle_number} • New Quota Unlocked" if self.sleep_cycle_number else "Warm-Up New Day • Browsing Resumed"
+            kpi_label_1 = "Combined Entertainment Time (Fresh Pass)"
+            kpi_label_2 = "Session Status"
+            kpi_status_text = "☀️ Midnight Passed: New Warm-Up Window Active"
         elif is_nap_resume:
             status_color = "#059669"
             cycle_desc = f" (Nap Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
@@ -343,7 +388,33 @@ class SessionReport:
             kpi_status_text = f"Status: {html.escape(self.status)}"
 
         sleep_banner = ""
-        if is_night_resume:
+        if is_warmup_sleep:
+            cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            wake_str = self.wake_up_time.strftime("%d %b %Y - %I:%M %p") if self.wake_up_time else "midnight"
+            dur_txt = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "until midnight"
+            sleep_banner = f"""
+            <div style="background: linear-gradient(135deg, #431407 0%, #7c2d12 100%); border: 1px solid #9a3412; border-left: 6px solid #f97316; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="font-size: 16px; font-weight: 700; color: #ffedd5; margin-bottom: 5px;">🔥 Account Warm-Up Quota Reached — Sleeping until Midnight{cycle_desc}</div>
+                <div style="font-size: 13px; color: #fed7aa; line-height: 1.5;">
+                    The account has successfully fulfilled its configured warm-up watch quota for today.<br>
+                    The YouTube browser tab has been closed to save resources. The bot is sleeping for <strong>{dur_txt}</strong> and will automatically wake up after midnight at approximately <strong>{wake_str}</strong> to unlock the next warm-up increment.<br>
+                    <span style="font-size: 12px; color: #fdba74; margin-top: 4px; display: inline-block;">Below are the stats of media watched today prior to sleeping.</span>
+                </div>
+            </div>
+            """
+        elif is_warmup_resume:
+            cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            sleep_banner = f"""
+            <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 5px solid #16a34a; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="font-size: 15px; font-weight: 700; color: #166534; margin-bottom: 4px;">⚡ Warm-Up Resumed — Midnight Rollover Completed{cycle_desc}</div>
+                <div style="font-size: 13px; color: #15803d; line-height: 1.5;">
+                    Midnight has passed! The account has advanced to the next warm-up ladder day with an increased daily watch quota.<br>
+                    The browser has been relaunched with fresh stats and browsing is active.<br>
+                    <span style="font-size: 12px; color: #16a34a; margin-top: 4px; display: inline-block;">Warm-up progression continues.</span>
+                </div>
+            </div>
+            """
+        elif is_night_resume:
             sleep_banner = f"""
             <div style="background: linear-gradient(135deg, #064e3b 0%, #065f46 100%); border: 1px solid #047857; border-left: 6px solid #34d399; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
                 <div style="font-size: 16px; font-weight: 700; color: #ecfdf5; margin-bottom: 5px;">☀️ Morning Wake-Up — Long Sleep / Night Mode Completed</div>
