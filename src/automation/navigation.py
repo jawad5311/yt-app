@@ -464,6 +464,7 @@ def find_and_click_search_result(
     target_channels: Sequence[str] = (),
     max_scrolls: int = 3,
     log_queue: Optional[queue.Queue] = None,
+    allow_channel_fallback: bool = False,
 ) -> Optional[Dict[str, str]]:
     """Scan YouTube search results for a video matching task (by ID or title) or target_channels.
 
@@ -482,10 +483,10 @@ def find_and_click_search_result(
     emit(log_queue, "Scanning search results for matching video...")
 
     SCAN_RESULTS_JS = """
-    var videoRenderers = Array.from(document.querySelectorAll('ytd-video-renderer'));
+    var videoRenderers = Array.from(document.querySelectorAll('ytd-video-renderer, ytd-grid-video-renderer, yt-lockup-view-model'));
     return videoRenderers.map(function(r) {
-        var titleElem = r.querySelector('a#video-title, a#video-title-link');
-        var channelElem = r.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"]');
+        var titleElem = r.querySelector('a#video-title, a#video-title-link, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a');
+        var channelElem = r.querySelector('ytd-channel-name a, #channel-name a, a.yt-formatted-string[href*="/@"], a.yt-formatted-string[href*="/channel/"], a[href*="/@"], a[href*="/channel/"], [class*="channel"] a');
         return {
             title: titleElem ? (titleElem.getAttribute('title') || titleElem.textContent || '').trim() : '',
             url: titleElem ? (titleElem.href || '') : '',
@@ -532,8 +533,8 @@ def find_and_click_search_result(
                 if matched_idx >= 0:
                     break
 
-        # Priority 3: Match by target channel name or channel handle (only when searching directly for channel)
-        if matched_idx < 0 and target_channels_clean and not candidate_titles and not target_video_id:
+        # Priority 3: Match by target channel name or channel handle (when searching directly for channel or fallback allowed)
+        if matched_idx < 0 and target_channels_clean and (not candidate_titles or allow_channel_fallback) and (not target_video_id or allow_channel_fallback):
             for idx, item in enumerate(results_data):
                 ch_name = item.get("channel", "").lower()
                 ch_href = item.get("channelHref", "").lower()
@@ -547,14 +548,24 @@ def find_and_click_search_result(
 
         if matched_idx >= 0:
             matched_item = results_data[matched_idx]
+            if matched_item.get("url"):
+                from ..utils.helpers import clean_youtube_url
+                matched_item["url"] = clean_youtube_url(matched_item["url"])
             emit(log_queue, f"Matched search result #{matched_idx + 1} ({match_reason}): '{matched_item.get('title')}'")
 
             CLICK_RESULT_JS = """
-            var renderers = document.querySelectorAll('ytd-video-renderer');
+            var renderers = document.querySelectorAll('ytd-video-renderer, ytd-grid-video-renderer, yt-lockup-view-model');
             var target = renderers[arguments[0]];
             if (!target) return false;
-            var link = target.querySelector('a#video-title, a#video-title-link, a#thumbnail');
+            var link = target.querySelector('a#video-title, a#video-title-link, a#thumbnail, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a');
             if (link) {
+                try {
+                    var u = new URL(link.href);
+                    if (u.searchParams.has('t')) {
+                        u.searchParams.delete('t');
+                        link.href = u.toString();
+                    }
+                } catch(e) {}
                 link.scrollIntoView({behavior: 'smooth', block: 'center'});
                 return true;
             }
@@ -567,11 +578,18 @@ def find_and_click_search_result(
             human_like_delay(1.5, 2.5)
 
             CLICK_EXEC_JS = """
-            var renderers = document.querySelectorAll('ytd-video-renderer');
+            var renderers = document.querySelectorAll('ytd-video-renderer, ytd-grid-video-renderer, yt-lockup-view-model');
             var target = renderers[arguments[0]];
             if (!target) return false;
-            var link = target.querySelector('a#video-title, a#video-title-link, a#thumbnail');
+            var link = target.querySelector('a#video-title, a#video-title-link, a#thumbnail, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a');
             if (link) {
+                try {
+                    var u = new URL(link.href);
+                    if (u.searchParams.has('t')) {
+                        u.searchParams.delete('t');
+                        link.href = u.toString();
+                    }
+                } catch(e) {}
                 link.click();
                 return true;
             }

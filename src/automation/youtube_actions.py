@@ -729,6 +729,8 @@ def watch_video(
     play_attempts = 0
     last_play_attempt = 0.0
     zero_progress_seconds = 0.0
+    consecutive_stalls = 0
+    has_refreshed_for_stall = False
     # Lifetime counter for this call: main-video playback seconds only.
     watched_seconds = 0.0
     last_known_duration = 0.0
@@ -969,8 +971,33 @@ def watch_video(
                         emit(log_queue, f"Watching progress unchanged at {curr_clock} — ad time not changing. Pressing play button to resume.")
                         ensure_video_playing(driver, log_queue=log_queue)
                 else:
-                    emit(log_queue, f"Watching progress stalled at {curr_clock} (video is not playing or paused). Pressing play button.")
-                    ensure_video_playing(driver, log_queue=log_queue)
+                    consecutive_stalls += 1
+                    if consecutive_stalls < 3:
+                        emit(log_queue, f"Watching progress stalled at {curr_clock} (video is not playing or paused). Pressing play button.")
+                        ensure_video_playing(driver, log_queue=log_queue)
+                    elif not has_refreshed_for_stall:
+                        has_refreshed_for_stall = True
+                        consecutive_stalls = 0
+                        emit(log_queue, f"Watching progress stalled at {curr_clock} after multiple attempts. Refreshing page to recover playback...", logging.WARNING)
+                        try:
+                            driver.refresh()
+                        except Exception:
+                            pass
+                        time.sleep(3.0)
+                        try:
+                            from .navigation import dismiss_youtube_dialogs
+                            dismiss_youtube_dialogs(driver, log_queue=log_queue)
+                        except Exception:
+                            pass
+                        ensure_video_playing(driver, log_queue=log_queue)
+                        previous_progress_time = None
+                        playback_meter.reset()
+                        continue
+                    else:
+                        emit(log_queue, f"Watching progress still stalled at {curr_clock} after page refresh. Aborting stuck video and returning to YouTube Home.", logging.WARNING)
+                        return _result(False, "stalled_unresponsive", interrupted=True)
+            else:
+                consecutive_stalls = 0
 
             previous_progress_time = curr_time
 

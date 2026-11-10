@@ -1571,30 +1571,42 @@ class EmailReporter:
         thread_url: Optional[str] = None,
         thread_info: Optional[Dict[str, Any]] = None,
         html_content: Optional[str] = None,
+        headless: Optional[bool] = None,
     ) -> bool:
-        """Launch headless Chrome with account profile, send email via Gmail web, and close."""
+        """Launch Chrome with account profile, send email via Gmail web, and close.
+
+        By default, runs headless for initial start notifications, and headed (visible)
+        for session reports, sleep notifications, and alerts so Google login sessions persist.
+        """
         from .driver import close_driver, setup_driver
 
         if not account or not getattr(account, "email", None):
             if log_queue:
-                emit(log_queue, "Headless Gmail delivery failed: no account specified.", logging.WARNING)
+                emit(log_queue, "Browser Gmail delivery failed: no account specified.", logging.WARNING)
             return False
 
         if not recipient_email or "@" not in recipient_email:
             if log_queue:
-                emit(log_queue, f"Headless Gmail delivery skipped: invalid recipient '{recipient_email}'.", logging.WARNING)
+                emit(log_queue, f"Browser Gmail delivery skipped: invalid recipient '{recipient_email}'.", logging.WARNING)
             return False
+
+        # Determine browser mode: headless only for initial email, headed for reports/notifications
+        if headless is not None:
+            use_headless = bool(headless)
+        else:
+            use_headless = True if ("start" in email_description.lower()) else False
 
         if log_queue:
             log_recipient = recipient_email if recipient_email.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else 'recipient'
-            emit(log_queue, f"Opening headless browser for account '{account.email}' to send {email_description} to '{log_recipient}'...")
+            mode_desc = "headless browser" if use_headless else "browser"
+            emit(log_queue, f"Opening {mode_desc} for account '{account.email}' to send {email_description} to '{log_recipient}'...")
 
         driver = None
         try:
             driver = setup_driver(
                 account=account,
                 log_queue=log_queue,
-                headless=True,
+                headless=use_headless,
             )
             target_thread = thread_url or cls.last_thread_url
             if target_thread or ("start" not in email_description.lower() and subject):
@@ -2030,10 +2042,11 @@ class EmailReporter:
                 if log_queue:
                     emit(log_queue, "Supplied browser session is disconnected or inactive. Falling back to fresh headless browser / SMTP...", logging.INFO)
 
-        # 3. Headless Browser Gmail (Default / Auto / Fallback):
-        # Uses fresh headless browser with the account profile if account is available.
+        # 3. Browser Gmail (Default / Auto / Fallback):
+        # Uses fresh headed browser with the account profile if account is available.
+        # (Headed browser ensures Google auth cookies and Gmail web compose function reliably).
         if account is not None:
-            headless_ok = cls.send_via_headless_browser_gmail(
+            browser_ok = cls.send_via_headless_browser_gmail(
                 account=account,
                 subject=report.generate_subject(),
                 body_text=report.generate_plain_text(),
@@ -2044,8 +2057,9 @@ class EmailReporter:
                 email_description="session watch time report",
                 thread_url=report.thread_url or cls.last_thread_url,
                 thread_info=thread_info,
+                headless=False,
             )
-            if headless_ok:
+            if browser_ok:
                 return True
 
         # Fallback to driver if alive and not yet attempted

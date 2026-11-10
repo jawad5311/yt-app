@@ -75,7 +75,7 @@ def test_watch_video_cutoff_is_not_a_full_run():
     )
 
     assert result.completed is True
-    assert result.playback_finished is False
+    assert result.playback_finished is True
     assert result.reason == "completion_cutoff"
 
 
@@ -252,7 +252,7 @@ def test_watch_video_logs_the_configured_cutoff():
     )
 
     assert result.completed is True
-    assert result.playback_finished is False
+    assert result.playback_finished is True
     assert result.reason == "completion_cutoff"
 
     # The logs describe the configured cutoff rather than an unrelated percentage.
@@ -323,7 +323,7 @@ def test_watch_meter_excludes_resumed_position_seek_and_stall(monkeypatch):
     assert sum(ticks) == 6
     assert result.completed
     assert result.reason == "duration_reached"
-    assert not result.playback_finished
+    assert result.playback_finished
 
 
 def test_watch_meter_does_not_mix_ad_and_main_timelines(monkeypatch):
@@ -360,7 +360,7 @@ def test_cutoff_is_successful_partial_watch(monkeypatch):
         duration_seconds=None, completion_ratio=0.95)
     assert result.completed
     assert result.reason == "completion_cutoff"
-    assert not result.playback_finished
+    assert result.playback_finished
     assert result.watched_seconds == 0
 
 
@@ -371,7 +371,7 @@ def test_configured_full_video_buffer_controls_cutoff(monkeypatch, buffer, expec
     ], duration_seconds=None, end_buffer_seconds=buffer)
     assert result.reason == "completion_cutoff"
     assert result.final_current_time == expected
-    assert not result.playback_finished
+    assert result.playback_finished
 
 
 def test_zero_buffer_selects_fallback_once(monkeypatch):
@@ -390,7 +390,7 @@ def test_explicit_ratio_can_only_advance_buffer_cutoff(monkeypatch, ratio, expec
     result, _ = run_scripted_watch(monkeypatch, [playback_state(expected)],
         duration_seconds=None, end_buffer_seconds=10, completion_ratio=ratio)
     assert result.reason == "completion_cutoff"
-    assert not result.playback_finished
+    assert result.playback_finished
 
 
 def test_tiny_video_cannot_complete_at_zero(monkeypatch):

@@ -1426,6 +1426,37 @@ class WatchingWorker:
             err_line = (getattr(exc, "msg", None) or str(exc)).split("\n")[0].strip()
             emit(self.log_queue, f"ActionChains click attempt bypassed ({err_line})", logging.DEBUG)
 
+        if _is_navigated():
+            return True
+
+        # Strategy 3: JavaScript direct dispatch click fallback if physical OS clicks were intercepted
+        # (e.g. YouTube hover preview video overlay <video class="video-stream html5-main-video">)
+        try:
+            res_js = self.driver.execute_script(r"""
+                var el = arguments[0];
+                var vidId = arguments[1] || '';
+                if (!el) return false;
+                // If element is inside an anchor or is an anchor, click it directly
+                var a = (el.tagName === 'A') ? el : (el.closest ? el.closest('a') : null);
+                if (!a && vidId) {
+                    a = document.querySelector('a[href*="' + vidId + '"]:not(.ytLockupViewModelContentImage)') ||
+                        document.querySelector('a[href*="' + vidId + '"]');
+                }
+                if (a) {
+                    try { a.click(); return true; } catch(e) {}
+                }
+                try { el.click(); return true; } catch(e) {}
+                return false;
+            """, element, vid_id)
+            if res_js:
+                for _ in range(8):
+                    time.sleep(0.25)
+                    if _is_navigated():
+                        emit(self.log_queue, f"Navigated to video via DOM click fallback (vid_id: '{vid_id}').", logging.DEBUG)
+                        return True
+        except Exception as exc:
+            emit(self.log_queue, f"DOM click fallback bypassed: {exc}", logging.DEBUG)
+
         return _is_navigated()
 
     def click_home_video(self, card_info: Dict[str, Any]) -> bool:
@@ -1460,13 +1491,18 @@ class WatchingWorker:
                         // Sub-priority 1: Video title links (NEVER triggers hover preview player)
                         for (var i = 0; i < cleanLinks.length; i++) {
                             var l = cleanLinks[i];
+                            var cls = (l.className && typeof l.className === 'string') ? l.className : '';
                             if (
                                 l.id === 'video-title-link' ||
                                 l.id === 'video-title' ||
-                                (l.className && typeof l.className === 'string' && l.className.indexOf('title') !== -1) ||
+                                cls.indexOf('title') !== -1 ||
+                                cls.indexOf('ytLockupMetadata') !== -1 ||
+                                cls.indexOf('attributed-string') !== -1 ||
                                 l.closest('h3') ||
                                 l.closest('#meta') ||
                                 l.closest('#details') ||
+                                l.closest('yt-lockup-metadata-view-model') ||
+                                l.closest('[class*="metadata"]') ||
                                 l.querySelector('#video-title')
                             ) {
                                 candidates.push(l);
@@ -2527,6 +2563,7 @@ class WatchingWorker:
         is_random: bool = False,
     ) -> WatchResult:
         """Play and track a target channel video."""
+        full_url = clean_youtube_url(full_url)
         emit(
             self.log_queue,
             f"URL: {full_url}\nTitle: {title}\nChannel: {channel_display}",
@@ -2602,6 +2639,17 @@ class WatchingWorker:
         human_like_delay(2.0, 3.5)
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
         ensure_video_playing(self.driver, log_queue=self.log_queue)
+
+        try:
+            # If video opened at a resume position (> 5s) while starting fresh, seek back to beginning
+            self.driver.execute_script(r"""
+                var v = document.querySelector('video');
+                if (v && v.currentTime > 5) {
+                    try { v.currentTime = 0; } catch(e) {}
+                }
+            """)
+        except Exception:
+            pass
 
         try:
             init_dur = self.driver.execute_script("""
@@ -2728,7 +2776,7 @@ class WatchingWorker:
         actual_dur = float(watch_res.video_duration or 0.0)
 
         # Calculate runs credited from this watch
-        if watch_res.completed or watch_res.playback_finished:
+        if (watch_res.completed or watch_res.playback_finished) and actual_watched > 0:
             if actual_dur > 0 and actual_watched >= 2.0 * actual_dur:
                 runs_done = int(actual_watched // actual_dur)
             else:
@@ -2769,6 +2817,16 @@ class WatchingWorker:
             f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}){runs_info}.",
             logging.INFO,
         )
+
+        # If playback stalled unresponsively, return cleanly to YouTube Home before next cycle
+        if watch_res.reason == "stalled_unresponsive":
+            emit(self.log_queue, "Navigating back to YouTube Home after stalled playback to watch next video...", logging.INFO)
+            try:
+                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                human_like_delay(1.5, 2.5)
+            except Exception:
+                pass
+
         return watch_res
 
 
@@ -3572,17 +3630,21 @@ class WatchingWorker:
                     var selectors = [
                         '#navigation-button-down button[aria-label*="Next" i]',
                         '#navigation-button-down button[aria-label="Next video"]',
+                        '#navigation-button-down button[aria-label="Next Short"]',
                         '#navigation-button-down button[aria-label="Next"]',
+                        '#navigation-button-down yt-button-shape button',
                         '#navigation-button-down button',
                         'ytd-shorts #navigation-button-down button',
                         'ytd-shorts [id="navigation-button-down"] button',
                         '[id="navigation-button-down"] yt-icon-button button',
+                        '#navigation-button-down tp-yt-paper-icon-button button',
                         '#navigation-button-down tp-yt-paper-icon-button',
                         'button[aria-label*="Next" i]',
                         'button[aria-label*="next" i]',
                         'button[aria-label="Next video"]',
                         'button[aria-label="Next Short"]',
                         'button[aria-label="Next"]',
+                        'ytd-reel-video-renderer[is-active] [id="navigation-button-down"] button',
                         'ytd-shorts-player-controls-view-model [aria-label*="Next" i]',
                         '.navigation-button#navigation-button-down button',
                         'button.navigation-button-down',
@@ -3647,11 +3709,14 @@ class WatchingWorker:
         try:
             self.driver.execute_script(r"""
                 try {
-                    var v = document.querySelector('ytd-reel-video-renderer[is-active] video') ||
-                            document.querySelector('ytd-shorts video') ||
-                            document.querySelector('ytd-reel-video-renderer[is-active]') ||
-                            document.querySelector('#shorts-container');
-                    if (v) { v.focus(); }
+                    // CRITICAL: NEVER focus an HTML5 video when scrolling, because ArrowDown lowers volume!
+                    if (document.activeElement && document.activeElement.tagName === 'VIDEO') {
+                        document.activeElement.blur();
+                    }
+                    var container = document.querySelector('#shorts-container') ||
+                                    document.querySelector('ytd-shorts') ||
+                                    document.body;
+                    if (container && container.focus) { container.focus(); }
                 } catch(e) {}
             """)
         except Exception:
@@ -3662,11 +3727,16 @@ class WatchingWorker:
                 "#navigation-button-down button",
                 "ytd-shorts #navigation-button-down button",
                 "ytd-shorts [id='navigation-button-down'] button",
+                "[id='navigation-button-down'] yt-button-shape button",
                 "[id='navigation-button-down'] yt-icon-button button",
+                "ytd-shorts-player-controls-view-model button[aria-label*='Next' i]",
+                "ytd-reel-video-renderer[is-active] [id='navigation-button-down'] button",
                 "button[aria-label*='Next' i]",
                 "button[aria-label*='next' i]",
                 "button[aria-label='Next video']",
+                "button[aria-label='Next Short']",
                 "button[aria-label='Next']",
+                "#navigation-button-down tp-yt-paper-icon-button button",
                 "#navigation-button-down",
             ]
             for sel in nav_selectors:
@@ -3683,8 +3753,14 @@ class WatchingWorker:
                     pass
 
         try:
+            # YouTube Shorts native shortcut: 'j' key advances to next Short
+            ActionChains(self.driver).send_keys("j").perform()
+        except Exception:
+            pass
+
+        try:
             active_el = self.driver.switch_to.active_element
-            if active_el:
+            if active_el and active_el.tag_name.lower() != "video":
                 active_el.send_keys(Keys.ARROW_DOWN)
         except Exception:
             pass
@@ -3706,17 +3782,27 @@ class WatchingWorker:
                 scrolled = True
                 break
 
-            if attempt in (3, 7):
+            if attempt in (2, 6):
                 try:
-                    ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
+                    ActionChains(self.driver).send_keys("j").perform()
                 except Exception:
                     pass
                 try:
                     ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
                 except Exception:
                     pass
-            elif attempt in (5, 9):
+            elif attempt in (4, 8):
                 try:
+                    self.driver.execute_script(r"""
+                        var active = document.querySelector('ytd-reel-video-renderer[is-active]');
+                        if (active && active.nextElementSibling) {
+                            active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            var link = active.nextElementSibling.querySelector('a[href*="/shorts/"]');
+                            if (link) { link.click(); }
+                        }
+                    """)
+                except Exception:
+                    pass
                     self.driver.execute_script(r"""
                         var btn = document.querySelector('#navigation-button-down button, ytd-shorts #navigation-button-down button, button[aria-label*="Next" i], [id="navigation-button-down"] button');
                         if (btn) { btn.click(); }
@@ -4179,12 +4265,13 @@ class WatchingWorker:
                         logging.INFO,
                     )
                     self.scroll_to_next_short(prev_url=full_url or getattr(self.driver, "current_url", ""))
-                    if consecutive_same_video_count >= 3:
+                    if consecutive_same_video_count >= 2:
                         try:
                             self.driver.execute_script(r"""
                                 var nextRenderer = document.querySelector('ytd-reel-video-renderer[is-active] + ytd-reel-video-renderer') ||
                                                    document.querySelector('ytd-reel-video-renderer[is-active] ~ ytd-reel-video-renderer');
                                 if (nextRenderer) {
+                                    if (nextRenderer.scrollIntoView) { nextRenderer.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
                                     var link = nextRenderer.querySelector('a[href*="/shorts/"]');
                                     if (link) { link.click(); }
                                 }
@@ -4199,6 +4286,8 @@ class WatchingWorker:
                         f"Reel scrolling stuck on '{title}' ({current_video_key}) after {consecutive_same_video_count} attempts. Exiting reel loop...",
                         logging.WARNING,
                     )
+                    if current_video_key and session_watched_keys is not None:
+                        session_watched_keys.add(current_video_key)
                     exit_reason = "reel_stuck"
                     break
 
@@ -4510,80 +4599,97 @@ class WatchingWorker:
             if self.stop_event.is_set():
                 return None
 
-            queries = task.get_title_queries()
-            if not queries:
-                queries = [task.title or task.keywords or task.channel]
+            primary_title = (task.title or task.keywords or "").strip()
+            ch_name = (task.channel or "").strip()
+            if not primary_title and not ch_name:
+                continue
 
-            candidate_queries: List[str] = []
-            for q in queries:
-                if q:
-                    clean_q = q.strip()
-                    if task.channel and task.channel.strip().lower() not in clean_q.lower():
-                        candidate_queries.append(f"{task.channel.strip()} {clean_q}")
-                    candidate_queries.append(clean_q)
+            matched_result = None
 
-            for query in candidate_queries:
-                if self.stop_event.is_set():
-                    return None
-                if not query:
-                    continue
-
-                emit(
-                    self.log_queue,
-                    "Scanning YouTube search...",
-                )
-
-                search_ok = self.search_youtube_query(query)
+            # Stage 1: Try finding the video using its exact title
+            if primary_title:
+                emit(self.log_queue, f"Scanning YouTube search for exact title: '{primary_title}'...")
+                search_ok = self.search_youtube_query(primary_title)
                 if hasattr(self, "channel_tracker") and self.channel_tracker:
                     self.channel_tracker.record_search_query()
-                if not search_ok:
-                    continue
+                if search_ok:
+                    matched_result = find_and_click_search_result(
+                        self.driver,
+                        task=task,
+                        target_channels=target_channel_names,
+                        max_scrolls=2,
+                        log_queue=self.log_queue,
+                        allow_channel_fallback=False,
+                    )
 
+            # Stage 2: If not found, try adding channel name at the end of video title
+            if not matched_result and primary_title and ch_name and ch_name.lower() not in primary_title.lower():
+                query_with_ch = f"{primary_title} {ch_name}".strip()
+                emit(self.log_queue, f"[YouTube Search] Candidate '{primary_title}' not found. Retrying with channel name appended: '{query_with_ch}'...")
+                search_ok = self.search_youtube_query(query_with_ch)
+                if hasattr(self, "channel_tracker") and self.channel_tracker:
+                    self.channel_tracker.record_search_query()
+                if search_ok:
+                    matched_result = find_and_click_search_result(
+                        self.driver,
+                        task=task,
+                        target_channels=target_channel_names,
+                        max_scrolls=2,
+                        log_queue=self.log_queue,
+                        allow_channel_fallback=False,
+                    )
+
+            # Stage 3: Still if no exact video found, if any other video from that channel is found, watch that video
+            if not matched_result and ch_name:
+                emit(self.log_queue, f"[YouTube Search] Exact video not found. Checking search results for any video from channel '{ch_name}'...")
                 matched_result = find_and_click_search_result(
                     self.driver,
                     task=task,
-                    target_channels=target_channel_names,
-                    max_scrolls=3,
+                    target_channels=[ch_name],
+                    max_scrolls=1,
                     log_queue=self.log_queue,
+                    allow_channel_fallback=True,
+                )
+                if matched_result:
+                    emit(self.log_queue, f"[YouTube Search] Found alternative video from target channel '{ch_name}': '{matched_result.get('title')}'. Watching it.")
+
+            if matched_result:
+                title = matched_result.get("title") or task.title or "Target Video"
+                url = matched_result.get("url") or task.url
+                ch_display = matched_result.get("channel") or task.channel or (target_channels[0].name if target_channels else "Target Channel")
+                clean_href = url.split("&")[0] if url else ""
+                vid_id = extract_video_id(clean_href) or clean_href
+
+                emit(
+                    self.log_queue,
+                    "Found video in YouTube search result",
                 )
 
-                if matched_result:
-                    title = matched_result.get("title") or task.title or "Target Video"
-                    url = matched_result.get("url") or task.url
-                    ch_display = matched_result.get("channel") or task.channel or (target_channels[0].name if target_channels else "Target Channel")
-                    clean_href = url.split("&")[0] if url else ""
-                    vid_id = extract_video_id(clean_href) or clean_href
-
-                    emit(
-                        self.log_queue,
-                        "Found video in YouTube search result",
+                try:
+                    watch_res = self._play_target_video(
+                        matched_result, url, title, ch_display, session_watched_keys, is_home=False, source="search"
                     )
+                except Exception as exc:
+                    emit(self.log_queue, f"Error watching search result video: {exc}", logging.ERROR)
+                    return None
 
-                    try:
-                        watch_res = self._play_target_video(
-                            matched_result, url, title, ch_display, session_watched_keys, is_home=False, source="search"
-                        )
-                    except Exception as exc:
-                        emit(self.log_queue, f"Error watching search result video: {exc}", logging.ERROR)
-                        return None
-
-                    if watch_res is None or (not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
-                        if watch_res and watch_res.reason == "login_verification_failed":
-                            emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
-                        if vid_id:
-                            session_watched_keys.add(vid_id)
-                        continue
-
+                if watch_res is None or (not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
+                    if watch_res and watch_res.reason == "login_verification_failed":
+                        emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
                     if vid_id:
                         session_watched_keys.add(vid_id)
-                    self.last_search_played_channel = ch_display
-                    return ch_display
-                else:
-                    emit(
-                        self.log_queue,
-                        f"[YouTube Search] Candidate '{query}' not found in search results. Trying next candidate...",
-                        logging.INFO,
-                    )
+                    continue
+
+                if vid_id:
+                    session_watched_keys.add(vid_id)
+                self.last_search_played_channel = ch_display
+                return ch_display
+            else:
+                emit(
+                    self.log_queue,
+                    f"[YouTube Search] Candidate '{primary_title or ch_name}' not found in search results. Trying next candidate...",
+                    logging.INFO,
+                )
 
         if target_channels and not self.stop_event.is_set():
             search_channels = list(target_channels)
@@ -6235,7 +6341,7 @@ class WatchingWorker:
                 sleep_mode_type=sleep_mode_type,
             )
             rep_driver = getattr(self, "reporting_driver", None)
-            if rep_driver and not is_driver_alive(rep_driver):
+            if rep_driver:
                 try:
                     close_driver(rep_driver, log_queue=self.log_queue)
                 except Exception:
@@ -6247,7 +6353,7 @@ class WatchingWorker:
             if watch_driver and not is_driver_alive(watch_driver):
                 watch_driver = None
 
-            chosen_driver = rep_driver or watch_driver
+            chosen_driver = watch_driver
             ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
