@@ -195,15 +195,17 @@ class TestWatchingWorker:
         mock_driver = MagicMock()
         mock_setup.return_value = mock_driver
         mock_login.return_value = False
+        worker.config_mgr.set_setting("SignInWaitSeconds", 0.001)
+        worker.config_mgr.set_setting("SignInMaxRetries", 1)
 
         worker.run()
 
         mock_setup.assert_called_once()
-        mock_login.assert_called_once()
+        mock_login.assert_called()
         mock_close.assert_called_once_with(mock_driver, log_queue=worker.log_queue)
 
     @patch("src.automation.watching_worker.setup_driver")
-    @patch("src.automation.watching_worker.perform_google_login", return_value=False)
+    @patch("src.automation.watching_worker.perform_google_login", return_value=True)
     @patch("src.automation.watching_worker.close_driver")
     def test_start_notification_runs_asynchronously_without_blocking_browser_setup(
         self, mock_close, mock_login, mock_setup, worker
@@ -215,11 +217,12 @@ class TestWatchingWorker:
         def fake_async_init():
             nonlocal async_called
             async_called = True
+            worker.stop_event.set()
 
         worker._async_init_and_send_start_notification = MagicMock(side_effect=fake_async_init)
         worker.run()
 
-        # Visible setup_driver must be called immediately without waiting for notification
+        # Visible setup_driver must be called
         mock_setup.assert_called_once()
         # Async notification thread must have been spawned
         assert worker.reporting_thread is not None

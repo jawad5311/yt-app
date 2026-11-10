@@ -230,13 +230,18 @@ def test_watching_worker_executes_night_sleep_cycle(test_worker):
         assert test_worker.night_sleep_count == 1
         assert "2026-11-08_2200" in test_worker.night_scheduler.completed_window_ids
 
-        # Dispatched night report
-        mock_report.assert_called_once()
-        kwargs = mock_report.call_args[1]
-        assert kwargs["status"] == "Long Sleep (Night Mode)"
-        assert kwargs["is_sleep_notification"] is True
-        assert kwargs["sleep_mode_type"] == "night"
-        assert kwargs["sleep_duration_hours"] == 8.0
+        # Dispatched night report & morning resumption report
+        assert mock_report.call_count == 2
+        kwargs1 = mock_report.call_args_list[0][1]
+        assert kwargs1["status"] == "Long Sleep (Night Mode)"
+        assert kwargs1["is_sleep_notification"] is True
+        assert kwargs1["sleep_mode_type"] == "night"
+        assert kwargs1["sleep_duration_hours"] == 8.0
+
+        kwargs2 = mock_report.call_args_list[1][1]
+        assert kwargs2["status"] == "Resuming Session"
+        assert kwargs2["sleep_mode_type"] == "night_resume"
+        assert kwargs2["sleep_cycle_number"] == 1
 
         # Reset to fresh stats upon morning wake-up
         assert test_worker.target_attempts == 0
@@ -261,11 +266,16 @@ def test_short_sleep_nap_mode_messaging_and_fresh_stats(test_worker):
 
         assert result is True
         assert test_worker.sleep_cycle_count == 1
-        mock_report.assert_called_once()
-        kwargs = mock_report.call_args[1]
-        assert kwargs["status"] == "Going to Sleep"
-        assert kwargs["sleep_mode_type"] == "nap"
-        assert kwargs["sleep_cycle_number"] == 1
+        assert mock_report.call_count == 2
+        kwargs1 = mock_report.call_args_list[0][1]
+        assert kwargs1["status"] == "Going to Sleep"
+        assert kwargs1["sleep_mode_type"] == "nap"
+        assert kwargs1["sleep_cycle_number"] == 1
+
+        kwargs2 = mock_report.call_args_list[1][1]
+        assert kwargs2["status"] == "Resuming Session"
+        assert kwargs2["sleep_mode_type"] == "nap_resume"
+        assert kwargs2["sleep_cycle_number"] == 1
 
         # Resets stats on wake-up
         assert test_worker.watched_count == 0

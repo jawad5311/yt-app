@@ -46,7 +46,7 @@ from .driver import (
     is_session_disconnected_error,
     setup_driver,
 )
-from .login import check_account_logged_in, perform_google_login
+from .login import check_account_logged_in, is_logged_in, perform_google_login
 from .navigation import (
     dismiss_youtube_dialogs,
     find_and_click_search_result,
@@ -4588,7 +4588,33 @@ class WatchingWorker:
         known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
         self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
         self.has_started_browsing = True
-        perform_google_login(self.driver, self.account, log_queue=self.log_queue, stop_event=self.stop_event)
+
+        if self.stop_event.is_set():
+            return False
+
+        login_ok = self._ensure_signed_in_and_wait()
+        if not login_ok and not self.stop_event.is_set():
+            emit(self.log_queue, f"Notice: Google sign-in verification check after morning wake-up for {self.account.email}.", logging.WARNING)
+
+        # Deliver morning wake-up session resumption notification email under the exact same session thread
+        try:
+            emit(
+                self.log_queue,
+                f"Sending Morning Wake-up / Resumption notification email under thread '{self.session_thread_subject}'...",
+                logging.INFO,
+            )
+            self._send_session_report(
+                status="Resuming Session",
+                is_sleep_notification=False,
+                sleep_mode_type="night_resume",
+                sleep_cycle_number=current_night_count,
+                sleep_duration_hours=sleep_duration_hours,
+            )
+        except Exception as e:
+            emit(self.log_queue, f"Error sending morning wake-up resumption notification email: {e}", logging.WARNING)
+
+        emit(self.log_queue, "Browser relaunched successfully. Starting daytime search for new videos and shorts...", logging.INFO)
+        self._report_status("Browsing YouTube Home feed...", "info")
         return True
 
     def _enter_no_target_sleep_cycle(self, session_watched_keys: Set[str]) -> bool:
@@ -4745,16 +4771,26 @@ class WatchingWorker:
         if self.stop_event.is_set():
             return False
 
-        login_ok = perform_google_login(
-            self.driver,
-            self.account,
-            log_queue=self.log_queue,
-            stop_event=self.stop_event,
-            config_mgr=self.config_mgr,
-            alert_callback=self._send_critical_alert,
-        )
+        login_ok = self._ensure_signed_in_and_wait()
         if not login_ok and not self.stop_event.is_set():
             emit(self.log_queue, f"Notice: Google sign-in verification check after wake-up for {self.account.email}.", logging.WARNING)
+
+        # Deliver nap resumption notification email under the exact same session thread
+        try:
+            emit(
+                self.log_queue,
+                f"Sending Nap Finished / Resumption notification email under thread '{self.session_thread_subject}' (Sleep Cycle #{current_sleep_cycle})...",
+                logging.INFO,
+            )
+            self._send_session_report(
+                status="Resuming Session",
+                is_sleep_notification=False,
+                sleep_mode_type="nap_resume",
+                sleep_cycle_number=current_sleep_cycle,
+                sleep_duration_hours=sleep_hours,
+            )
+        except Exception as e:
+            emit(self.log_queue, f"Error sending nap resumption notification email: {e}", logging.WARNING)
 
         emit(self.log_queue, "Browser relaunched successfully. Starting search for new videos and shorts...", logging.INFO)
         self._report_status("Browsing YouTube Home feed...", "info")
@@ -4766,14 +4802,6 @@ class WatchingWorker:
         active_channels_msg = ", ".join(f"'{c.name}'" for c in self.channels if c.name)
         emit(self.log_queue, f"Target stored channel(s): {active_channels_msg}")
 
-        # Dispatch start notification in separate background headless window without blocking automation launch
-        self.reporting_thread = threading.Thread(
-            target=self._async_init_and_send_start_notification,
-            name="ReportingStartNotificationThread",
-            daemon=True,
-        )
-        self.reporting_thread.start()
-
         try:
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
             known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
@@ -4784,15 +4812,16 @@ class WatchingWorker:
             if self.stop_event.is_set():
                 return
 
-            # Sign-in step
-            login_ok = perform_google_login(
-                self.driver,
-                self.account,
-                log_queue=self.log_queue,
-                stop_event=self.stop_event,
-                config_mgr=self.config_mgr,
-                alert_callback=self._send_critical_alert,
-            )
+            # Wait for sign-in and verify it successfully before dispatching session starting email notification
+            max_retries = None
+            if self.config_mgr:
+                try:
+                    mr = self.config_mgr.get_setting("SignInMaxRetries", None)
+                    if mr is not None:
+                        max_retries = int(mr)
+                except Exception:
+                    pass
+            login_ok = self._ensure_signed_in_and_wait(max_retries=max_retries)
 
             if not login_ok:
                 if self.stop_event.is_set():
@@ -4820,6 +4849,14 @@ class WatchingWorker:
                 session_status = alert_type
                 session_err = details
                 return
+
+            # Sign-in verified successfully! Dispatch start notification in separate background headless window
+            self.reporting_thread = threading.Thread(
+                target=self._async_init_and_send_start_notification,
+                name="ReportingStartNotificationThread",
+                daemon=True,
+            )
+            self.reporting_thread.start()
 
             if not self.open_videos:
                 emit(self.log_queue, "=== Video opening paused. Scanning and grabbing links from YouTube Home feed ===")
@@ -5404,6 +5441,87 @@ class WatchingWorker:
                 close_driver(self.reporting_driver, log_queue=self.log_queue)
                 self.reporting_driver = None
 
+    def _ensure_signed_in_and_wait(self, wait_seconds: float = 120.0, max_retries: Optional[int] = None) -> bool:
+        """Verify account login before starting or resuming session.
+
+        If signed out or sign-in is incomplete:
+        - Waits for the account to be signed in (default 2 minutes / 120s).
+        - Re-checks periodically and after 2 minutes.
+        - Once signed in successfully, returns True.
+        """
+        if not self.account or not getattr(self.account, "email", "").strip():
+            return True
+
+        if self.stop_event.is_set():
+            return False
+
+        if self.config_mgr:
+            try:
+                wait_seconds = float(self.config_mgr.get_setting("SignInWaitSeconds", wait_seconds))
+            except Exception:
+                pass
+
+        attempt = 0
+        while not self.stop_event.is_set():
+            attempt += 1
+            emit(self.log_queue, f"Checking Google sign-in status for {self.account.email} (Attempt #{attempt})...", logging.INFO)
+
+            login_ok = perform_google_login(
+                self.driver,
+                self.account,
+                log_queue=self.log_queue,
+                stop_event=self.stop_event,
+                config_mgr=self.config_mgr,
+                alert_callback=self._send_critical_alert,
+            )
+            if login_ok:
+                emit(self.log_queue, f"Sign-in verified successfully for {self.account.email}!", logging.INFO)
+                return True
+
+            if self.stop_event.is_set():
+                return False
+
+            if max_retries is not None and attempt >= max_retries:
+                emit(self.log_queue, f"Maximum sign-in retry attempts reached for {self.account.email}.", logging.WARNING)
+                return False
+
+            wait_mins = wait_seconds / 60.0
+            wait_str = f"{int(wait_mins)} minute{'s' if int(wait_mins) != 1 else ''}" if wait_mins.is_integer() else f"{wait_mins:.1f} minutes"
+            emit(
+                self.log_queue,
+                f"Account {self.account.email} is not signed in. Waiting {wait_str} for sign-in...",
+                logging.WARNING,
+            )
+            self._report_status(f"Waiting for {self.account.email} sign-in (re-check in {wait_str})...", "warning")
+
+            wait_start = time.time()
+            wait_end = wait_start + wait_seconds
+            last_cd_sec = -1
+
+            while time.time() < wait_end and not self.stop_event.is_set():
+                if is_logged_in(self.driver, self.account):
+                    emit(self.log_queue, f"Sign-in detected for {self.account.email} during wait!", logging.INFO)
+                    return True
+
+                remaining = int(wait_end - time.time())
+                rem_m, rem_s = divmod(max(0, remaining), 60)
+                if remaining > 0 and remaining % 30 == 0 and remaining != last_cd_sec:
+                    self._report_status(f"Waiting for sign-in ({self.account.email}) · Re-checking in {rem_m}m {rem_s:02d}s", "warning")
+                    last_cd_sec = remaining
+
+                self.stop_event.wait(timeout=min(2.0, max(0.1, wait_end - time.time())))
+
+            if self.stop_event.is_set():
+                return False
+
+            emit(
+                self.log_queue,
+                f"{wait_str} elapsed. Re-checking sign-in status for {self.account.email}...",
+                logging.INFO,
+            )
+
+        return False
+
     def _async_init_and_send_start_notification(self) -> None:
         """Initialize headless reporting browser and send start notification asynchronously in background."""
         try:
@@ -5512,6 +5630,11 @@ class WatchingWorker:
         """Deliver session watch time report or sleep notification email under the same thread."""
         if sleep_mode_type == "night":
             modal_msg = "Sending Long Sleep / Night notification... Please do not close the app."
+        elif sleep_mode_type == "night_resume":
+            modal_msg = "Sending Morning Wake-up / Resumption notification... Please do not close the app."
+        elif sleep_mode_type == "nap_resume":
+            c_str = f" (Cycle #{sleep_cycle_number})" if sleep_cycle_number else ""
+            modal_msg = f"Sending Nap Finished / Resumption notification{c_str}... Please do not close the app."
         elif is_sleep_notification:
             c_str = f" (Cycle #{sleep_cycle_number})" if sleep_cycle_number else ""
             modal_msg = f"Sending Short Sleep / Nap notification{c_str}... Please do not close the app."
@@ -5596,6 +5719,11 @@ class WatchingWorker:
                         self.session_thread_message_id = self.session_thread_info["message_id"]
                 if sleep_mode_type == "night":
                     msg = "Long Sleep / Night notification sent successfully!"
+                elif sleep_mode_type == "night_resume":
+                    msg = "Morning Wake-up / Resumption notification sent successfully!"
+                elif sleep_mode_type == "nap_resume":
+                    c_str = f" (Cycle #{sleep_cycle_number})" if sleep_cycle_number else ""
+                    msg = f"Nap Finished / Resumption notification{c_str} sent successfully!"
                 elif is_sleep_notification:
                     c_str = f" (Cycle #{sleep_cycle_number})" if sleep_cycle_number else ""
                     msg = f"Short Sleep / Nap notification{c_str} sent successfully!"

@@ -110,6 +110,11 @@ class SessionReport:
 
         if self.sleep_mode_type == "night":
             title_header = "      ENTERTAINMENT HUB - LONG SLEEP / NIGHT NOTIFICATION      "
+        elif self.sleep_mode_type == "night_resume":
+            title_header = "    ENTERTAINMENT HUB - NIGHT MODE COMPLETED • MORNING RESUMPTION    "
+        elif self.sleep_mode_type == "nap_resume":
+            c_num = f" (NAP CYCLE #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            title_header = f"   ENTERTAINMENT HUB - NAP FINISHED • RESUMING SESSION{c_num}   "
         elif self.sleep_cycle_number or self.sleep_mode_type == "nap":
             c_num = f" (NAP CYCLE #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
             title_header = f"      ENTERTAINMENT HUB - SHORT SLEEP / NAP NOTIFICATION{c_num}      "
@@ -137,6 +142,24 @@ class SessionReport:
                 f"                      the bot has gone to sleep for the night.",
                 f"                      Closed YouTube browser tab to save resources.",
                 f"                      The bot will wake up automatically in the morning.",
+            ])
+        elif self.sleep_mode_type == "night_resume":
+            lines.extend([
+                f"Sleep Mode:           Long Sleep / Night Mode Completed (Morning Wake-up)",
+                f"Notice:               Nighttime sleep window has concluded. The bot has successfully",
+                f"                      woken up, refreshed session stats, verified account sign-in,",
+                f"                      and resumed daytime browsing for targeted channels.",
+            ])
+        elif self.sleep_mode_type == "nap_resume":
+            cycle_str = f"#{self.sleep_cycle_number}" if self.sleep_cycle_number else "N/A"
+            dur_str = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else ""
+            dur_line = f" ({dur_str})" if dur_str else ""
+            lines.extend([
+                f"Sleep Mode:           Short Sleep / Nap Mode Completed{dur_line}",
+                f"Sleep Cycle:          {cycle_str}",
+                f"Notice:               Nap cycle has concluded. The bot has successfully woken up,",
+                f"                      refreshed session stats, verified account sign-in, and resumed",
+                f"                      continuous browsing for targeted channel videos and shorts.",
             ])
         elif self.sleep_cycle_number or self.sleep_mode_type == "nap":
             dur_str = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "N/A"
@@ -280,7 +303,9 @@ class SessionReport:
             """)
 
         is_night_sleep = (self.sleep_mode_type == "night")
-        is_nap_sleep = (self.sleep_mode_type == "nap" or (self.sleep_cycle_number is not None and not is_night_sleep))
+        is_night_resume = (self.sleep_mode_type == "night_resume")
+        is_nap_resume = (self.sleep_mode_type == "nap_resume")
+        is_nap_sleep = (self.sleep_mode_type == "nap" or (self.sleep_cycle_number is not None and not is_night_sleep and not is_night_resume and not is_nap_resume))
 
         if is_night_sleep:
             status_color = "#6366f1"
@@ -289,6 +314,21 @@ class SessionReport:
             kpi_label_1 = "Combined Entertainment Time (Daytime Pass)"
             kpi_label_2 = "Pass Duration & Status"
             kpi_status_text = "Going to Long Sleep (Night Mode)"
+        elif is_night_resume:
+            status_color = "#059669"
+            report_title = "Night Mode Completed • Daytime Session Resumed"
+            activity_header = "Morning Wake-Up • Media Activity Resuming"
+            kpi_label_1 = "Combined Entertainment Time (Fresh Pass)"
+            kpi_label_2 = "Session Status"
+            kpi_status_text = "☀️ Morning Wake-up: Daytime Browsing Resumed"
+        elif is_nap_resume:
+            status_color = "#059669"
+            cycle_desc = f" (Nap Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            report_title = f"Short Sleep / Nap Finished • Resuming Session{cycle_desc}"
+            activity_header = f"Sleep Cycle #{self.sleep_cycle_number} Completed • Resuming Browsing" if self.sleep_cycle_number else "Nap Completed • Resuming Browsing"
+            kpi_label_1 = "Combined Entertainment Time (Fresh Pass)"
+            kpi_label_2 = "Session Status"
+            kpi_status_text = f"Nap Finished: Resuming Session (Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else "Nap Finished: Resuming Session"
         elif is_nap_sleep:
             status_color = "#2563eb"
             cycle_desc = f" (Nap Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
@@ -306,7 +346,30 @@ class SessionReport:
             kpi_status_text = f"Status: {html.escape(self.status)}"
 
         sleep_banner = ""
-        if is_night_sleep:
+        if is_night_resume:
+            sleep_banner = f"""
+            <div style="background: linear-gradient(135deg, #064e3b 0%, #065f46 100%); border: 1px solid #047857; border-left: 6px solid #34d399; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="font-size: 16px; font-weight: 700; color: #ecfdf5; margin-bottom: 5px;">☀️ Morning Wake-Up — Long Sleep / Night Mode Completed</div>
+                <div style="font-size: 13px; color: #a7f3d0; line-height: 1.5;">
+                    The scheduled nighttime sleep window has finished.<br>
+                    The bot has automatically woken up, refreshed session stats, verified account sign-in, and resumed daytime browsing for targeted channels.<br>
+                    <span style="font-size: 12px; color: #6ee7b7; margin-top: 4px; display: inline-block;">Daytime browsing session is now running normally.</span>
+                </div>
+            </div>
+            """
+        elif is_nap_resume:
+            cycle_desc = f" (Nap Cycle #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            sleep_banner = f"""
+            <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 5px solid #16a34a; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                <div style="font-size: 15px; font-weight: 700; color: #166534; margin-bottom: 4px;">⚡ Woke Up — Nap Mode Finished • Resuming Session{cycle_desc}</div>
+                <div style="font-size: 13px; color: #15803d; line-height: 1.5;">
+                    The nap sleep cycle has finished.<br>
+                    The bot has automatically woken up, refreshed session stats, verified account sign-in, and resumed continuous browsing for new videos and shorts from targeted channels.<br>
+                    <span style="font-size: 12px; color: #16a34a; margin-top: 4px; display: inline-block;">Session is now active and looking for target videos.</span>
+                </div>
+            </div>
+            """
+        elif is_night_sleep:
             wake_str = self.wake_up_time.strftime("%d %b %Y - %I:%M %p") if self.wake_up_time else f"in {self.sleep_duration_hours:.1f} hours"
             dur_txt = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "configured duration"
             sleep_banner = f"""

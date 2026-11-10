@@ -16,7 +16,7 @@ from ..utils.logger import emit
 from .dispatcher import TaskDispatcher
 from .driver import close_driver, is_driver_alive, setup_driver
 from .email_reporter import EmailReporter, SessionReport
-from .login import check_account_logged_in, perform_google_login
+from .login import check_account_logged_in, is_logged_in, perform_google_login
 from .navigation import navigate_to_video_organically
 from .session_tracker import SessionChannelTracker
 from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_short, watch_video
@@ -442,15 +442,6 @@ class AutomationWorker:
         emit(self.log_queue, f"Starting automation session for account: {self.account.email}")
         direct_link_fallback = self.config_mgr.get_bool("DirectLinkFallback", False)
 
-        # Send start notification in headless browser asynchronously without blocking visible browser launch
-        if self.worker_id == 0:
-            self.reporting_thread = threading.Thread(
-                target=self._async_init_and_send_start_notification,
-                name="ReportingStartNotificationThread",
-                daemon=True,
-            )
-            self.reporting_thread.start()
-
         if self.dispatcher is not None:
             total = self.dispatcher.register_worker(self.worker_id)
         else:
@@ -469,15 +460,25 @@ class AutomationWorker:
             if self.stop_event.is_set():
                 return
 
-            # Sign-in phase
-            login_ok = perform_google_login(
-                self.driver,
-                self.account,
-                log_queue=self.log_queue,
-                stop_event=self.stop_event,
-                config_mgr=self.config_mgr,
-                alert_callback=self._send_critical_alert,
-            )
+            # Wait for sign-in and verify it successfully before dispatching session starting email notification
+            max_retries = None
+            if self.config_mgr:
+                try:
+                    mr = self.config_mgr.get_setting("SignInMaxRetries", None)
+                    if mr is not None:
+                        max_retries = int(mr)
+                except Exception:
+                    pass
+            login_ok = self._ensure_signed_in_and_wait(max_retries=max_retries)
+
+            if login_ok and self.worker_id == 0:
+                # Sign-in verified! Send start notification in headless browser asynchronously
+                self.reporting_thread = threading.Thread(
+                    target=self._async_init_and_send_start_notification,
+                    name="ReportingStartNotificationThread",
+                    daemon=True,
+                )
+                self.reporting_thread.start()
 
             if not login_ok:
                 if self.stop_event.is_set():
@@ -622,6 +623,79 @@ class AutomationWorker:
             if self.reporting_driver:
                 close_driver(self.reporting_driver, log_queue=self.log_queue)
                 self.reporting_driver = None
+
+    def _ensure_signed_in_and_wait(self, wait_seconds: float = 120.0, max_retries: Optional[int] = None) -> bool:
+        """Verify account login before starting or resuming session.
+
+        If signed out or sign-in is incomplete:
+        - Waits for the account to be signed in (default 2 minutes / 120s).
+        - Re-checks periodically and after 2 minutes.
+        - Once signed in successfully, returns True.
+        """
+        if not self.account or not getattr(self.account, "email", "").strip():
+            return True
+
+        if self.stop_event.is_set():
+            return False
+
+        if self.config_mgr:
+            try:
+                wait_seconds = float(self.config_mgr.get_setting("SignInWaitSeconds", wait_seconds))
+            except Exception:
+                pass
+
+        attempt = 0
+        while not self.stop_event.is_set():
+            attempt += 1
+            emit(self.log_queue, f"Checking Google sign-in status for {self.account.email} (Attempt #{attempt})...", logging.INFO)
+
+            login_ok = perform_google_login(
+                self.driver,
+                self.account,
+                log_queue=self.log_queue,
+                stop_event=self.stop_event,
+                config_mgr=self.config_mgr,
+                alert_callback=self._send_critical_alert,
+            )
+            if login_ok:
+                emit(self.log_queue, f"Sign-in verified successfully for {self.account.email}!", logging.INFO)
+                return True
+
+            if self.stop_event.is_set():
+                return False
+
+            if max_retries is not None and attempt >= max_retries:
+                emit(self.log_queue, f"Maximum sign-in retry attempts reached for {self.account.email}.", logging.WARNING)
+                return False
+
+            wait_mins = wait_seconds / 60.0
+            wait_str = f"{int(wait_mins)} minute{'s' if int(wait_mins) != 1 else ''}" if wait_mins.is_integer() else f"{wait_mins:.1f} minutes"
+            emit(
+                self.log_queue,
+                f"Account {self.account.email} is not signed in. Waiting {wait_str} for sign-in...",
+                logging.WARNING,
+            )
+
+            wait_start = time.time()
+            wait_end = wait_start + wait_seconds
+
+            while time.time() < wait_end and not self.stop_event.is_set():
+                if is_logged_in(self.driver, self.account):
+                    emit(self.log_queue, f"Sign-in detected for {self.account.email} during wait!", logging.INFO)
+                    return True
+
+                self.stop_event.wait(timeout=min(2.0, max(0.1, wait_end - time.time())))
+
+            if self.stop_event.is_set():
+                return False
+
+            emit(
+                self.log_queue,
+                f"{wait_str} elapsed. Re-checking sign-in status for {self.account.email}...",
+                logging.INFO,
+            )
+
+        return False
 
     def _async_init_and_send_start_notification(self) -> None:
         """Initialize headless reporting browser and send start notification asynchronously in background."""
