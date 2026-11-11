@@ -1084,6 +1084,7 @@ class WatchingWorker:
         total_loops: Optional[int] = None,
         target_limit: Optional[int] = None,
         is_unlimited: bool = False,
+        sleep_nap_enabled: Optional[bool] = None,
         open_videos: bool = True,
     ):
         self.account = account
@@ -1094,6 +1095,13 @@ class WatchingWorker:
         self.pause_event = pause_event or threading.Event()
         self.event_queue = event_queue
         self.stats_store = stats_store
+
+        if sleep_nap_enabled is not None:
+            self.sleep_nap_enabled = bool(sleep_nap_enabled)
+        elif self.config_mgr:
+            self.sleep_nap_enabled = bool(self.config_mgr.get_bool("SleepNapEnabled", True))
+        else:
+            self.sleep_nap_enabled = True
 
         if is_unlimited:
             self.is_unlimited = True
@@ -4848,6 +4856,8 @@ class WatchingWorker:
 
     def _check_and_enter_night_sleep(self, session_watched_keys: Set[str]) -> bool:
         """Evaluate local system clock against night sleep settings and enter Long Sleep if triggered."""
+        if not getattr(self, "sleep_nap_enabled", True):
+            return False
         if not hasattr(self, "night_scheduler") or not self.night_scheduler or not self.night_scheduler.is_enabled():
             return False
 
@@ -5299,10 +5309,20 @@ class WatchingWorker:
         Returns True if successfully woke up and ready to continue, False if stopped.
         """
         # If Long Sleep / Night Mode is triggered, prioritize night sleep
-        if hasattr(self, "night_scheduler") and self.night_scheduler and self.night_scheduler.is_enabled():
+        if getattr(self, "sleep_nap_enabled", True) and hasattr(self, "night_scheduler") and self.night_scheduler and self.night_scheduler.is_enabled():
             sched = self.night_scheduler.evaluate()
             if sched.get("is_sleep_time"):
                 return self._execute_night_sleep_cycle(sched, session_watched_keys)
+
+        if not getattr(self, "sleep_nap_enabled", True):
+            stop_msg = (
+                "No video of targeted channel found on YouTube Home or via YouTube Search. "
+                "Sleep & Nap mode is disabled on dashboard; stopping watching session."
+            )
+            emit(self.log_queue, stop_msg, logging.WARNING)
+            self._report_status("Stopped: No target videos found (Sleep/Nap disabled)", "warning")
+            self.stop_event.set()
+            return False
 
         sleep_hours = self.config_mgr.get_short_sleep_hours(default=2.0) if self.config_mgr else 2.0
 
@@ -5622,6 +5642,11 @@ class WatchingWorker:
             target_long_vids_cycle: int = random.randint(3, 5)
             emit(
                 self.log_queue,
+                f"Sleep & Nap mode: {'Enabled' if getattr(self, 'sleep_nap_enabled', True) else 'Disabled'}.",
+                logging.INFO,
+            )
+            emit(
+                self.log_queue,
                 f"Starting long-form video cycle: will watch {target_long_vids_cycle} targeted long-form video(s) before switching to Shorts.",
                 logging.INFO,
             )
@@ -5641,7 +5666,8 @@ class WatchingWorker:
                     suggested_miss_count = 0
                     consecutive_target_watched = 0
                     channel_buffer_counts.clear()
-                    target_attempts = 0
+                    if self.is_unlimited:
+                        target_attempts = 0
                     continue
 
                 # Check if active account reached its progressive warm-up daily quota

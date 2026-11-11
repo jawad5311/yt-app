@@ -883,6 +883,7 @@ class YTBotApp(tk.Tk):
         dashboard = self.views.get("dashboard")
         browsing_limit = 1
         is_unlimited = False
+        sleep_nap_enabled = True
         if dashboard is not None and hasattr(dashboard, "get_browsing_limit"):
             try:
                 browsing_limit, is_unlimited = dashboard.get_browsing_limit()
@@ -891,14 +892,18 @@ class YTBotApp(tk.Tk):
                 if hasattr(dashboard, "set_status"):
                     dashboard.set_status(str(err), "error")
                 return
+            if hasattr(dashboard, "get_sleep_nap_enabled"):
+                sleep_nap_enabled = dashboard.get_sleep_nap_enabled()
         else:
             is_unlimited = self.config_mgr.get_bool("BrowsingUnlimited", True)
             browsing_limit = None if is_unlimited else self.config_mgr.get_int("BrowsingTargetLimit", 1)
+            sleep_nap_enabled = self.config_mgr.get_bool("SleepNapEnabled", True)
 
         try:
             self.config_mgr.update_settings({
                 "BrowsingUnlimited": is_unlimited,
                 "BrowsingTargetLimit": browsing_limit if browsing_limit is not None else 1,
+                "SleepNapEnabled": sleep_nap_enabled,
             })
         except Exception as err:
             err_msg = f"Failed to save browsing settings: {sanitize_error(err, self.loaded_accounts)}"
@@ -947,7 +952,7 @@ class YTBotApp(tk.Tk):
         try:
             self.session_manager_thread = threading.Thread(
                 target=self._run_watching_session,
-                args=(self.loaded_accounts[0], active_channels, browsing_limit, is_unlimited, session_id),
+                args=(self.loaded_accounts[0], active_channels, browsing_limit, is_unlimited, session_id, None, sleep_nap_enabled),
                 daemon=True,
             )
             self.session_manager_thread.start()
@@ -973,6 +978,7 @@ class YTBotApp(tk.Tk):
         is_unlimited: bool = False,
         session_id: int = 0,
         total_loops: Optional[int] = None,
+        sleep_nap_enabled: Optional[bool] = None,
         **kwargs: Any,
     ):
         """Execute the continuous watching recommendation session."""
@@ -993,6 +999,7 @@ class YTBotApp(tk.Tk):
                 pause_event=self.pause_event,
                 target_limit=browsing_limit,
                 is_unlimited=is_unlimited,
+                sleep_nap_enabled=sleep_nap_enabled,
                 open_videos=True,
             )
             self.active_workers.append(worker)

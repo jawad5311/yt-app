@@ -224,6 +224,24 @@ class DashboardView(Frame):
         self.browsing_limit_entry.configure(state="disabled")
         self.browsing_unlimited_cb.pack(side="left", padx=(16, 10), pady=10)
 
+        # Sleep & Nap Mode Toggle Switch
+        initial_sleep_nap = (
+            self.app_controller.config_mgr.get_bool("SleepNapEnabled", True)
+            if hasattr(self.app_controller, "config_mgr")
+            else True
+        )
+        self.browsing_sleep_nap_cb = CheckBox(
+            self.browsing_limit_frame,
+            text="Sleep & Nap mode",
+            command=self._on_browsing_sleep_nap_toggle,
+            style="AppleInset.TCheckbutton",
+        )
+        if initial_sleep_nap:
+            self.browsing_sleep_nap_cb.select()
+        else:
+            self.browsing_sleep_nap_cb.deselect()
+        self.browsing_sleep_nap_cb.pack(side="left", padx=(10, 10), pady=10)
+
         self.browsing_hint = Label(
             self.browsing_limit_frame,
             text="(target video attempts; 1 = max attempt)",
@@ -454,6 +472,24 @@ class DashboardView(Frame):
             else:
                 self.browsing_limit_entry.configure(state="normal")
 
+    def _on_browsing_sleep_nap_toggle(self):
+        if getattr(self, "is_running", False) or (hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True):
+            return
+        if hasattr(self, "browsing_sleep_nap_cb") and hasattr(self.app_controller, "config_mgr") and self.app_controller.config_mgr:
+            val = bool(self.browsing_sleep_nap_cb.get())
+            try:
+                self.app_controller.config_mgr.update_settings({"SleepNapEnabled": val})
+            except Exception:
+                pass
+
+    def get_sleep_nap_enabled(self) -> bool:
+        """Return True if Sleep & Nap mode toggle is checked on the dashboard."""
+        if hasattr(self, "browsing_sleep_nap_cb"):
+            return bool(self.browsing_sleep_nap_cb.get())
+        if hasattr(self.app_controller, "config_mgr") and self.app_controller.config_mgr:
+            return bool(self.app_controller.config_mgr.get_bool("SleepNapEnabled", True))
+        return True
+
     def set_progress(self, done: int, total: int, mode: str = "automation"):
         """Update the progress bar and description matching the active mode."""
         if mode == "watching":
@@ -542,6 +578,8 @@ class DashboardView(Frame):
             if hasattr(self, "browsing_unlimited_cb"):
                 # Do not gray out the unlimited switch; keep its visual state and disable interaction while browsing
                 self.browsing_unlimited_cb.configure(interactive=False)
+            if hasattr(self, "browsing_sleep_nap_cb"):
+                self.browsing_sleep_nap_cb.configure(interactive=False)
             self.card_status.configure(text="Browsing", text_color="#1F6AA5")
             if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
                 try:
@@ -589,6 +627,8 @@ class DashboardView(Frame):
                     self.browsing_limit_entry.configure(state="normal")
             elif hasattr(self, "browsing_limit_entry"):
                 self.browsing_limit_entry.configure(state="normal")
+            if hasattr(self, "browsing_sleep_nap_cb"):
+                self.browsing_sleep_nap_cb.configure(interactive=True, state="normal")
             self.card_status.configure(text="Idle", text_color="white")
             if hasattr(self, "system_pill_dot") and hasattr(self, "system_pill_text"):
                 try:

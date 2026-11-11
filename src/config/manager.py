@@ -168,6 +168,7 @@ class ConfigManager:
             "DefaultVideoTargetViews": 3,
             "DefaultVideoMaxViews": 5,
             "DefaultShortsMaxViews": 5,
+            "SleepNapEnabled": True,
             "NoTargetFoundSleepHours": "2 Hours",
             "ShortSleepHours": "2 Hours",
             "NightSleepEnabled": False,
@@ -417,6 +418,10 @@ class ConfigManager:
                 if res < 0.0:
                     return default
             return res
+
+    def get_sleep_nap_enabled(self, default: bool = True) -> bool:
+        """Return True if Sleep & Nap mode toggle is enabled."""
+        return self.get_bool("SleepNapEnabled", default)
 
     def get_short_sleep_hours(self, default: float = 2.0) -> float:
         """Return configured hours to sleep when no target videos/shorts are found (Short Sleep / Nap)."""
