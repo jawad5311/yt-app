@@ -72,9 +72,17 @@ def test_channel_action_buttons_order_and_grid_positions(ctk_app):
     assert dn_info["column"] == 0
     assert dn_info["row"] == 1
 
-    # Column 1: Sync Recent (shown separately before Sync All)
+    # Column 1: Sync Recent on top (row 0), Warm Up below (row 1)
+    warmup_btn = next((b for b in action_frame.winfo_children() if isinstance(b, ctk.CTkButton) and "Warm Up" in b.cget("text")), None)
+    assert warmup_btn is not None
+    warmup_info = warmup_btn.grid_info()
     assert recent_info["column"] == 1
-    assert recent_info["rowspan"] == 2
+    assert recent_info["row"] == 0
+    assert warmup_info["column"] == 1
+    assert warmup_info["row"] == 1
+    # Both Sync Recent and Warm Up must have identical dimensions
+    assert sync_recent_btn.winfo_reqwidth() == warmup_btn.winfo_reqwidth()
+    assert sync_recent_btn.winfo_reqheight() == warmup_btn.winfo_reqheight()
 
     # Column 2: Sync All on top (row 0), Sync All Shorts below (row 1)
     assert all_info["column"] == 2

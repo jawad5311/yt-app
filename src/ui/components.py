@@ -138,6 +138,8 @@ class Button(ttk.Button):
                 style = "Danger.TButton"
             elif fg_color in ("#F57C00", "#f57c00", "#EF6C00", "#ef6c00", "#D97706", "#d97706", "#B45309"):
                 style = "Warning.TButton"
+            elif fg_color in ("#F97316", "#f97316", "#EA580C", "#ea580c"):
+                style = "Warmup.TButton"
             elif fg_color in ("#0D9488", "#0d9488", "#0F766E", "#0f766e", "#14B8A6"):
                 style = "Teal.TButton"
             elif fg_color in ("#374151", "#4B5563", "#4b5563", "gray30"):

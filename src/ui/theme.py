@@ -269,18 +269,14 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         background=colors.get("teal", "#0f766e"),
         foreground="#ffffff",
         font=(family, 9, "bold"),
-        bordercolor=colors.get("teal", "#0f766e"),
-        lightcolor=colors.get("teal", "#0f766e"),
-        darkcolor=colors.get("teal", "#0f766e"),
-        borderwidth=1,
+        borderwidth=0,
         focuscolor="none",
-        relief="solid",
-        padding=(12, 5),
+        relief="flat",
+        padding=(7, 3),
     )
     style.map(
         "Teal.TButton",
         background=[("disabled", btn_disabled_bg), ("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
-        bordercolor=[("disabled", btn_disabled_bg), ("active", colors.get("teal_hover", "#115e59")), ("pressed", "#09403b")],
         foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 
@@ -290,18 +286,31 @@ def setup_ttk_styles(root: tk.Misc, mode: str = "Dark") -> ttk.Style:
         background=colors.get("cerulean", "#0284c7"),
         foreground="#ffffff",
         font=(family, 9, "bold"),
-        bordercolor=colors.get("cerulean", "#0284c7"),
-        lightcolor=colors.get("cerulean", "#0284c7"),
-        darkcolor=colors.get("cerulean", "#0284c7"),
-        borderwidth=1,
+        borderwidth=0,
         focuscolor="none",
-        relief="solid",
+        relief="flat",
         padding=(7, 3),
     )
     style.map(
         "Cerulean.TButton",
         background=[("disabled", btn_disabled_bg), ("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
-        bordercolor=[("disabled", btn_disabled_bg), ("active", colors.get("cerulean_hover", "#0369a1")), ("pressed", "#075985")],
+        foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
+    )
+
+    # Warmup / Radiant Orange Button (Channel / Account Warmup Actions)
+    style.configure(
+        "Warmup.TButton",
+        background="#f97316",
+        foreground="#ffffff",
+        font=(family, 9, "bold"),
+        borderwidth=0,
+        focuscolor="none",
+        relief="flat",
+        padding=(7, 3),
+    )
+    style.map(
+        "Warmup.TButton",
+        background=[("disabled", btn_disabled_bg), ("active", "#ea580c"), ("pressed", "#c2410c")],
         foreground=[("disabled", btn_disabled_fg), ("active", "#ffffff"), ("pressed", "#ffffff")],
     )
 

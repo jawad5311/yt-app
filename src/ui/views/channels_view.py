@@ -3904,11 +3904,11 @@ class ChannelsView(Frame):
             sync_btn = ctk.CTkButton(
                 action_frame,
                 text="⚡ Sync Recent",
-                width=92,
+                width=112,
                 height=22,
                 font=ctk.CTkFont(size=9, weight="bold"),
-                fg_color="#0D9488" if has_new else "gray30",
-                hover_color="#0F766E" if has_new else "gray30",
+                fg_color="#0D9488",
+                hover_color="#0F766E",
                 state="normal" if has_new else "disabled",
             )
             sync_btn.configure(
@@ -3923,7 +3923,7 @@ class ChannelsView(Frame):
             warmup_btn = ctk.CTkButton(
                 action_frame,
                 text="🔥 Warm Up",
-                width=92,
+                width=112,
                 height=22,
                 font=ctk.CTkFont(size=9, weight="bold"),
                 fg_color="#F97316",
