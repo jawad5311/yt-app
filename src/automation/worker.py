@@ -744,27 +744,70 @@ class AutomationWorker:
         return False
 
     def _async_init_and_send_start_notification(self) -> None:
-        """Initialize headless reporting browser and send start notification asynchronously in background."""
-        try:
-            method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
-            if "headless" in method.lower() and not getattr(self, "reporting_driver", None):
-                try:
-                    self.reporting_driver = EmailReporter.create_headless_reporting_driver(
-                        account=self.account,
-                        log_queue=self.log_queue,
-                    )
-                except Exception as exc:
-                    logging.debug(f"Could not create persistent reporting driver: {exc}")
-                    self.reporting_driver = None
-
-            self._send_start_notification()
-        except Exception as exc:
-            logging.debug(f"Failed in async start notification dispatch: {exc}")
-
-    def _send_start_notification(self) -> None:
-        """Deliver start notification email via headless browser."""
+        """Initialize headless reporting browser and send start notification asynchronously in background with retry and auto-recovery."""
         if not self.config_mgr or self.worker_id != 0:
             return
+
+        delays = getattr(self, "_start_notification_delays", [5.0, 10.0, 15.0, 20.0])
+        max_attempts = len(delays) + 1
+
+        for attempt in range(1, max_attempts + 1):
+            if self.stop_event.is_set():
+                return
+
+            try:
+                method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
+                if "headless" in method.lower() and not getattr(self, "reporting_driver", None):
+                    try:
+                        self.reporting_driver = EmailReporter.create_headless_reporting_driver(
+                            account=self.account,
+                            log_queue=self.log_queue,
+                        )
+                    except Exception as exc:
+                        logging.debug(f"Could not create persistent reporting driver: {exc}")
+                        self.reporting_driver = None
+
+                delivered = self._send_start_notification()
+                if delivered:
+                    return
+            except Exception as exc:
+                logging.debug(f"Start notification attempt {attempt} failed: {exc}")
+
+            if self.stop_event.is_set():
+                return
+
+            if attempt < max_attempts:
+                wait_sec = delays[attempt - 1]
+                emit(
+                    self.log_queue,
+                    f"Start notification email delivery attempt {attempt} did not succeed. Waiting {int(wait_sec)}s before retry (attempt {attempt + 1}/{max_attempts})...",
+                    logging.WARNING,
+                )
+                # Cleanup failed reporting driver so next attempt can re-sync profile cookies
+                if getattr(self, "reporting_driver", None):
+                    try:
+                        self.reporting_driver.quit()
+                    except Exception:
+                        pass
+                    self.reporting_driver = None
+
+                sleep_start = time.time()
+                while time.time() - sleep_start < wait_sec:
+                    if self.stop_event.is_set():
+                        return
+                    time.sleep(1.0)
+            else:
+                emit(
+                    self.log_queue,
+                    f"[Start Notification Alert] Failed to deliver session start notification email after {max_attempts} attempts. "
+                    f"Please check your Google account credentials or email reporting configuration.",
+                    logging.ERROR,
+                )
+
+    def _send_start_notification(self) -> bool:
+        """Deliver start notification email via headless browser. Returns True on success, False otherwise."""
+        if not self.config_mgr or self.worker_id != 0:
+            return False
         try:
             total_sec = 0.0
             if hasattr(self, "channel_tracker") and self.channel_tracker:
@@ -772,7 +815,7 @@ class AutomationWorker:
             elif self.config_mgr:
                 total_sec = sum(float(c.get("watch_seconds", 0.0) or 0.0) for c in self.config_mgr.get_channels())
 
-            EmailReporter.send_start_notification(
+            ok = EmailReporter.send_start_notification(
                 account=self.account,
                 session_mode="Automation Queue",
                 config_mgr=self.config_mgr,
@@ -787,8 +830,10 @@ class AutomationWorker:
                 self.session_thread_url = self.session_thread_info["thread_url"]
             if self.session_thread_info.get("message_id"):
                 self.session_thread_message_id = self.session_thread_info["message_id"]
+            return bool(ok)
         except Exception as exc:
             logging.debug(f"Failed dispatching start notification email: {exc}")
+            return False
 
     def _check_account_login_before_play(self, content_type: str = "video", content_title: str = "") -> bool:
         """Verify account login status before playing every video or short."""

@@ -16,13 +16,19 @@ class NightSleepScheduler:
     (e.g. 7-8 hours) and tracks completion so the bot sleeps once per night.
     """
 
-    def __init__(self, config_mgr: Optional[ConfigManager] = None) -> None:
+    def __init__(
+        self,
+        config_mgr: Optional[ConfigManager] = None,
+        session_start_time: Optional[datetime] = None,
+    ) -> None:
         self.config_mgr = config_mgr
         self.active_window_id: Optional[str] = None
         self.scheduled_sleep_start: Optional[datetime] = None
         self.scheduled_sleep_end: Optional[datetime] = None
         self.scheduled_duration_hours: float = 8.0
         self.completed_window_ids: Set[str] = set()
+        self.bypassed_window_ids: Set[str] = set()
+        self.session_start_time: Optional[datetime] = session_start_time
 
     def is_enabled(self) -> bool:
         """Return True if Long Sleep / Night Mode is turned on in settings."""
@@ -179,6 +185,18 @@ class NightSleepScheduler:
                 "window_end": w_end,
             }
 
+        # Check if this night window is bypassed because session was started during nighttime
+        if self.is_window_bypassed(win_id, w_start=w_start, w_end=w_end):
+            return {
+                "enabled": True,
+                "inside_night_window": True,
+                "is_sleep_time": False,
+                "bypassed_for_this_window": True,
+                "window_id": win_id,
+                "window_start": w_start,
+                "window_end": w_end,
+            }
+
         # If not scheduled yet for this window, compute random schedule
         if self.active_window_id != win_id or not self.scheduled_sleep_start or not self.scheduled_sleep_end:
             self.schedule_for_window(w_start, w_end, win_id, now=current_time)
@@ -224,6 +242,34 @@ class NightSleepScheduler:
             "scheduled_sleep_end": self.scheduled_sleep_end,
             "sleep_duration_hours": self.scheduled_duration_hours,
         }
+
+    def is_window_bypassed(
+        self,
+        window_id: str,
+        w_start: Optional[datetime] = None,
+        w_end: Optional[datetime] = None,
+    ) -> bool:
+        """Return True if the specified night window is bypassed (e.g. session started during it)."""
+        if window_id in self.bypassed_window_ids:
+            return True
+        if self.session_start_time is not None:
+            if w_start is None or w_end is None:
+                calc_start, calc_end, inside, calc_id = self.get_current_or_upcoming_window(self.session_start_time)
+                if inside and calc_id == window_id:
+                    self.bypassed_window_ids.add(window_id)
+                    return True
+            elif w_start <= self.session_start_time < w_end:
+                self.bypassed_window_ids.add(window_id)
+                return True
+        return False
+
+    def mark_bypassed(self, window_id: str) -> None:
+        """Mark the specified night window as bypassed so long sleep is skipped for it."""
+        self.bypassed_window_ids.add(window_id)
+
+    def set_session_start_time(self, start_time: Optional[datetime]) -> None:
+        """Set or update the session start time used to detect if started during nighttime."""
+        self.session_start_time = start_time
 
     def mark_completed(self, window_id: str) -> None:
         """Mark the specified night window as completed so it does not sleep again tonight."""

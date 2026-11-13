@@ -734,6 +734,8 @@ class EmailReporter:
         email_description: str = "report",
         thread_info: Optional[Dict[str, Any]] = None,
         html_content: Optional[str] = None,
+        account: Optional[Account] = None,
+        config_mgr: Optional[Any] = None,
     ) -> bool:
         """Core Gmail compose automation in Chrome (works for visible and headless Chrome)."""
         if not driver:
@@ -761,19 +763,61 @@ class EmailReporter:
             # Wait for Gmail to load or redirect
             start_wait = time.time()
             is_signed_in = True
-            while time.time() - start_wait < 18:
-                current_url = driver.current_url or ""
-                if "accounts.google.com" in current_url:
-                    is_signed_in = False
-                    break
+            while time.time() - start_wait < 20:
+                current_url = getattr(driver, "current_url", "") or ""
                 # Check if compose box or any compose element has rendered
                 if driver.find_elements(By.XPATH, "//div[@role='textbox'] | //input[@name='to' or @aria-label='To' or contains(@class, 'agP')]"):
+                    is_signed_in = True
                     break
+                # Check if redirected to accounts.google.com
+                if "accounts.google.com" in current_url:
+                    if any(p in current_url.lower() for p in ("/signin", "/servicelogin", "/identifier", "/v2/", "/v3/")):
+                        time.sleep(2.0)
+                        cur_after = getattr(driver, "current_url", "") or ""
+                        if any(p in cur_after.lower() for p in ("/signin", "/servicelogin", "/identifier", "/v2/", "/v3/")):
+                            is_signed_in = False
+                            break
                 time.sleep(1.0)
 
             if not is_signed_in:
+                # If account is provided, attempt automatic Google sign-in
+                if account and getattr(account, "email", "").strip() and getattr(account, "password", "").strip():
+                    if log_queue:
+                        emit(
+                            log_queue,
+                            f"Google account is not signed in for reporting browser. Attempting automatic sign-in for {account.email}...",
+                            logging.INFO,
+                        )
+                    try:
+                        from .login import perform_google_login
+                        login_ok = perform_google_login(
+                            driver,
+                            account,
+                            log_queue=log_queue,
+                            config_mgr=config_mgr,
+                        )
+                        if login_ok:
+                            if log_queue:
+                                emit(log_queue, f"Sign-in successful for {account.email}! Re-opening Gmail compose...", logging.INFO)
+                            driver.get(compose_url)
+                            start_wait2 = time.time()
+                            is_signed_in = True
+                            while time.time() - start_wait2 < 20:
+                                cur2 = getattr(driver, "current_url", "") or ""
+                                if driver.find_elements(By.XPATH, "//div[@role='textbox'] | //input[@name='to' or @aria-label='To' or contains(@class, 'agP')]"):
+                                    is_signed_in = True
+                                    break
+                                if "accounts.google.com" in cur2 and any(p in cur2.lower() for p in ("/signin", "/servicelogin", "/identifier", "/v2/", "/v3/")):
+                                    is_signed_in = False
+                                time.sleep(1.0)
+                    except Exception as e_login:
+                        if log_queue:
+                            emit(log_queue, f"Notice during automatic reporting sign-in attempt: {e_login}", logging.DEBUG)
+
+            if not is_signed_in:
                 if log_queue:
-                    emit(log_queue, f"Gmail {email_description} delivery failed: Google account is not signed in for this profile.", logging.ERROR)
+                    acc_email = getattr(account, "email", "this profile") if account else "this profile"
+                    emit(log_queue, f"Gmail {email_description} delivery failed: Google account ({acc_email}) is not signed in for this profile.", logging.ERROR)
                 return False
 
             # Ensure Recipient is populated and committed
@@ -1119,6 +1163,8 @@ class EmailReporter:
         email_description: str = "report",
         thread_info: Optional[Dict[str, Any]] = None,
         html_content: Optional[str] = None,
+        account: Optional[Account] = None,
+        config_mgr: Optional[Any] = None,
     ) -> bool:
         """Reply directly to an existing session email thread in Gmail."""
         if not driver:
@@ -1168,11 +1214,15 @@ class EmailReporter:
                 # Wait for thread or search results to load
                 start_wait = time.time()
                 is_signed_in = True
-                while time.time() - start_wait < 18:
-                    cur = driver.current_url or ""
+                while time.time() - start_wait < 20:
+                    cur = getattr(driver, "current_url", "") or ""
                     if "accounts.google.com" in cur:
-                        is_signed_in = False
-                        break
+                        if any(p in cur.lower() for p in ("/signin", "/servicelogin", "/identifier", "/v2/", "/v3/")):
+                            time.sleep(2.0)
+                            cur_after = getattr(driver, "current_url", "") or ""
+                            if any(p in cur_after.lower() for p in ("/signin", "/servicelogin", "/identifier", "/v2/", "/v3/")):
+                                is_signed_in = False
+                                break
                     is_direct_thread = bool(re.search(r"#(?:sent|inbox|all)/[a-zA-Z0-9_-]{6,}", cur))
                     if not is_direct_thread and ("#search" in cur or cur.rstrip("/").endswith("#sent")):
                         rows = driver.find_elements(By.XPATH, "//tr[contains(@class, 'zA')]")
@@ -1191,7 +1241,28 @@ class EmailReporter:
                     time.sleep(1.0)
 
                 if not is_signed_in:
-                    return False
+                    if account and getattr(account, "email", "").strip() and getattr(account, "password", "").strip():
+                        if log_queue:
+                            emit(
+                                log_queue,
+                                f"Google account not signed in for reporting thread reply. Attempting automatic sign-in for {account.email}...",
+                                logging.INFO,
+                            )
+                        try:
+                            from .login import perform_google_login
+                            login_ok = perform_google_login(
+                                driver,
+                                account,
+                                log_queue=log_queue,
+                                config_mgr=config_mgr,
+                            )
+                            if login_ok and target_url:
+                                driver.get(target_url)
+                                time.sleep(3.0)
+                        except Exception:
+                            return False
+                    else:
+                        return False
 
             # Ensure we are scrolled to the bottom of the conversation where Reply button lives
             try:
@@ -1465,6 +1536,7 @@ class EmailReporter:
         bcc_email: Optional[str] = None,
         log_queue: Optional[queue.Queue] = None,
         thread_info: Optional[Dict[str, Any]] = None,
+        config_mgr: Optional[Any] = None,
     ) -> bool:
         """Deliver report email using an active, visible Chrome browser session, threading into existing session if possible."""
         from .driver import is_driver_alive
@@ -1475,6 +1547,18 @@ class EmailReporter:
             return False
 
         target_thread = report.thread_url or cls.last_thread_url
+        account = None
+        if config_mgr and hasattr(config_mgr, "get_accounts"):
+            try:
+                for a in config_mgr.get_accounts():
+                    if isinstance(a, dict) and a.get("email", "").lower() == (report.account_email or "").lower():
+                        account = Account(email=a["email"], password=a.get("password", ""))
+                        break
+            except Exception:
+                account = None
+        if not account and report.account_email:
+            account = Account(email=report.account_email, password="")
+
         if target_thread or report.custom_subject:
             reply_ok = cls._deliver_via_gmail_thread_reply(
                 driver=driver,
@@ -1487,6 +1571,8 @@ class EmailReporter:
                 email_description="session watch time report",
                 thread_info=thread_info,
                 html_content=report.generate_html_body(),
+                account=account,
+                config_mgr=config_mgr,
             )
             if reply_ok:
                 return True
@@ -1508,6 +1594,8 @@ class EmailReporter:
                 email_description="session watch time report",
                 thread_info=thread_info,
                 html_content=report.generate_html_body(),
+                account=account,
+                config_mgr=config_mgr,
             )
             if reply_ok:
                 return True
@@ -1528,6 +1616,8 @@ class EmailReporter:
             email_description="session watch time report",
             thread_info=thread_info,
             html_content=report.generate_html_body(),
+            account=account,
+            config_mgr=config_mgr,
         )
 
     @classmethod
@@ -1535,6 +1625,7 @@ class EmailReporter:
         cls,
         account: Account,
         log_queue: Optional[queue.Queue] = None,
+        config_mgr: Optional[Any] = None,
     ) -> Optional[Any]:
         """Create and return a dedicated headless Chrome driver for session email notifications and reporting.
 
@@ -1572,6 +1663,8 @@ class EmailReporter:
         thread_info: Optional[Dict[str, Any]] = None,
         html_content: Optional[str] = None,
         headless: Optional[bool] = None,
+        config_mgr: Optional[Any] = None,
+        is_reporting: bool = False,
     ) -> bool:
         """Launch Chrome with account profile, send email via Gmail web, and close.
 
@@ -1594,7 +1687,7 @@ class EmailReporter:
         if headless is not None:
             use_headless = bool(headless)
         else:
-            use_headless = True if ("start" in email_description.lower()) else False
+            use_headless = True
 
         if log_queue:
             log_recipient = recipient_email if recipient_email.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else 'recipient'
@@ -1603,11 +1696,14 @@ class EmailReporter:
 
         driver = None
         try:
-            driver = setup_driver(
-                account=account,
-                log_queue=log_queue,
-                headless=use_headless,
-            )
+            setup_kwargs = {
+                "account": account,
+                "log_queue": log_queue,
+                "headless": use_headless,
+            }
+            if is_reporting:
+                setup_kwargs["is_reporting"] = True
+            driver = setup_driver(**setup_kwargs)
             target_thread = thread_url or cls.last_thread_url
             if target_thread or ("start" not in email_description.lower() and subject):
                 reply_ok = cls._deliver_via_gmail_thread_reply(
@@ -1621,6 +1717,8 @@ class EmailReporter:
                     email_description=email_description,
                     thread_info=thread_info,
                     html_content=html_content,
+                    account=account,
+                    config_mgr=config_mgr,
                 )
                 if reply_ok:
                     return True
@@ -1635,6 +1733,8 @@ class EmailReporter:
                 email_description=email_description,
                 thread_info=thread_info,
                 html_content=html_content,
+                account=account,
+                config_mgr=config_mgr,
             )
         except Exception as exc:
             if log_queue:
@@ -1776,6 +1876,8 @@ class EmailReporter:
                     log_queue=None,
                     email_description=f"alert ({alert_type})",
                     thread_info=thread_info,
+                    account=account,
+                    config_mgr=config_mgr,
                 )
                 if reply_ok:
                     return True
@@ -1788,6 +1890,8 @@ class EmailReporter:
                 log_queue=None,
                 email_description=f"alert ({alert_type})",
                 thread_info=thread_info,
+                account=account,
+                config_mgr=config_mgr,
             )
 
         # 3. Headless Browser Gmail
@@ -1802,6 +1906,7 @@ class EmailReporter:
                 email_description=f"alert ({alert_type})",
                 thread_url=target_thread_url,
                 thread_info=thread_info,
+                config_mgr=config_mgr,
             )
 
         return False
@@ -1869,10 +1974,11 @@ class EmailReporter:
                 log_queue=log_queue,
                 email_description="start notification email",
                 thread_info=thread_info,
+                account=account,
+                config_mgr=config_mgr,
             )
 
-        # Start notification runs quietly without emitting logs to UI.
-        # Only the completion report at the end of automation shows in the logs.
+        # 2. Try SMTP if configured
         if "smtp" in method.lower() and "browser" not in method.lower() and smtp_pass:
             ok = cls._send_plain_smtp(
                 recipient=recipient,
@@ -1881,27 +1987,26 @@ class EmailReporter:
                 config_mgr=config_mgr,
                 bcc_email=bcc_email,
                 account=account,
-                log_queue=None,
+                log_queue=log_queue,
                 thread_info=thread_info,
             )
             if ok and log_queue:
                 emit(log_queue, "Notified successfully")
             return ok
 
-        # Default: Headless Browser Gmail
-        ok = cls.send_via_headless_browser_gmail(
+        # 3. Default: Headless Browser Gmail
+        return cls.send_via_headless_browser_gmail(
             account=account,
             subject=subject,
             body_text=plain_text,
             recipient_email=recipient,
             bcc_email=bcc_email,
-            log_queue=None,
+            log_queue=log_queue,
             email_description="start notification email",
             thread_info=thread_info,
+            config_mgr=config_mgr,
+            is_reporting=True,
         )
-        if ok and log_queue:
-            emit(log_queue, "Notified successfully")
-        return ok
 
     @classmethod
     def _send_plain_smtp(

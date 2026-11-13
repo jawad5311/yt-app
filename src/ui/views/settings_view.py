@@ -387,7 +387,7 @@ class SettingsView(Frame):
         )
         Label(
             scroll_playback,
-            text="The time of day when your system enters nighttime (e.g. 22:00 / 10:00 PM).",
+            text="The time of day when your system enters nighttime (e.g. 22:00 / 10:00 PM). Sessions started during nighttime bypass initial long sleep to browse and nap until the next cycle.",
             font=Font(size=11),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=25, pady=(0, 4))

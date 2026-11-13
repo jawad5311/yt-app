@@ -89,9 +89,16 @@ def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
         "Default/Preferences",
         "Default/Secure Preferences",
         "Default/Network/Cookies",
+        "Default/Network/Cookies-journal",
+        "Default/Network/Cookies-wal",
+        "Default/Cookies",
+        "Default/Cookies-journal",
+        "Default/Cookies-wal",
         "Default/Login Data",
+        "Default/Login Data-journal",
         "Default/Login Data For Account",
         "Default/Web Data",
+        "Default/Web Data-journal",
     ]
     for rel_path in files_to_sync:
         s = src_dir / rel_path
@@ -101,7 +108,13 @@ def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
                 d.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(s, d)
             except Exception:
-                pass
+                try:
+                    with open(s, "rb") as f_src:
+                        data = f_src.read()
+                    with open(d, "wb") as f_dst:
+                        f_dst.write(data)
+                except Exception:
+                    pass
 
 
 def setup_driver(

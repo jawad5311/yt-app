@@ -330,3 +330,178 @@ def test_email_report_formats_for_nap_and_night_modes():
     assert "Sleep Cycle:          #3" in plain_nap
     assert "Going to Sleep — Short Sleep / Nap Mode (Nap Cycle #3)" in html_nap
     assert "Going to Nap (Cycle #3)" in html_nap
+
+
+def test_night_sleep_scheduler_bypasses_window_when_session_started_at_night(tmp_path):
+    """If session is started during the nighttime window, bypass long sleep for that initial window."""
+    config_mgr = ConfigManager(config_file=tmp_path / "settings.json")
+    config_mgr.set_setting("NightSleepEnabled", True)
+    config_mgr.set_setting("NightSleepStartTime", "22:00 (10:00 PM)")
+    config_mgr.set_setting("NightSleepWindowHours", "12 Hours")  # 22:00 to 10:00 next day
+    config_mgr.set_setting("NightSleepDurationHours", "8 Hours")
+
+    # Session started at 22:30 (inside night window)
+    session_start = datetime(2026, 11, 8, 22, 30)
+    scheduler = NightSleepScheduler(config_mgr=config_mgr, session_start_time=session_start)
+
+    # 1. Evaluate during the same night at 23:00
+    res_same_night = scheduler.evaluate(now=datetime(2026, 11, 8, 23, 0))
+    assert res_same_night["inside_night_window"] is True
+    assert res_same_night["is_sleep_time"] is False
+    assert res_same_night.get("bypassed_for_this_window") is True
+    assert res_same_night["window_id"] == "2026-11-08_2200"
+
+    # 2. Evaluate during the same night after midnight at 03:00
+    res_after_midnight = scheduler.evaluate(now=datetime(2026, 11, 9, 3, 0))
+    assert res_after_midnight["inside_night_window"] is True
+    assert res_after_midnight["is_sleep_time"] is False
+    assert res_after_midnight.get("bypassed_for_this_window") is True
+    assert res_after_midnight["window_id"] == "2026-11-08_2200"
+
+    # 3. Evaluate next day during daytime at 14:00
+    res_daytime = scheduler.evaluate(now=datetime(2026, 11, 9, 14, 0))
+    assert res_daytime["inside_night_window"] is False
+    assert res_daytime["is_sleep_time"] is False
+
+    # 4. Evaluate when next night window arrives at 22:00 (2026-11-09)
+    # The next window must NOT be bypassed because session was started on the previous day!
+    w_start, w_end, inside, win_id = scheduler.get_current_or_upcoming_window(now=datetime(2026, 11, 9, 22, 0))
+    assert inside is True
+    assert win_id == "2026-11-09_2200"
+    assert scheduler.is_window_bypassed(win_id, w_start=w_start, w_end=w_end) is False
+
+    # Scheduler schedules sleep for this new cycle
+    scheduler.schedule_for_window(w_start, w_end, win_id, now=datetime(2026, 11, 9, 22, 0), forced_duration=8.0, forced_start_offset=0.0)
+    res_next_night = scheduler.evaluate(now=datetime(2026, 11, 9, 22, 30))
+    assert res_next_night["inside_night_window"] is True
+    assert res_next_night["is_sleep_time"] is True
+    assert res_next_night["window_id"] == "2026-11-09_2200"
+
+
+def test_night_sleep_scheduler_does_not_bypass_when_started_in_daytime(tmp_path):
+    """If session is started during daytime, night sleep is NOT bypassed when night arrives."""
+    config_mgr = ConfigManager(config_file=tmp_path / "settings.json")
+    config_mgr.set_setting("NightSleepEnabled", True)
+    config_mgr.set_setting("NightSleepStartTime", "22:00 (10:00 PM)")
+    config_mgr.set_setting("NightSleepWindowHours", "12 Hours")
+    config_mgr.set_setting("NightSleepDurationHours", "8 Hours")
+
+    # Started at 14:00 (daytime)
+    session_start = datetime(2026, 11, 8, 14, 0)
+    scheduler = NightSleepScheduler(config_mgr=config_mgr, session_start_time=session_start)
+
+    w_start, w_end, inside, win_id = scheduler.get_current_or_upcoming_window(now=datetime(2026, 11, 8, 22, 0))
+    assert inside is True
+    assert scheduler.is_window_bypassed(win_id, w_start=w_start, w_end=w_end) is False
+
+    scheduler.schedule_for_window(w_start, w_end, win_id, now=datetime(2026, 11, 8, 22, 0), forced_duration=8.0, forced_start_offset=0.0)
+    res = scheduler.evaluate(now=datetime(2026, 11, 8, 22, 10))
+    assert res["inside_night_window"] is True
+    assert res["is_sleep_time"] is True
+    assert res.get("bypassed_for_this_window") is not True
+
+
+def test_watching_worker_nighttime_start_bypasses_long_sleep_and_allows_naps(test_worker):
+    """Worker started during nighttime window does not enter long sleep, and takes normal naps instead."""
+    test_worker.config_mgr.set_setting("NightSleepEnabled", True)
+    test_worker.config_mgr.set_setting("NightSleepStartTime", "22:00 (10:00 PM)")
+    test_worker.config_mgr.set_setting("NightSleepWindowHours", "12 Hours")
+    test_worker.config_mgr.set_setting("NightSleepDurationHours", "8 Hours")
+    test_worker.config_mgr.set_setting("ShortSleepHours", "0.00005 Hours")
+
+    # Session started at 22:30 (during night window)
+    start_dt = datetime(2026, 11, 8, 22, 30)
+    test_worker.session_start_time = start_dt
+    test_worker.night_scheduler.set_session_start_time(start_dt)
+
+    mock_driver = MagicMock()
+    test_worker.driver = mock_driver
+
+    # 1. Main loop check: _check_and_enter_night_sleep must return False and NOT enter long sleep
+    with patch("src.automation.night_sleep.datetime") as mock_dt, \
+         patch.object(test_worker, "_execute_night_sleep_cycle") as mock_night_exec:
+        mock_dt.now.return_value = datetime(2026, 11, 8, 22, 35)
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+
+        res = test_worker._check_and_enter_night_sleep(session_watched_keys=set())
+        assert res is False
+        mock_night_exec.assert_not_called()
+        assert test_worker.night_sleep_count == 0
+
+    # Verify bypass notice was emitted to the log queue
+    logged_messages = []
+    while not test_worker.log_queue.empty():
+        logged_messages.append(test_worker.log_queue.get_nowait())
+    assert any("Session was started during nighttime" in msg for msg in logged_messages)
+    assert any("Skipping long sleep for this initial cycle" in msg for msg in logged_messages)
+
+    # 2. No target content found: _enter_no_target_sleep_cycle enters Short Sleep / Nap mode, NOT long sleep
+    with patch.object(test_worker, "_send_session_report") as mock_report, \
+         patch("src.automation.watching_worker.setup_driver", return_value=MagicMock()), \
+         patch("src.automation.watching_worker.perform_google_login", return_value=True), \
+         patch("src.automation.night_sleep.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 11, 8, 23, 0)
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+
+        session_keys = {"v1"}
+        result = test_worker._enter_no_target_sleep_cycle(session_watched_keys=session_keys)
+        assert result is True
+        assert test_worker.sleep_cycle_count == 1
+        assert test_worker.night_sleep_count == 0
+
+        # Reports sent were nap reports, not night reports
+        assert mock_report.call_count == 2
+        kwargs_nap1 = mock_report.call_args_list[0][1]
+        assert kwargs_nap1["status"] == "Going to Sleep"
+        assert kwargs_nap1["sleep_mode_type"] == "nap"
+
+        kwargs_nap2 = mock_report.call_args_list[1][1]
+        assert kwargs_nap2["status"] == "Resuming Session"
+        assert kwargs_nap2["sleep_mode_type"] == "nap_resume"
+
+
+def test_watching_worker_enters_long_sleep_when_next_cycle_arrives(test_worker):
+    """Worker that bypassed initial nighttime window enters long sleep when the next long sleep cycle arrives."""
+    test_worker.config_mgr.set_setting("NightSleepEnabled", True)
+    test_worker.config_mgr.set_setting("NightSleepStartTime", "22:00 (10:00 PM)")
+    test_worker.config_mgr.set_setting("NightSleepWindowHours", "12 Hours")
+    test_worker.config_mgr.set_setting("NightSleepDurationHours", "8 Hours")
+
+    # Session started at 22:30 on Nov 8
+    start_dt = datetime(2026, 11, 8, 22, 30)
+    test_worker.session_start_time = start_dt
+    test_worker.night_scheduler.set_session_start_time(start_dt)
+
+    mock_driver = MagicMock()
+    test_worker.driver = mock_driver
+
+    # On Nov 9 at 22:00, next long sleep cycle window arrives
+    next_night_sched = {
+        "enabled": True,
+        "inside_night_window": True,
+        "is_sleep_time": True,
+        "window_id": "2026-11-09_2200",
+        "scheduled_sleep_end": datetime.now() - timedelta(seconds=1),
+        "sleep_duration_hours": 8.0,
+    }
+
+    with patch.object(test_worker.night_scheduler, "evaluate", return_value=next_night_sched), \
+         patch.object(test_worker, "_send_session_report") as mock_report, \
+         patch("src.automation.watching_worker.setup_driver", return_value=MagicMock()), \
+         patch("src.automation.watching_worker.perform_google_login", return_value=True), \
+         patch("src.automation.watching_worker.close_driver") as mock_close:
+
+        session_keys = {"v1", "v2"}
+        result = test_worker._check_and_enter_night_sleep(session_watched_keys=session_keys)
+
+        assert result is True
+        assert test_worker.night_sleep_count == 1
+        assert "2026-11-09_2200" in test_worker.night_scheduler.completed_window_ids
+        mock_close.assert_called_with(mock_driver, log_queue=test_worker.log_queue)
+
+        # Dispatched night report
+        assert mock_report.call_count == 2
+        kwargs_night = mock_report.call_args_list[0][1]
+        assert kwargs_night["status"] == "Long Sleep (Night Mode)"
+        assert kwargs_night["sleep_mode_type"] == "night"
+
