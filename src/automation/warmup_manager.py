@@ -162,11 +162,11 @@ class WarmupAccountConfig:
         if not self.is_warmed_up and self.current_day >= self.total_steps and self.watched_today_seconds >= daily_limit:
             self.is_warmed_up = True
 
-    def is_daily_quota_reached(self) -> bool:
+    def is_daily_quota_reached(self, today_str: Optional[str] = None) -> bool:
         """Return True if warm-up is enabled, account is not fully warmed up, and today's limit is met."""
         if not self.enabled:
             return False
-        self.check_and_rollover()
+        self.check_and_rollover(today_str)
         if self.is_warmed_up:
             # Fully warmed up accounts operate under normal continuous browsing rules
             return False
@@ -390,11 +390,12 @@ class WarmupChannelConfig:
         account_count: int = 1,
         account_email: Optional[str] = None,
         extra_seconds: float = 0.0,
+        today_str: Optional[str] = None,
     ) -> bool:
         """Return True when either the combined channel daily limit OR this account's divided share is reached."""
         if not self.enabled:
             return False
-        self.check_and_rollover()
+        self.check_and_rollover(today_str)
         if self.is_warmed_up:
             return False
         extra = max(0.0, float(extra_seconds or 0.0))

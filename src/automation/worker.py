@@ -345,17 +345,6 @@ class AutomationWorker:
                             if found_ch.target_achieved:
                                 emit(self.log_queue, f"Channel '{ch_name}' target watch time achieved. Stopping playback.")
                                 return "channel_target_achieved"
-                            try:
-                                from .warmup_manager import WarmupManager
-                                curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
-                                acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
-                                if WarmupManager(self.config_mgr).is_channel_daily_quota_reached(
-                                    found_ch.name, found_ch.url, account_email=acc_email, extra_seconds=curr_watch
-                                ):
-                                    emit(self.log_queue, f"Channel '{ch_name}' daily warm-up quota reached. Stopping playback.")
-                                    return "channel_warmup_quota_reached"
-                            except Exception:
-                                pass
 
                     return None
 

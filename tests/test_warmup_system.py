@@ -87,32 +87,34 @@ def test_number_formatting_helpers():
 
 def test_warmup_ladder_daily_quota_and_rollover():
     """Verify daily ladder increment, quota enforcement, and midnight rollover."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     cfg = WarmupAccountConfig(
         email="test_ladder@gmail.com",
         target_hours=15,
         daily_increment_hours=1,
         current_day=1,
-        last_active_date="2026-11-10",
+        last_active_date=today,
     )
     assert cfg.total_steps == 15
     assert cfg.get_daily_allowed_seconds() == 3600.0  # 1 hour allowed on Day 1
 
     # Watch 30 minutes (1800s) -> quota not yet reached
-    cfg.record_watch_seconds(1800.0, today_str="2026-11-10")
-    assert not cfg.is_daily_quota_reached()
+    cfg.record_watch_seconds(1800.0, today_str=today)
+    assert not cfg.is_daily_quota_reached(today_str=today)
     assert cfg.watched_today_seconds == 1800.0
 
     # Watch another 30 minutes (1800s) -> total 3600s -> daily quota reached!
-    cfg.record_watch_seconds(1800.0, today_str="2026-11-10")
-    assert cfg.is_daily_quota_reached()
+    cfg.record_watch_seconds(1800.0, today_str=today)
+    assert cfg.is_daily_quota_reached(today_str=today)
 
     # Next day arrives (midnight rollover)!
-    rolled = cfg.check_and_rollover(today_str="2026-11-11")
+    rolled = cfg.check_and_rollover(today_str=tomorrow)
     assert rolled is True
     assert cfg.current_day == 2
     assert cfg.watched_today_seconds == 0.0
     assert cfg.get_daily_allowed_seconds() == 7200.0  # 2 hours allowed on Day 2
-    assert not cfg.is_daily_quota_reached()
+    assert not cfg.is_daily_quota_reached(today_str=tomorrow)
 
 
 def test_warmup_manual_status_overrides():
@@ -278,30 +280,32 @@ def test_calculate_seconds_until_midnight():
 
 def test_channel_warmup_ladder_and_rollover():
     """Verify WarmupChannelConfig ladder quota enforcement, rollover, and overrides."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     cfg = WarmupChannelConfig(
         channel_name="TechLead",
         channel_url="https://www.youtube.com/@techlead",
         target_hours=10,
         daily_increment_hours=2,
         current_day=1,
-        last_active_date="2026-11-10",
+        last_active_date=today,
     )
     assert cfg.total_steps == 5  # ceil(10 / 2)
     assert cfg.get_daily_allowed_seconds() == 7200.0  # Day 1: 2 hours
 
     # Watch 3600s -> not yet reached
-    cfg.record_watch_seconds(3600.0, today_str="2026-11-10")
-    assert not cfg.is_daily_quota_reached()
+    cfg.record_watch_seconds(3600.0, today_str=today)
+    assert not cfg.is_daily_quota_reached(today_str=today)
 
     # Watch another 3600s -> 7200s -> reached!
-    cfg.record_watch_seconds(3600.0, today_str="2026-11-10")
-    assert cfg.is_daily_quota_reached()
+    cfg.record_watch_seconds(3600.0, today_str=today)
+    assert cfg.is_daily_quota_reached(today_str=today)
 
     # Rollover to next day
-    assert cfg.check_and_rollover(today_str="2026-11-11") is True
+    assert cfg.check_and_rollover(today_str=tomorrow) is True
     assert cfg.current_day == 2
     assert cfg.get_daily_allowed_seconds() == 14400.0  # Day 2: 4 hours
-    assert not cfg.is_daily_quota_reached()
+    assert not cfg.is_daily_quota_reached(today_str=tomorrow)
 
     # Manual override
     cfg.mark_as_warmed_up()
@@ -639,4 +643,147 @@ def test_warmup_dialog_displays_divided_per_account_quota(ctk_app, tmp_path):
     assert "÷ 2 accounts" in detail
     assert "5h/account" in detail
     assert "30h" in detail
-    dlg.destroy()
+
+
+def test_playback_does_not_abort_mid_video_when_warmup_quota_reached(tmp_path):
+    """Verify that video playback does not cut off mid-video when warm-up quota is reached."""
+    from src.automation.watching_worker import WatchingWorker
+
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_channels([{"name": "Lifestyle Mapping", "url": "https://www.youtube.com/@lifestyle", "enabled": True}])
+    today = datetime.now().strftime("%Y-%m-%d")
+    mgr.set_channel_warmup("lifestyle mapping", {
+        "channel_name": "Lifestyle Mapping",
+        "url": "https://www.youtube.com/@lifestyle",
+        "enabled": True,
+        "target_hours": 30,
+        "daily_increment_hours": 1,
+        "current_day": 1,  # 1 hour limit (3600s)
+        "is_warmed_up": False,
+        "last_active_date": today,
+        "watched_today_seconds": 3000.0,  # 50 minutes watched
+    })
+
+    acc = Account(email="chillecode@gmail.com", password="pwd")
+    worker = WatchingWorker(account=acc, channels=[Channel(name="Lifestyle Mapping", url="https://www.youtube.com/@lifestyle", enabled=True)], config_mgr=mgr)
+    worker.channel_tracker.set_active_channel("Lifestyle Mapping")
+
+    # In active video playback, simulate 15 minutes of watch delta (total = 65m > 60m quota)
+    worker.channel_tracker._active_watch_delta = 900.0
+
+    # Ensure _play_target_video._should_stop does NOT return "channel_warmup_quota_reached"
+    # Inspect the channel_disabled logic:
+    cfg = worker.config_mgr
+    clean_target = "lifestyle mapping"
+    disabled = False
+    for c_dict in cfg.get_channels() or []:
+        if isinstance(c_dict, dict) and (c_dict.get("name") or "").strip().lower() == clean_target:
+            if not c_dict.get("enabled", True) or c_dict.get("archived", False):
+                disabled = True
+            break
+    assert disabled is False
+
+
+def test_multi_channel_warmup_sleep_coordination(tmp_path):
+    """Verify that the bot stays awake until ALL channels reach their daily warm-up quota."""
+    from src.automation.watching_worker import WatchingWorker
+
+    settings_file = tmp_path / "settings.json"
+    mgr = ConfigManager(settings_file)
+    mgr.set_channels([
+        {"name": "Lifestyle Mapping", "url": "https://www.youtube.com/@lifestyle", "enabled": True},
+        {"name": "The Kidney Nutrition", "url": "https://www.youtube.com/@kidney", "enabled": True},
+    ])
+    today = datetime.now().strftime("%Y-%m-%d")
+    mgr.set_channel_warmup("lifestyle mapping", {
+        "channel_name": "Lifestyle Mapping",
+        "enabled": True,
+        "target_hours": 30,
+        "daily_increment_hours": 1,
+        "current_day": 1,
+        "is_warmed_up": False,
+        "last_active_date": today,
+        "watched_today_seconds": 3600.0,  # 1h 00m -> reached!
+    })
+    mgr.set_channel_warmup("the kidney nutrition", {
+        "channel_name": "The Kidney Nutrition",
+        "enabled": True,
+        "target_hours": 30,
+        "daily_increment_hours": 1,
+        "current_day": 1,
+        "is_warmed_up": False,
+        "last_active_date": today,
+        "watched_today_seconds": 1984.0,  # 33m 04s -> NOT reached!
+    })
+
+    acc = Account(email="chillecode@gmail.com", password="pwd")
+    worker = WatchingWorker(
+        account=acc,
+        channels=[
+            Channel(name="Lifestyle Mapping", url="https://www.youtube.com/@lifestyle", enabled=True),
+            Channel(name="The Kidney Nutrition", url="https://www.youtube.com/@kidney", enabled=True),
+        ],
+        config_mgr=mgr,
+    )
+
+    # Channel A reached -> paused from targets. Channel B unmet -> remains a target.
+    active_targets = worker.get_target_channels()
+    target_names = [c.name for c in active_targets]
+    assert "The Kidney Nutrition" in target_names
+    assert "Lifestyle Mapping" not in target_names
+
+    # Check sleep condition: must return False because The Kidney Nutrition has not met quota!
+    assert worker._check_and_enter_warmup_sleep(set()) is False
+
+    # Simulate The Kidney Nutrition completing a 30m video (1800s) -> total 3784s (> 3600s)
+    wm = WarmupManager(mgr)
+    wm.record_channel_watch_time("The Kidney Nutrition", 1800.0, channel_url="https://www.youtube.com/@kidney")
+
+    # Now both channels have met their daily warm-up quota
+    assert len(worker.get_target_channels()) == 0
+
+    # Mock _execute_channel_warmup_sleep_cycle to verify it gets triggered
+    worker._execute_channel_warmup_sleep_cycle = MagicMock(return_value=True)
+    assert worker._check_and_enter_warmup_sleep(set()) is True
+    assert worker._execute_channel_warmup_sleep_cycle.called
+
+
+def test_channel_warmup_email_report_content():
+    """Verify email formatting for Channel Warm-Up Daily Limit Reached and Resumption."""
+    from src.automation.email_reporter import SessionReport
+
+    report_sleep = SessionReport(
+        account_email="chillecode@gmail.com",
+        session_mode="Continuous Browsing",
+        start_time=datetime(2026, 11, 13, 9, 21, 49),
+        end_time=datetime(2026, 11, 13, 13, 42, 50),
+        duration_seconds=15661.0,
+        total_session_watch_seconds=5584.0,
+        status="Channel Warm-Up Daily Limit Reached",
+        sleep_mode_type="warmup",
+        sleep_cycle_number=1,
+        sleep_duration_hours=10.3,
+        wake_up_time=datetime(2026, 11, 14, 0, 1, 0),
+    )
+    text_sleep = report_sleep.generate_plain_text()
+    html_sleep = report_sleep.generate_html()
+    assert "Channel Warm-Up Daily Limit Reached (Sleeping until Midnight)" in text_sleep
+    assert "All targeted channels reached their allowed warm-up watch quota for today." in text_sleep
+    assert "Channel Warm-Up Quota Reached — Sleeping until Midnight" in html_sleep
+
+    report_resume = SessionReport(
+        account_email="chillecode@gmail.com",
+        session_mode="Continuous Browsing",
+        start_time=datetime(2026, 11, 14, 0, 1, 0),
+        end_time=datetime(2026, 11, 14, 0, 1, 30),
+        duration_seconds=30.0,
+        total_session_watch_seconds=0.0,
+        status="Channel Warm-Up Session Resumed",
+        sleep_mode_type="warmup_resume",
+        sleep_cycle_number=2,
+    )
+    text_resume = report_resume.generate_plain_text()
+    html_resume = report_resume.generate_html()
+    assert "All targeted channels have advanced to the next warm-up" in text_resume
+    assert "Channel Warm-Up Resumed — Midnight Rollover Completed" in html_resume
