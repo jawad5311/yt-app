@@ -313,7 +313,7 @@ class TestWatchingWorkerSearchIntegration(unittest.TestCase):
                         search_logs.append(self.log_queue.get_nowait())
                     search_str = "\n".join(search_logs)
 
-                    self.assertIn("Scanning YouTube search...", search_str)
+                    self.assertIn("Scanning YouTube search", search_str)
                     self.assertIn("Found video in YouTube search result", search_str)
                     # Video title must NOT be in the Found line
                     for line in search_logs:

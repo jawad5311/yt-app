@@ -700,10 +700,10 @@ def find_channel_video_on_home(
 
                     try:
                         driver.execute_script("""
-                        var cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer');
+                        var cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer, ytd-rich-grid-media, yt-lockup-view-model');
                         var target = cards[arguments[0]];
                         if (target) {
-                            var link = target.querySelector('a#video-title-link, a#video-title, a#thumbnail');
+                            var link = target.querySelector('a#video-title-link, a#video-title, a#thumbnail, a.ytLockupMetadataViewModelTitle, yt-lockup-metadata-view-model a, h3 a, a[href*="/watch?v="]');
                             if (link) link.click();
                         }
                         """, idx)

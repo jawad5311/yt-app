@@ -38,7 +38,7 @@ from ..models.video_task import (
     VideoTask,
 )
 from ..models.watch_stats import TaskOutcome, WatchResult, resolve_video_key
-from ..utils.helpers import extract_video_id, human_like_delay
+from ..utils.helpers import clean_youtube_url, extract_video_id, human_like_delay
 from ..utils.logger import emit
 from .driver import (
     close_driver,

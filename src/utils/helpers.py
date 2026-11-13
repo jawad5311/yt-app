@@ -43,6 +43,7 @@ def extract_video_id(url: Optional[str]) -> Optional[str]:
     if not url or not isinstance(url, str):
         return None
     patterns = [
+        r"(?:v=|\/vi\/|youtu\.be\/|\/v\/|\/embed\/|\/shorts\/|\/live\/)([A-Za-z0-9_\-]{11,})(?:[&?#/]|$)",
         r"(?:v=|\/vi\/|youtu\.be\/|\/v\/|\/embed\/|\/shorts\/|\/live\/)([A-Za-z0-9_\-]{11})",
         r"^([A-Za-z0-9_\-]{11})$",
     ]
