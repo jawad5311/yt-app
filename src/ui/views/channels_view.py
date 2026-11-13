@@ -1967,6 +1967,7 @@ class ChannelsView(Frame):
                 info_col = ctk.CTkFrame(card, fg_color="transparent")
                 info_col.grid(row=0, column=0, padx=12, pady=8, sticky="w")
 
+                v_title = "\n".join(label_parts)
                 ctk.CTkLabel(
                     info_col,
                     text=v_title,

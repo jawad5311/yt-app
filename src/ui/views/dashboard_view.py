@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
+from typing import Optional
 
 from ..components import Button, CheckBox, Entry, Font, Frame, Label, ProgressBar
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
