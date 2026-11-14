@@ -37,6 +37,7 @@ from .views.dashboard_view import DashboardView
 from .views.logs_view import LogsView
 from .views.queue_view import QueueView
 from .views.settings_view import SettingsView
+from .views.stats_view import StatsView
 from .views.system_name_modal import SystemNamePromptModal
 from ..utils.quota_tracker import get_quota_tracker
 from .tooltip import add_tooltip
@@ -117,6 +118,9 @@ class YTBotApp(tk.Tk):
         self._current_session_duration_seconds: float = 0.0
         self._current_session_target_vids: int = 0
         self._current_session_target_shorts: int = 0
+        self._last_session_channel_seconds: Dict[str, float] = {}
+        self._last_session_channel_reg_vids: Dict[str, int] = {}
+        self._last_session_channel_shorts: Dict[str, int] = {}
         self._poll_job: Optional[str] = None
         self._close_check_job: Optional[str] = None
         self._close_start_time: float = 0.0
@@ -160,7 +164,7 @@ class YTBotApp(tk.Tk):
         try:
             SystemNamePromptModal(self, current_name=current_name, on_save=self._on_system_name_saved)
         except Exception as e:
-            logger.error(f"Error displaying system name prompt modal: {e}")
+            logging.error(f"Error displaying system name prompt modal: {e}")
 
     def _on_system_name_saved(self, name: str) -> None:
         """Handle saving of system name from startup prompt modal."""
@@ -174,7 +178,7 @@ class YTBotApp(tk.Tk):
                     settings_view.system_name_entry.insert(0, name)
                 except Exception:
                     pass
-        logger.info(f"System name configured to: {name}")
+        logging.info(f"System name configured to: {name}")
 
     def _start_background_metadata_enrichment(self) -> None:
         """Enrich queued video tasks with missing published date or duration via YouTube API."""
@@ -238,6 +242,7 @@ class YTBotApp(tk.Tk):
         self.nav_buttons: Dict[str, Any] = {}
         nav_items = [
             ("dashboard", "📊  Dashboard"),
+            ("stats", "📈  Stats"),
             ("channels", "📺  Channels"),
             ("queue", "🎥  Video Queue"),
             ("shorts_queue", "⚡  Shorts Queue"),
@@ -264,6 +269,7 @@ class YTBotApp(tk.Tk):
 
         self.views: Dict[str, Any] = {
             "dashboard": DashboardView(self.container, self),
+            "stats": StatsView(self.container, self),
             "channels": ChannelsView(self.container, self),
             "queue": QueueView(self.container, self, shorts_only=False),
             "shorts_queue": QueueView(self.container, self, shorts_only=True),
@@ -346,6 +352,9 @@ class YTBotApp(tk.Tk):
         self._current_session_duration_seconds = 0.0
         self._current_session_target_vids = 0
         self._current_session_target_shorts = 0
+        self._last_session_channel_seconds = {}
+        self._last_session_channel_reg_vids = {}
+        self._last_session_channel_shorts = {}
         if hasattr(self, "stats_store") and self.stats_store:
             self.stats_store.clear_all()
 
@@ -419,6 +428,65 @@ class YTBotApp(tk.Tk):
             self._current_session_target_shorts = shorts
         return vids, shorts
 
+    def get_last_session_stats(self) -> Dict[str, Any]:
+        """Aggregate and return channel and video stats for the active or most recent session."""
+        channel_sec: Dict[str, float] = {}
+        channel_reg: Dict[str, int] = {}
+        channel_shorts: Dict[str, int] = {}
+        total_sec = float(getattr(self, "_current_session_watch_seconds", 0.0) or 0.0)
+        start_t = getattr(self, "_session_start_time", None)
+
+        active_found = False
+        for worker in list(self.__dict__.get("active_workers", [])):
+            tracker = getattr(worker, "channel_tracker", None)
+            if tracker:
+                active_found = True
+                lock = getattr(tracker, "_lock", None)
+                if lock and hasattr(lock, "__enter__"):
+                    with lock:
+                        for k, s in getattr(tracker, "session_watch_seconds", {}).items():
+                            channel_sec[k] = channel_sec.get(k, 0.0) + float(s)
+                        for k, c in getattr(tracker, "channel_regular_videos", {}).items():
+                            channel_reg[k] = channel_reg.get(k, 0) + int(c)
+                        for k, c in getattr(tracker, "channel_shorts", {}).items():
+                            channel_shorts[k] = channel_shorts.get(k, 0) + int(c)
+                        if not start_t and getattr(tracker, "session_start_time", None):
+                            start_t = tracker.session_start_time
+                else:
+                    for k, s in getattr(tracker, "session_watch_seconds", {}).items():
+                        channel_sec[k] = channel_sec.get(k, 0.0) + float(s)
+                    for k, c in getattr(tracker, "channel_regular_videos", {}).items():
+                        channel_reg[k] = channel_reg.get(k, 0) + int(c)
+                    for k, c in getattr(tracker, "channel_shorts", {}).items():
+                        channel_shorts[k] = channel_shorts.get(k, 0) + int(c)
+                    if not start_t and getattr(tracker, "session_start_time", None):
+                        start_t = tracker.session_start_time
+
+        if active_found:
+            self._last_session_channel_seconds = channel_sec
+            self._last_session_channel_reg_vids = channel_reg
+            self._last_session_channel_shorts = channel_shorts
+            if channel_sec:
+                total_sec = max(total_sec, sum(channel_sec.values()))
+                self._current_session_watch_seconds = total_sec
+        else:
+            channel_sec = getattr(self, "_last_session_channel_seconds", {}) or {}
+            channel_reg = getattr(self, "_last_session_channel_reg_vids", {}) or {}
+            channel_shorts = getattr(self, "_last_session_channel_shorts", {}) or {}
+
+        return {
+            "session_watch_seconds": channel_sec,
+            "channel_regular_videos": channel_reg,
+            "channel_shorts": channel_shorts,
+            "total_session_watch_seconds": total_sec,
+            "session_start_time": start_t,
+        }
+
+    @property
+    def session_tracker(self) -> Dict[str, Any]:
+        """Expose active or cached last session stats to analytics views."""
+        return self.get_last_session_stats()
+
     def update_dashboard_stats(self) -> None:
         """Refresh dashboard overview cards with live accounts, runnable queue, and status."""
         if hasattr(self, "views") and isinstance(self.views, dict) and "dashboard" in self.views:
@@ -472,6 +540,12 @@ class YTBotApp(tk.Tk):
                 tv, ts = self.get_current_session_target_counts()
                 dashboard.update_target_videos_watched(tv, ts)
             self.update_dashboard_stats()
+        stats_view = self.views.get("stats")
+        if stats_view and hasattr(stats_view, "refresh"):
+            try:
+                stats_view.refresh()
+            except Exception:
+                pass
 
     def show_view(self, name: str):
         self.current_view_name = name
@@ -495,6 +569,18 @@ class YTBotApp(tk.Tk):
                 elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False
+                elif name == "dashboard":
+                    if hasattr(view_widget, "refresh_channel_stats"):
+                        try:
+                            view_widget.refresh_channel_stats()
+                        except Exception:
+                            pass
+                elif name == "stats":
+                    if hasattr(view_widget, "refresh"):
+                        try:
+                            view_widget.refresh()
+                        except Exception:
+                            pass
             else:
                 if view_name in self.nav_buttons:
                     self.nav_buttons[view_name].configure(style="Nav.TButton")
@@ -831,6 +917,7 @@ class YTBotApp(tk.Tk):
                         pass
         finally:
             try:
+                self.get_last_session_stats()
                 self.active_threads.clear()
                 self.active_workers.clear()
                 self.session_manager_thread = None
@@ -1017,6 +1104,7 @@ class YTBotApp(tk.Tk):
                         pass
         finally:
             try:
+                self.get_last_session_stats()
                 if worker in self.active_workers:
                     self.active_workers.remove(worker)
                 self.active_threads.clear()

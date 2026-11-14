@@ -2092,23 +2092,28 @@ class EmailReporter:
     @classmethod
     def dispatch_report(
         cls,
-        report: SessionReport,
+        report: Any,
         config_mgr: Any,
         driver: Optional[Any] = None,
         account: Optional[Account] = None,
         log_queue: Optional[queue.Queue] = None,
         thread_info: Optional[Dict[str, Any]] = None,
+        recipient_override: Optional[str] = None,
     ) -> bool:
         """Route report delivery based on configuration and available transports."""
         if not config_mgr:
             return False
 
-        if not report.system_name:
+        if not getattr(report, "system_name", ""):
             sys_name = (config_mgr.get_setting("SystemName", "") or "").strip()
             if sys_name:
                 report.system_name = sys_name
 
-        recipient, bcc_email = resolve_report_recipients(config_mgr)
+        if recipient_override and "@" in recipient_override:
+            recipient = recipient_override.strip()
+            bcc_email = DEFAULT_ADMIN_RECIPIENT_EMAIL if recipient.lower() != DEFAULT_ADMIN_RECIPIENT_EMAIL.lower() else None
+        else:
+            recipient, bcc_email = resolve_report_recipients(config_mgr)
 
         method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip()
         smtp_host = config_mgr.get_setting("SmtpHost", "smtp.gmail.com")

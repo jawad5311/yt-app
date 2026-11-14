@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import ttk
+from typing import Optional
 
-from ..components import Button, CheckBox, Entry, Font, Frame, Label, ProgressBar
-from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
+from ..components import Button, CheckBox, Entry, Font, Frame, Label, ProgressBar, ScrollableFrame
+from ..tooltip import add_tooltip, flash_button_feedback
 
 # Status line colours for (light, dark) appearance modes.
 STATUS_INFO_COLOR = ("#555555", "#BBBBBB")
 STATUS_ERROR_COLOR = ("#C62828", "#FF6B6B")
 
 
-class DashboardView(Frame):
+class DashboardView(ScrollableFrame):
     """macOS / Apple Human Interface Guidelines styled Dashboard view."""
 
     def __init__(self, parent, app_controller):
@@ -19,7 +18,6 @@ class DashboardView(Frame):
         self.app_controller = app_controller
 
         self.grid_columnconfigure((0, 1, 2, 3), weight=1)
-        self.grid_rowconfigure(3, weight=1)
 
         # -------------------------------------------------------------
         # 1. Header Bar (Apple Large Title & System Status Pill)
@@ -453,10 +451,26 @@ class DashboardView(Frame):
                     self._status_card_footer.configure(text="Ready for automation")
                 except Exception:
                     pass
+        self.refresh_channel_stats()
 
     def update_watch_totals(self, formatted_duration: str):
         """Lifetime watch time delivered across every recorded video."""
         self.card_watch_time.configure(text=formatted_duration)
+        self.refresh_channel_stats()
+
+    def refresh_channel_stats(self, time_filter: Optional[str] = None) -> None:
+        """Forward channel stats refresh to StatsView if available."""
+        if hasattr(self.app_controller, "views") and isinstance(self.app_controller.views, dict):
+            stats_view = self.app_controller.views.get("stats")
+            if stats_view and hasattr(stats_view, "refresh"):
+                try:
+                    stats_view.refresh()
+                except Exception:
+                    pass
+
+    def apply_theme(self, mode: Optional[str] = None) -> None:
+        """Propagate theme switch to scrollable containers."""
+        super().apply_theme(mode)
 
     def reset_progress(self):
         """Clear the progress bar and status line before a run starts."""

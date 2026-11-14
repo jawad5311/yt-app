@@ -502,12 +502,16 @@ def calculate_channel_target_seconds(
         ch_name = channel_name_or_obj.name or ""
         ch_url = channel_name_or_obj.url or ch_url
         manual_target = safe_float(getattr(channel_name_or_obj, "target_watch_seconds", 0.0), default=0.0)
+        if manual_target <= 0.0 and getattr(channel_name_or_obj, "target_hours", 0.0):
+            manual_target = safe_float(getattr(channel_name_or_obj, "target_hours", 0.0), default=0.0) * 3600.0
         total_videos_meta = channel_name_or_obj.total_videos
         total_shorts_meta = channel_name_or_obj.total_shorts
     elif isinstance(channel_name_or_obj, dict):
         ch_name = channel_name_or_obj.get("name", "")
         ch_url = channel_name_or_obj.get("url", "") or ch_url
         manual_target = safe_float(channel_name_or_obj.get("target_watch_seconds", 0.0), default=0.0)
+        if manual_target <= 0.0 and channel_name_or_obj.get("target_hours"):
+            manual_target = safe_float(channel_name_or_obj.get("target_hours", 0.0), default=0.0) * 3600.0
         total_videos_meta = channel_name_or_obj.get("total_videos")
         total_shorts_meta = channel_name_or_obj.get("total_shorts")
     else:
@@ -533,18 +537,14 @@ def calculate_channel_target_seconds(
         for t in tasks:
             if isinstance(t, dict):
                 t_ch = str(t.get("channel", "") or "").strip().lower().lstrip("@")
-                t_url = str(t.get("url", "") or "")
                 raw_dur = t.get("duration_seconds", 0)
                 raw_mult = t.get("target_multiplier", 0.0)
                 raw_runs = t.get("max_runs", 0)
-                is_short_override = t.get("is_short")
             else:
                 t_ch = str(getattr(t, "channel", "") or "").strip().lower().lstrip("@")
-                t_url = str(getattr(t, "url", "") or "")
                 raw_dur = getattr(t, "duration_seconds", 0)
                 raw_mult = getattr(t, "target_multiplier", 0.0)
                 raw_runs = getattr(t, "max_runs", 0)
-                is_short_override = getattr(t, "is_short_override", None)
 
             t_ch_nospace = t_ch.replace(" ", "")
             matches = False

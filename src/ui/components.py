@@ -9,10 +9,10 @@ from __future__ import annotations
 import tkinter as tk
 import weakref
 from tkinter import simpledialog, ttk
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .theme import DARK_THEME, get_font, get_theme_colors
 from .dropdown_menu import AppleDropdownMenu
+from .theme import get_font, get_theme_colors
 
 
 def _resolve_font(font: Any) -> Any:
@@ -737,7 +737,7 @@ class ProgressBar(ttk.Progressbar):
 _ALL_SCROLLABLE_FRAMES: weakref.WeakSet[ScrollableFrame] = weakref.WeakSet()
 
 
-class ScrollableFrame(ttk.Frame):
+class ScrollableFrame(Frame):
     """High-performance TTK scrollable container wrapping tk.Canvas and ttk.Scrollbar."""
 
     def __init__(self, master=None, label_text: str = "", width: int = 200, height: int = 200, **kwargs):
@@ -820,6 +820,39 @@ class ScrollableFrame(ttk.Frame):
 
     def place(self, **kwargs):
         self._parent_frame.place(**kwargs)
+
+    def tkraise(self, aboveThis=None):
+        if hasattr(self, "_parent_frame") and self._parent_frame.winfo_exists():
+            self._parent_frame.tkraise(aboveThis)
+        else:
+            super().tkraise(aboveThis)
+
+    def lift(self, aboveThis=None):
+        self.tkraise(aboveThis)
+
+    def lower(self, belowThis=None):
+        if hasattr(self, "_parent_frame") and self._parent_frame.winfo_exists():
+            self._parent_frame.lower(belowThis)
+        else:
+            super().lower(belowThis)
+
+    def destroy(self):
+        if getattr(self, "_is_destroying", False):
+            super().destroy()
+            return
+        self._is_destroying = True
+        try:
+            if hasattr(self, "_parent_frame") and self._parent_frame.winfo_exists():
+                self._parent_frame.destroy()
+            else:
+                super().destroy()
+        finally:
+            self._is_destroying = False
+
+    def winfo_ismapped(self):
+        if hasattr(self, "_parent_frame") and self._parent_frame.winfo_exists():
+            return self._parent_frame.winfo_ismapped()
+        return super().winfo_ismapped()
 
     def grid_columnconfigure(self, *args, **kwargs):
         # Apply column configure on the inner scrollable frame for child widgets
@@ -1056,7 +1089,7 @@ class Font:
 
 
 DropdownMenu = AppleDropdownMenu
-from .confirm_dialog import ThemedConfirmDialog, show_themed_confirm_dialog, ThemedAlertDialog, show_themed_alert_dialog
+from .confirm_dialog import ThemedAlertDialog, ThemedConfirmDialog, show_themed_alert_dialog, show_themed_confirm_dialog
 
 ThemedConfirmDialog = ThemedConfirmDialog
 ConfirmDialog = ThemedConfirmDialog
