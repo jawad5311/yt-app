@@ -3,7 +3,7 @@ import queue
 import random
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Set
 
 from selenium.webdriver.common.by import By
 

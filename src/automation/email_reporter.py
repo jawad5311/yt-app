@@ -160,21 +160,26 @@ class SessionReport:
             dur_str = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "N/A"
             wake_str = self.wake_up_time.strftime("%Y-%m-%d %H:%M:%S") if self.wake_up_time else "N/A"
             cycle_str = f"Day #{self.sleep_cycle_number}" if self.sleep_cycle_number else "N/A"
+            is_ch = "channel" in (self.status or "").lower()
+            mode_title = "Channel Warm-Up Daily Limit Reached (Sleeping until Midnight)" if is_ch else "Account Warm-Up Daily Limit Reached (Sleeping until Midnight)"
+            notice_msg = "All targeted channels reached their allowed warm-up watch quota for today." if is_ch else "The account reached its allowed warm-up watch quota for today."
             lines.extend([
-                f"Sleep Mode:           Account Warm-Up Daily Limit Reached (Sleeping until Midnight)",
+                f"Sleep Mode:           {mode_title}",
                 f"Warm-Up Stage:        {cycle_str}",
                 f"Sleep Duration:       {dur_str}",
                 f"Estimated Wake-up:    {wake_str}",
-                f"Notice:               The account reached its allowed warm-up watch quota for today.",
+                f"Notice:               {notice_msg}",
                 f"                      Closed YouTube browser tab to preserve profile resources.",
                 f"                      The bot will wake up automatically after midnight to begin the next day.",
             ])
         elif self.sleep_mode_type == "warmup_resume":
             cycle_str = f"Day #{self.sleep_cycle_number}" if self.sleep_cycle_number else "N/A"
+            is_ch = "channel" in (self.status or "").lower()
+            notice_target = "All targeted channels have advanced" if is_ch else "The account has advanced"
             lines.extend([
                 f"Sleep Mode:           Warm-Up Midnight Rollover • New Day Resumed",
                 f"Warm-Up Stage:        {cycle_str}",
-                f"Notice:               Midnight has passed! The account has advanced to the next warm-up",
+                f"Notice:               Midnight has passed! {notice_target} to the next warm-up",
                 f"                      ladder step with an incremented daily watch quota. Browsing resumed.",
             ])
         elif self.sleep_mode_type == "nap_resume":
@@ -350,16 +355,20 @@ class SessionReport:
         elif is_warmup_sleep:
             status_color = "#ea580c"
             cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
-            report_title = f"Warm-Up Daily Quota Reached • Sleep Mode{cycle_desc}"
-            activity_header = f"Warm-Up Cycle{cycle_desc} • Sleeping until Midnight"
+            is_ch = "channel" in (self.status or "").lower()
+            prefix = "Channel " if is_ch else "Account "
+            report_title = f"{prefix}Warm-Up Daily Quota Reached • Sleep Mode{cycle_desc}"
+            activity_header = f"{prefix}Warm-Up Cycle{cycle_desc} • Sleeping until Midnight"
             kpi_label_1 = "Watch Time Completed Today"
             kpi_label_2 = "Warm-Up Status"
-            kpi_status_text = "🔥 Daily Quota Reached: Sleeping until Midnight"
+            kpi_status_text = f"🔥 {prefix}Daily Quota Reached: Sleeping until Midnight"
         elif is_warmup_resume:
             status_color = "#059669"
             cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
-            report_title = f"Warm-Up Resumed • Midnight Rollover{cycle_desc}"
-            activity_header = f"Warm-Up Day #{self.sleep_cycle_number} • New Quota Unlocked" if self.sleep_cycle_number else "Warm-Up New Day • Browsing Resumed"
+            is_ch = "channel" in (self.status or "").lower()
+            prefix = "Channel " if is_ch else ""
+            report_title = f"{prefix}Warm-Up Resumed • Midnight Rollover{cycle_desc}"
+            activity_header = f"{prefix}Warm-Up Day #{self.sleep_cycle_number} • New Quota Unlocked" if self.sleep_cycle_number else f"{prefix}Warm-Up New Day • Browsing Resumed"
             kpi_label_1 = "Combined Entertainment Time (Fresh Pass)"
             kpi_label_2 = "Session Status"
             kpi_status_text = "☀️ Midnight Passed: New Warm-Up Window Active"
@@ -392,11 +401,14 @@ class SessionReport:
             cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
             wake_str = self.wake_up_time.strftime("%d %b %Y - %I:%M %p") if self.wake_up_time else "midnight"
             dur_txt = f"{self.sleep_duration_hours:.1f} hour(s)" if self.sleep_duration_hours else "until midnight"
+            is_ch = "channel" in (self.status or "").lower()
+            banner_title = f"🔥 Channel Warm-Up Quota Reached — Sleeping until Midnight{cycle_desc}" if is_ch else f"🔥 Account Warm-Up Quota Reached — Sleeping until Midnight{cycle_desc}"
+            banner_desc = "All targeted channels have successfully fulfilled their configured warm-up watch quotas for today." if is_ch else "The account has successfully fulfilled its configured warm-up watch quota for today."
             sleep_banner = f"""
             <div style="background: linear-gradient(135deg, #431407 0%, #7c2d12 100%); border: 1px solid #9a3412; border-left: 6px solid #f97316; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                <div style="font-size: 16px; font-weight: 700; color: #ffedd5; margin-bottom: 5px;">🔥 Account Warm-Up Quota Reached — Sleeping until Midnight{cycle_desc}</div>
+                <div style="font-size: 16px; font-weight: 700; color: #ffedd5; margin-bottom: 5px;">{banner_title}</div>
                 <div style="font-size: 13px; color: #fed7aa; line-height: 1.5;">
-                    The account has successfully fulfilled its configured warm-up watch quota for today.<br>
+                    {banner_desc}<br>
                     The YouTube browser tab has been closed to save resources. The bot is sleeping for <strong>{dur_txt}</strong> and will automatically wake up after midnight at approximately <strong>{wake_str}</strong> to unlock the next warm-up increment.<br>
                     <span style="font-size: 12px; color: #fdba74; margin-top: 4px; display: inline-block;">Below are the stats of media watched today prior to sleeping.</span>
                 </div>
@@ -404,11 +416,14 @@ class SessionReport:
             """
         elif is_warmup_resume:
             cycle_desc = f" (Day #{self.sleep_cycle_number})" if self.sleep_cycle_number else ""
+            is_ch = "channel" in (self.status or "").lower()
+            banner_title = f"⚡ Channel Warm-Up Resumed — Midnight Rollover Completed{cycle_desc}" if is_ch else f"⚡ Warm-Up Resumed — Midnight Rollover Completed{cycle_desc}"
+            banner_desc = "Midnight has passed! All targeted channels have advanced to the next warm-up ladder day with increased daily watch quotas." if is_ch else "Midnight has passed! The account has advanced to the next warm-up ladder day with an increased daily watch quota."
             sleep_banner = f"""
             <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 5px solid #16a34a; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                <div style="font-size: 15px; font-weight: 700; color: #166534; margin-bottom: 4px;">⚡ Warm-Up Resumed — Midnight Rollover Completed{cycle_desc}</div>
+                <div style="font-size: 15px; font-weight: 700; color: #166534; margin-bottom: 4px;">{banner_title}</div>
                 <div style="font-size: 13px; color: #15803d; line-height: 1.5;">
-                    Midnight has passed! The account has advanced to the next warm-up ladder day with an increased daily watch quota.<br>
+                    {banner_desc}<br>
                     The browser has been relaunched with fresh stats and browsing is active.<br>
                     <span style="font-size: 12px; color: #16a34a; margin-top: 4px; display: inline-block;">Warm-up progression continues.</span>
                 </div>

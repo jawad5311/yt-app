@@ -2805,11 +2805,17 @@ class WatchingWorker:
             if current_ch_name:
                 if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(current_ch_name):
                     return "channel_target_achieved"
-                if self._is_channel_warmup_quota_reached_live(current_ch_name):
-                    return "channel_warmup_quota_reached"
-                active_names = {c.name.lower() for c in self.get_target_channels()}
-                if current_ch_name.lower() not in active_names:
-                    return "channel_disabled"
+                cfg = getattr(self, "config_mgr", None)
+                if cfg is not None and hasattr(cfg, "get_channels"):
+                    try:
+                        clean_target = current_ch_name.strip().lower().lstrip("@")
+                        for c_dict in cfg.get_channels() or []:
+                            if isinstance(c_dict, dict) and (c_dict.get("name") or "").strip().lower().lstrip("@") == clean_target:
+                                if not c_dict.get("enabled", True) or c_dict.get("archived", False):
+                                    return "channel_disabled"
+                                break
+                    except Exception:
+                        pass
 
             return False
 
@@ -3496,12 +3502,17 @@ class WatchingWorker:
         registered_task = self._ensure_video_in_queue(task)
 
         def _is_short_channel_disabled() -> Optional[str]:
-            if self._is_channel_warmup_quota_reached_live(ch_name):
-                return "channel_warmup_quota_reached"
-            target_channels = self.get_target_channels()
-            ch_names = {c.name.strip().lower() for c in target_channels if c.name}
-            if ch_name.strip().lower() not in ch_names and ch_name != "Shorts Channel":
-                return "channel_disabled"
+            cfg = getattr(self, "config_mgr", None)
+            if cfg is not None and hasattr(cfg, "get_channels") and ch_name != "Shorts Channel":
+                try:
+                    clean_target = ch_name.strip().lower().lstrip("@")
+                    for c_dict in cfg.get_channels() or []:
+                        if isinstance(c_dict, dict) and (c_dict.get("name") or "").strip().lower().lstrip("@") == clean_target:
+                            if not c_dict.get("enabled", True) or c_dict.get("archived", False):
+                                return "channel_disabled"
+                            break
+                except Exception:
+                    pass
             return None
 
         def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
@@ -4400,12 +4411,17 @@ class WatchingWorker:
                 self.channel_tracker.set_active_channel(ch_display)
 
                 def _is_short_channel_disabled() -> Optional[str]:
-                    if self._is_channel_warmup_quota_reached_live(ch_display):
-                        return "channel_warmup_quota_reached"
-                    target_ch_list = self.get_target_channels()
-                    ch_names = {c.name.strip().lower() for c in target_ch_list if c.name}
-                    if ch_display.strip().lower() not in ch_names and ch_display != "Target Channel":
-                        return "channel_disabled"
+                    cfg = getattr(self, "config_mgr", None)
+                    if cfg is not None and hasattr(cfg, "get_channels") and ch_display != "Target Channel":
+                        try:
+                            clean_target = ch_display.strip().lower().lstrip("@")
+                            for c_dict in cfg.get_channels() or []:
+                                if isinstance(c_dict, dict) and (c_dict.get("name") or "").strip().lower().lstrip("@") == clean_target:
+                                    if not c_dict.get("enabled", True) or c_dict.get("archived", False):
+                                        return "channel_disabled"
+                                    break
+                        except Exception:
+                            pass
                     return None
 
                 def _on_short_view_counted(loop_num: int, cur_t: float, dur: float):
@@ -5020,60 +5036,73 @@ class WatchingWorker:
         return True
 
     def _check_and_enter_warmup_sleep(self, session_watched_keys: Set[str]) -> bool:
-        """Check if active account or all active channels reached progressive warm-up daily quota.
+        """Check if all active warm-up channels (or active account if no channels in warm-up) reached daily quota.
         If reached, closes browser, sends notification, and enters sleep mode until midnight rollover.
         """
-        if getattr(self, "account", None) and getattr(self.account, "email", None) and getattr(self, "config_mgr", None):
-            try:
-                from .warmup_manager import WarmupManager
-                wm = WarmupManager(self.config_mgr)
-                w_cfg = wm.get_account_config(self.account.email)
-                if w_cfg.enabled and not w_cfg.is_warmed_up and w_cfg.is_daily_quota_reached():
-                    info = w_cfg.get_status_info()
-                    daily_limit_str = info.get("daily_allowed_hours_str", f"{info['daily_allowed_hours']}h")
-                    watched_today_str = info.get("watched_today_hours_str", f"{info['watched_today_hours']}h")
-                    cur_day = info["current_day"]
-                    tot_steps = info["total_steps"]
-
-                    emit(
-                        self.log_queue,
-                        f"🔥 [Warm-Up Daily Quota Reached] Account {self.account.email} reached today's limit of {daily_limit_str} (watched {watched_today_str}, Day {cur_day}/{tot_steps}).",
-                        logging.INFO,
-                    )
-                    emit(
-                        self.log_queue,
-                        "Entering sleep mode until midnight (00:00). Browser closed to preserve profile resources.",
-                        logging.INFO,
-                    )
-                    return self._execute_warmup_sleep_cycle(w_cfg, session_watched_keys)
-            except Exception as exc:
-                logging.debug(f"Error checking account warm-up quota: {exc}")
-
-        # Also check if all active tracked channels reached their daily warm-up quota
         if getattr(self, "config_mgr", None):
             try:
                 from .warmup_manager import WarmupManager
                 wm = WarmupManager(self.config_mgr)
                 raw_channels = self.config_mgr.get_channels() or []
-                enabled_channels = [Channel.from_dict(c) for c in raw_channels if isinstance(c, dict) and c.get("enabled") and not c.get("archived") and not c.get("target_achieved")]
-                if enabled_channels:
-                    warmup_channels = [c for c in enabled_channels if wm.get_channel_config(c.name, c.url).enabled and not wm.get_channel_config(c.name, c.url).is_warmed_up]
-                    if warmup_channels and len(warmup_channels) == len(enabled_channels):
-                        acc_email = (getattr(getattr(self, "account", None), "email", None) or "").strip() or None
-                        if all(wm.is_channel_daily_quota_reached(c.name, c.url, account_email=acc_email) for c in warmup_channels):
-                            emit(
-                                self.log_queue,
-                                f"🔥 [Channel Warm-Up Daily Quota Reached] All {len(warmup_channels)} tracked channels reached their daily warm-up quotas for today.",
-                                logging.INFO,
-                            )
-                            emit(
-                                self.log_queue,
-                                "Entering sleep mode until midnight (00:00). All channels will roll over to their next day's quotas after midnight.",
-                                logging.INFO,
-                            )
-                            return self._execute_channel_warmup_sleep_cycle(session_watched_keys)
-            except Exception as c_err:
-                logging.debug(f"Error checking channel warm-up quotas: {c_err}")
+                all_channels = [Channel.from_dict(c) for c in raw_channels if isinstance(c, dict)]
+                enabled_channels = [
+                    c for c in all_channels
+                    if c.name and c.enabled and not c.archived and not c.target_achieved
+                ]
+
+                # Identify all enabled channels currently in warm-up (enabled and not graduated)
+                warmup_channels = [
+                    c for c in enabled_channels
+                    if wm.get_channel_config(c.name, c.url).enabled and not wm.get_channel_config(c.name, c.url).is_warmed_up
+                ]
+
+                if warmup_channels:
+                    # Before going to sleep, ALL channels in warm-up must meet their warm-up quota for today
+                    unmet_channels = [
+                        c for c in warmup_channels
+                        if not wm.is_channel_daily_quota_reached(c.name, c.url)
+                    ]
+                    if not unmet_channels:
+                        # All tracked warm-up channels have reached their daily quotas for today!
+                        emit(
+                            self.log_queue,
+                            f"🔥 [Channel Warm-Up Daily Quota Reached] All {len(warmup_channels)} tracked channels reached their daily warm-up quotas for today.",
+                            logging.INFO,
+                        )
+                        emit(
+                            self.log_queue,
+                            "Entering sleep mode until midnight (00:00). All channels will roll over to their next day's quotas after midnight.",
+                            logging.INFO,
+                        )
+                        return self._execute_channel_warmup_sleep_cycle(session_watched_keys)
+                    else:
+                        # Some warm-up channels have not reached today's quota yet.
+                        # Do not sleep: continue watching the unmet channels.
+                        return False
+
+                # If NO channels are in warm-up, check if account warm-up is enabled and reached
+                if getattr(self, "account", None) and getattr(self.account, "email", None):
+                    w_cfg = wm.get_account_config(self.account.email)
+                    if w_cfg.enabled and not w_cfg.is_warmed_up and w_cfg.is_daily_quota_reached():
+                        info = w_cfg.get_status_info()
+                        daily_limit_str = info.get("daily_allowed_hours_str", f"{info['daily_allowed_hours']}h")
+                        watched_today_str = info.get("watched_today_hours_str", f"{info['watched_today_hours']}h")
+                        cur_day = info["current_day"]
+                        tot_steps = info["total_steps"]
+
+                        emit(
+                            self.log_queue,
+                            f"🔥 [Warm-Up Daily Quota Reached] Account {self.account.email} reached today's limit of {daily_limit_str} (watched {watched_today_str}, Day {cur_day}/{tot_steps}).",
+                            logging.INFO,
+                        )
+                        emit(
+                            self.log_queue,
+                            "Entering sleep mode until midnight (00:00). Browser closed to preserve profile resources.",
+                            logging.INFO,
+                        )
+                        return self._execute_warmup_sleep_cycle(w_cfg, session_watched_keys)
+            except Exception as exc:
+                logging.debug(f"Error checking warm-up quotas: {exc}")
 
         return False
 
@@ -5223,12 +5252,27 @@ class WatchingWorker:
                 emit(self.log_queue, f"Notice while closing browser before warm-up sleep: {e}", logging.DEBUG)
             self.driver = None
 
+        max_cycle_day = 1
+        try:
+            wm_tmp = WarmupManager(self.config_mgr)
+            raw_channels = self.config_mgr.get_channels() or []
+            for ch_dict in raw_channels:
+                if isinstance(ch_dict, dict):
+                    c_name = ch_dict.get("name") or ""
+                    c_url = ch_dict.get("url") or ""
+                    if c_name:
+                        c_cfg = wm_tmp.get_channel_config(c_name, c_url)
+                        if c_cfg.enabled and not c_cfg.is_warmed_up:
+                            max_cycle_day = max(max_cycle_day, c_cfg.current_day)
+        except Exception:
+            pass
+
         try:
             self._send_session_report(
                 status="Channel Warm-Up Daily Limit Reached",
                 is_sleep_notification=True,
                 sleep_mode_type="warmup",
-                sleep_cycle_number=1,
+                sleep_cycle_number=max_cycle_day,
                 sleep_duration_hours=sleep_hours,
                 wake_up_time=wake_up_time,
             )
@@ -5254,7 +5298,7 @@ class WatchingWorker:
             self._report_status("Stopped by user", "info")
             return False
 
-        # Roll over all channels after midnight
+        # Roll over all channels and active account after midnight
         try:
             wm = WarmupManager(self.config_mgr)
             raw_channels = self.config_mgr.get_channels() or []
@@ -5266,6 +5310,10 @@ class WatchingWorker:
                         c_cfg = wm.get_channel_config(c_name, c_url)
                         c_cfg.check_and_rollover()
                         wm.save_channel_config(c_cfg)
+            if getattr(self, "account", None) and getattr(self.account, "email", None):
+                acc_cfg = wm.get_account_config(self.account.email)
+                acc_cfg.check_and_rollover()
+                wm.save_account_config(acc_cfg)
             emit(
                 self.log_queue,
                 "☀️ [Midnight Rollover] All channel warm-up ladders advanced to the next day with fresh watch quotas!",
@@ -5279,7 +5327,7 @@ class WatchingWorker:
                 status="Channel Warm-Up Session Resumed",
                 is_sleep_notification=True,
                 sleep_mode_type="warmup_resume",
-                sleep_cycle_number=1,
+                sleep_cycle_number=max_cycle_day + 1,
                 sleep_duration_hours=sleep_hours,
                 wake_up_time=wake_up_time,
             )

@@ -42,6 +42,8 @@ from .views.system_name_modal import SystemNamePromptModal
 from ..utils.quota_tracker import get_quota_tracker
 from .tooltip import add_tooltip
 
+logger = logging.getLogger(__name__)
+
 
 class SessionEventQueue:
     """Wraps an event queue to tag all events with their session ID."""

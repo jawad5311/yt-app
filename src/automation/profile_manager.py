@@ -2,7 +2,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from ..models.account import Account
 from ..utils.helpers import get_project_root

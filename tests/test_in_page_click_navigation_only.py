@@ -78,6 +78,27 @@ def test_play_target_video_fails_when_in_page_click_fails(test_worker):
         mock_safe_get.assert_not_called()
 
 
+def test_play_target_video_cleans_dirty_youtube_url(test_worker):
+    """_play_target_video must cleanly process and sanitize URLs with tracking parameters without NameError."""
+    card = {"index": 0, "href": "/watch?v=target12345", "title": "Target Vid"}
+    test_worker.driver.current_url = "https://www.youtube.com/watch?v=initial1234"
+
+    with patch.object(test_worker, "click_recommended_video", return_value=False), \
+         patch("src.automation.watching_worker.emit") as mock_emit:
+        res = test_worker._play_target_video(
+            card_info=card,
+            full_url="https://www.youtube.com/watch?v=target12345&si=abc123xyz&t=45s",
+            title="Target Vid",
+            channel_display="Target Channel",
+            session_watched_keys=set(),
+            is_home=False,
+            source="suggested",
+        )
+        assert res.completed is False
+        logged_texts = [call[0][1] for call in mock_emit.call_args_list if len(call[0]) > 1]
+        assert any("URL: https://www.youtube.com/watch?v=target12345\n" in t for t in logged_texts)
+
+
 def test_watch_random_video_fails_cleanly_without_direct_nav(test_worker):
     """_watch_random_video must not call safe_get if in-page click fails."""
     card = {"index": 0, "href": "/watch?v=random123", "title": "Random Vid"}
@@ -269,9 +290,9 @@ def test_click_home_video_synthetic_js_click_fallback(test_worker):
     def fake_execute_script(script, *args):
         if "candidates" in script or "cleanLinks" in script:
             return [title_elem]
-        if "pointerdown" in script or "dispatchEvent" in script:
+        if "tagName === 'A'" in script or "a.click()" in script or "closest('a')" in script:
             test_worker.driver.current_url = f"https://www.youtube.com/watch?v={target_vid}"
-            return None
+            return True
         return None
 
     test_worker.driver.execute_script.side_effect = fake_execute_script
