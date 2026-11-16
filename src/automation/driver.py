@@ -79,6 +79,123 @@ def get_chrome_major_version() -> Optional[int]:
 DRIVER_INIT_LOCK = threading.Lock()
 
 
+def copy_shared_file(src: Path, dst: Path) -> bool:
+    """Copy a file even if locked by an active Chrome process on Windows."""
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        return True
+    except Exception:
+        pass
+
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            GENERIC_READ = 0x80000000
+            FILE_SHARE_READ = 0x00000001
+            FILE_SHARE_WRITE = 0x00000002
+            FILE_SHARE_DELETE = 0x00000004
+            OPEN_EXISTING = 3
+            FILE_ATTRIBUTE_NORMAL = 0x80
+
+            CreateFileW = ctypes.windll.kernel32.CreateFileW
+            CreateFileW.argtypes = [
+                wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE
+            ]
+            CreateFileW.restype = wintypes.HANDLE
+
+            CloseHandle = ctypes.windll.kernel32.CloseHandle
+            CloseHandle.argtypes = [wintypes.HANDLE]
+            CloseHandle.restype = wintypes.BOOL
+
+            ReadFile = ctypes.windll.kernel32.ReadFile
+            ReadFile.argtypes = [
+                wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID
+            ]
+            ReadFile.restype = wintypes.BOOL
+
+            h = CreateFileW(str(src), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None)
+            if h != wintypes.HANDLE(-1).value and h != -1:
+                try:
+                    size = ctypes.windll.kernel32.GetFileSize(h, None)
+                    if size > 0:
+                        buf = ctypes.create_string_buffer(size)
+                        read = wintypes.DWORD()
+                        if ReadFile(h, buf, size, ctypes.byref(read), None):
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            with open(dst, "wb") as f_dst:
+                                f_dst.write(buf.raw[:read.value])
+                            return True
+                finally:
+                    CloseHandle(h)
+        except Exception:
+            pass
+
+    try:
+        with open(src, "rb") as f_src:
+            data = f_src.read()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with open(dst, "wb") as f_dst:
+            f_dst.write(data)
+        return True
+    except Exception:
+        return False
+
+
+def sync_cookies_between_drivers(src_driver: Any, dst_driver: Any) -> bool:
+    """Transfer live in-memory cookies from src_driver to dst_driver via CDP."""
+    if src_driver is None or dst_driver is None:
+        return False
+    try:
+        if not is_driver_alive(src_driver) or not is_driver_alive(dst_driver):
+            return False
+        raw = src_driver.execute_cdp_cmd("Network.getAllCookies", {})
+        cookies = raw.get("cookies", [])
+        if not cookies and hasattr(src_driver, "get_cookies"):
+            cookies = src_driver.get_cookies()
+        if cookies:
+            cleaned = []
+            for c in cookies:
+                name = c.get("name")
+                val = c.get("value")
+                if not name:
+                    continue
+                cookie_dict = {
+                    "name": name,
+                    "value": val or "",
+                    "domain": c.get("domain", ""),
+                    "path": c.get("path", "/"),
+                    "secure": bool(c.get("secure", False)),
+                    "httpOnly": bool(c.get("httpOnly", False)),
+                }
+                same_site = c.get("sameSite")
+                if same_site in ("Strict", "Lax", "None"):
+                    cookie_dict["sameSite"] = same_site
+                exp = c.get("expires")
+                if exp is not None and isinstance(exp, (int, float)) and exp > 0:
+                    cookie_dict["expires"] = exp
+                cleaned.append(cookie_dict)
+            if cleaned:
+                try:
+                    dst_driver.execute_cdp_cmd("Network.setCookies", {"cookies": cleaned})
+                    return True
+                except Exception:
+                    applied = False
+                    for ck in cleaned:
+                        try:
+                            dst_driver.execute_cdp_cmd("Network.setCookie", ck)
+                            applied = True
+                        except Exception:
+                            pass
+                    return applied
+    except Exception as exc:
+        logging.debug("CDP cookie transfer error: %s", exc)
+    return False
+
+
 def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
     """Sync authentication and session state files from main profile to isolated reporting profile."""
     if not src_dir.exists():
@@ -88,15 +205,25 @@ def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
         "Local State",
         "Default/Preferences",
         "Default/Secure Preferences",
+        "Default/Account Web Data",
+        "Default/Account Web Data-journal",
+        "Default/Account Web Data-wal",
         "Default/Network/Cookies",
         "Default/Network/Cookies-journal",
         "Default/Network/Cookies-wal",
+        "Default/Network/Cookies-shm",
+        "Default/Network/Network Persistent State",
+        "Default/Network/Device Bound Sessions",
+        "Default/Network/Device Bound Sessions-journal",
+        "Default/Network/Trust Tokens",
+        "Default/Network/Trust Tokens-journal",
         "Default/Cookies",
         "Default/Cookies-journal",
         "Default/Cookies-wal",
         "Default/Login Data",
         "Default/Login Data-journal",
         "Default/Login Data For Account",
+        "Default/Login Data For Account-journal",
         "Default/Web Data",
         "Default/Web Data-journal",
     ]
@@ -104,17 +231,20 @@ def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
         s = src_dir / rel_path
         d = dst_dir / rel_path
         if s.exists():
-            try:
-                d.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(s, d)
-            except Exception:
-                try:
-                    with open(s, "rb") as f_src:
-                        data = f_src.read()
-                    with open(d, "wb") as f_dst:
-                        f_dst.write(data)
-                except Exception:
-                    pass
+            copy_shared_file(s, d)
+
+    dirs_to_sync = [
+        "Default/Session Storage",
+        "Default/Sessions",
+    ]
+    for rel_dir in dirs_to_sync:
+        s_dir = src_dir / rel_dir
+        if s_dir.is_dir():
+            d_dir = dst_dir / rel_dir
+            d_dir.mkdir(parents=True, exist_ok=True)
+            for item in s_dir.glob("*"):
+                if item.is_file():
+                    copy_shared_file(item, d_dir / item.name)
 
 
 def setup_driver(

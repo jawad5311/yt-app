@@ -131,6 +131,7 @@ def test_automation_worker_waits_for_signin_before_start_notification(tmp_path):
     config_mgr = ConfigManager(config_file=config_file)
     config_mgr.set_setting("SignInWaitSeconds", 0.001)
     config_mgr.set_setting("SignInMaxRetries", 1)
+    config_mgr.set_setting("EmailReportingEnabled", False)
 
     account = Account(email="q_user@gmail.com", password="password")
     worker = AutomationWorker(

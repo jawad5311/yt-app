@@ -6226,8 +6226,21 @@ class WatchingWorker:
 
             # Close main visible watching driver
             if self.driver:
+                if getattr(self, "reporting_driver", None) and is_driver_alive(self.reporting_driver):
+                    try:
+                        from .driver import sync_cookies_between_drivers
+                        sync_cookies_between_drivers(self.driver, self.reporting_driver)
+                    except Exception:
+                        pass
                 close_driver(self.driver, log_queue=self.log_queue)
                 self.driver = None
+                try:
+                    from .driver import resolve_profile_dir, sync_reporting_profile
+                    main_prof = resolve_profile_dir(self.account)
+                    rep_prof = main_prof.parent / f"{main_prof.name}_reporting"
+                    sync_reporting_profile(main_prof, rep_prof)
+                except Exception:
+                    pass
 
             # Deliver session report via the persistent headless browser parked on the email thread
             # ONLY if browsing successfully started and was not aborted during setup/driver launch
@@ -6354,6 +6367,7 @@ class WatchingWorker:
                         self.reporting_driver = EmailReporter.create_headless_reporting_driver(
                             account=self.account,
                             log_queue=self.log_queue,
+                            source_driver=getattr(self, "driver", None),
                         )
                     except Exception as exc:
                         logging.debug(f"Could not create persistent reporting driver: {exc}")

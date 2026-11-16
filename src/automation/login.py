@@ -571,8 +571,28 @@ def perform_google_login(
         err_msg = str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__
         emit(log_queue, f"Automatic login input notice: {err_msg}", logging.WARNING)
 
+    # Check if driver is running in headless mode
+    is_headless = False
+    try:
+        caps = getattr(driver, "capabilities", {}) or {}
+        chrome_opts = caps.get("chrome", {}) or caps.get("goog:chromeOptions", {})
+        args = chrome_opts.get("args", [])
+        if any("--headless" in a for a in args):
+            is_headless = True
+    except Exception:
+        pass
+    if not is_headless:
+        try:
+            ua = driver.execute_script("return navigator.userAgent") or ""
+            if "headless" in ua.lower():
+                is_headless = True
+        except Exception:
+            pass
+
     # Wait loop for login completion or manual CAPTCHA / 2FA completion
-    end_time = time.time() + 600  # wait up to 10 mins for user manual challenge if needed
+    # In headless mode, wait at most 15s since manual user interaction is not possible without a display
+    max_wait = 15.0 if is_headless else 600.0
+    end_time = time.time() + max_wait
     challenge_logged = False
     last_reminder = time.time()
 
@@ -596,6 +616,9 @@ def perform_google_login(
         challenge_info = detect_manual_challenge(driver)
         if not challenge_logged and challenge_info is not None:
             alert_type, det = challenge_info
+            if is_headless:
+                emit(log_queue, f"Manual verification required by Google ({account.email}); cannot be completed in headless reporting browser.", logging.DEBUG)
+                return False
             full_details = f"{det} Account: {account.email}."
             emit(
                 log_queue,
@@ -607,6 +630,9 @@ def perform_google_login(
         elif not challenge_logged:
             url = (getattr(driver, "current_url", "") or "").lower()
             if "challenge" in url or "captcha" in url or "2step" in url:
+                if is_headless:
+                    emit(log_queue, f"Manual verification required by Google ({account.email}); cannot be completed in headless reporting browser.", logging.DEBUG)
+                    return False
                 det = f"Google requested CAPTCHA or 2-Step Verification for account {account.email} on this PC. Please complete it manually in the browser window."
                 emit(log_queue, det, logging.WARNING)
                 challenge_logged = True
@@ -620,10 +646,13 @@ def perform_google_login(
         time.sleep(2)
 
     if not (stop_event is not None and stop_event.is_set()):
-        emit(log_queue, f"Sign-in timed out for {account.email}.", logging.ERROR)
-        if not challenge_logged:
-            det = f"Google sign-in timed out after 600 seconds for {account.email} on this PC. ID is stuck at signing in."
-            _dispatch_login_alert("Manual Action Required - Sign-In Stuck / Timed Out", det, account, config_mgr, alert_callback, driver, log_queue)
+        if not is_headless:
+            emit(log_queue, f"Sign-in timed out for {account.email}.", logging.ERROR)
+            if not challenge_logged:
+                det = f"Google sign-in timed out after 600 seconds for {account.email} on this PC. ID is stuck at signing in."
+                _dispatch_login_alert("Manual Action Required - Sign-In Stuck / Timed Out", det, account, config_mgr, alert_callback, driver, log_queue)
+        else:
+            emit(log_queue, f"Headless sign-in incomplete for {account.email}.", logging.DEBUG)
     return False
 
 

@@ -1218,8 +1218,8 @@ def test_html_dashboard_generation_includes_progress_bars_and_buttons(sample_rep
 
 
 class TestHeadlessFirstEmailDeliveryAndMainWindowFallback:
-    def test_start_notification_uses_headless_and_falls_back_to_main_window(self, tmp_path):
-        """Verify that start notification tries headless browser first, and falls back to main window if headless fails."""
+    def test_start_notification_uses_headless_and_does_not_open_visible_browser(self, tmp_path):
+        """Verify that start notification uses headless browser and does not pop open a visible browser window."""
         cfg = ConfigManager(tmp_path / "settings.json")
         cfg.update_settings({
             "ReportRecipientEmail": "admin@example.com",
@@ -1242,25 +1242,26 @@ class TestHeadlessFirstEmailDeliveryAndMainWindowFallback:
             assert ok is True
             mock_headless.assert_called_once()
             assert mock_headless.call_args.kwargs.get("headless") is True
+            assert mock_headless.call_args.kwargs.get("source_driver") is mock_main_driver
             mock_compose.assert_not_called()
 
-        # Case 2: Headless fails -> falls back to main window driver
+        # Case 2: Headless fails without SMTP -> does not open visible browser (headless=False)
         with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=False) as mock_headless, \
-             patch.object(EmailReporter, "_deliver_via_gmail_compose", return_value=True) as mock_compose:
+             patch.object(EmailReporter, "_deliver_via_gmail_compose") as mock_compose:
             ok = EmailReporter.send_start_notification(
                 account=account,
                 session_mode="Continuous Browsing",
                 config_mgr=cfg,
                 fallback_driver=mock_main_driver,
             )
-            assert ok is True
+            assert ok is False
             mock_headless.assert_called_once()
+            # Must remain headless, no visible window fallback
             assert mock_headless.call_args.kwargs.get("headless") is True
-            mock_compose.assert_called_once()
-            assert mock_compose.call_args.kwargs.get("driver") is mock_main_driver
+            mock_compose.assert_not_called()
 
-    def test_dispatch_report_uses_headless_first_and_falls_back_to_main_window(self, tmp_path, sample_report):
-        """Verify that dispatch_report attempts headless browser first, and falls back to main window if headless fails."""
+    def test_dispatch_report_uses_headless_without_opening_visible_browser(self, tmp_path, sample_report):
+        """Verify that dispatch_report delivers via headless browser and does not open a visible window at completion."""
         cfg = ConfigManager(tmp_path / "settings.json")
         cfg.update_settings({
             "ReportRecipientEmail": "admin@example.com",
@@ -1283,24 +1284,11 @@ class TestHeadlessFirstEmailDeliveryAndMainWindowFallback:
             assert ok is True
             mock_headless.assert_called_once()
             assert mock_headless.call_args.kwargs.get("headless") is True
+            assert mock_headless.call_args.kwargs.get("source_driver") is mock_main_driver
             mock_browser.assert_not_called()
 
-        # Case 2: Headless fails -> falls back to main window (send_via_browser_gmail)
+        # Case 2: Main driver closed (main_driver is None) and headless fails -> does not pop open visible window
         with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=False) as mock_headless, \
-             patch.object(EmailReporter, "send_via_browser_gmail", return_value=True) as mock_browser:
-            ok = EmailReporter.dispatch_report(
-                report=sample_report,
-                config_mgr=cfg,
-                account=account,
-                main_driver=mock_main_driver,
-            )
-            assert ok is True
-            assert mock_headless.call_args_list[0].kwargs.get("headless") is True
-            mock_browser.assert_called_once()
-            assert mock_browser.call_args[0][0] is mock_main_driver
-
-        # Case 3: No main window open (main_driver is None) and headless fails -> opens headed browser
-        with patch.object(EmailReporter, "send_via_headless_browser_gmail", side_effect=[False, True]) as mock_headless, \
              patch.object(EmailReporter, "send_via_browser_gmail") as mock_browser:
             ok = EmailReporter.dispatch_report(
                 report=sample_report,
@@ -1308,12 +1296,11 @@ class TestHeadlessFirstEmailDeliveryAndMainWindowFallback:
                 account=account,
                 main_driver=None,
             )
-            assert ok is True
-            assert mock_headless.call_count == 2
-            # 1st attempt: headless=True
-            assert mock_headless.call_args_list[0].kwargs.get("headless") is True
-            # 2nd attempt (fallback): headless=False (headed main window)
-            assert mock_headless.call_args_list[1].kwargs.get("headless") is False
+            assert ok is False
+            # Only called once with headless=True, never called with headless=False
+            assert mock_headless.call_count == 1
+            assert mock_headless.call_args.kwargs.get("headless") is True
+            mock_browser.assert_not_called()
 
 
 def test_channel_watch_time_displays_only_hours_and_minutes_without_decimal_hours():
@@ -1357,5 +1344,51 @@ def test_channel_watch_time_displays_only_hours_and_minutes_without_decimal_hour
     assert "6m 29s" in html_body
     assert "(1.9 hours)" not in html_body
     assert "(0.1 hours)" not in html_body
+
+
+def test_sync_cookies_between_drivers_transfers_session():
+    """Verify that sync_cookies_between_drivers transfers CDP cookies from source driver to destination driver."""
+    from src.automation.driver import sync_cookies_between_drivers
+
+    mock_src = MagicMock()
+    mock_src.session_id = "src-session"
+    mock_src.execute_cdp_cmd.side_effect = lambda cmd, args: {
+        "cookies": [
+            {
+                "name": "SID",
+                "value": "sid_secret_val",
+                "domain": ".google.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+                "sameSite": "Lax",
+                "expires": 1800000000,
+            },
+            {
+                "name": "HSID",
+                "value": "hsid_secret_val",
+                "domain": ".google.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+            },
+        ]
+    } if cmd == "Network.getAllCookies" else {}
+
+    mock_dst = MagicMock()
+    mock_dst.session_id = "dst-session"
+    mock_dst.execute_cdp_cmd.return_value = {}
+
+    ok = sync_cookies_between_drivers(mock_src, mock_dst)
+    assert ok is True
+    # Verify destination driver received setCookies
+    set_call = [c for c in mock_dst.execute_cdp_cmd.call_args_list if c[0][0] == "Network.setCookies"]
+    assert len(set_call) == 1
+    passed_cookies = set_call[0][0][1]["cookies"]
+    assert len(passed_cookies) == 2
+    assert passed_cookies[0]["name"] == "SID"
+    assert passed_cookies[0]["value"] == "sid_secret_val"
+    assert passed_cookies[1]["name"] == "HSID"
+
 
 
