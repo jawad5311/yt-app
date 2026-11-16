@@ -117,3 +117,56 @@ def test_reel_loop_consecutive_same_video_advances_and_recovers(test_worker):
     # Should have attempted scroll on same video and then progressed to 22222222222 and exited with reel_limit_reached (1 non-target)
     assert test_worker.scroll_to_next_short.call_count >= 2
     assert res.exit_reason == "reel_limit_reached"
+
+
+def test_run_shorts_cycle_aborts_on_consecutive_reel_stuck(test_worker):
+    """Verify that _run_shorts_cycle terminates instead of thrashing indefinitely when reel is repeatedly stuck."""
+    from src.automation.watching_worker import ReelLoopResult
+
+    test_worker._has_suggested_shorts_shelf = MagicMock(return_value=False)
+    test_worker.find_target_short_on_suggested_shelf = MagicMock(return_value=None)
+    test_worker.find_target_short_on_home = MagicMock(return_value=None)
+    test_worker.fetch_home_shorts = MagicMock(return_value=[])
+    test_worker.click_shorts_tab = MagicMock(return_value=True)
+    test_worker.get_active_short_info = MagicMock(return_value={"found": True, "title": "Untargeted", "channel_name": "Other"})
+    test_worker.scroll_to_next_short = MagicMock(return_value=True)
+
+    # Reel loop returns reel_stuck every time
+    test_worker._run_shorts_reel_loop = MagicMock(return_value=ReelLoopResult(0, 1, "reel_stuck"))
+
+    with patch("src.automation.watching_worker.safe_get"), \
+         patch("src.automation.watching_worker.human_like_delay"), \
+         patch("src.automation.watching_worker.dismiss_youtube_dialogs"), \
+         patch("time.sleep"):
+        watched = test_worker._run_shorts_cycle(session_watched_keys=set())
+
+    # Must abort after 2 consecutive stuck exits instead of looping indefinitely
+    assert test_worker._run_shorts_reel_loop.call_count == 2
+    assert watched == 0
+
+
+def test_run_shorts_cycle_aborts_on_login_verification_failed(test_worker):
+    """Verify that _run_shorts_cycle immediately halts on login_verification_failed."""
+    from src.automation.watching_worker import ReelLoopResult
+
+    test_worker._has_suggested_shorts_shelf = MagicMock(return_value=False)
+    test_worker.find_target_short_on_suggested_shelf = MagicMock(return_value=None)
+    test_worker.find_target_short_on_home = MagicMock(return_value=None)
+    test_worker.fetch_home_shorts = MagicMock(return_value=[])
+    test_worker.click_shorts_tab = MagicMock(return_value=True)
+    test_worker.get_active_short_info = MagicMock(return_value={"found": True, "title": "Untargeted", "channel_name": "Other"})
+    test_worker.scroll_to_next_short = MagicMock(return_value=True)
+
+    # Reel loop returns login_verification_failed
+    test_worker._run_shorts_reel_loop = MagicMock(return_value=ReelLoopResult(0, 0, "login_verification_failed"))
+
+    with patch("src.automation.watching_worker.safe_get"), \
+         patch("src.automation.watching_worker.human_like_delay"), \
+         patch("src.automation.watching_worker.dismiss_youtube_dialogs"), \
+         patch("time.sleep"):
+        watched = test_worker._run_shorts_cycle(session_watched_keys=set())
+
+    # Must halt immediately after 1 attempt and set flag
+    assert test_worker._run_shorts_reel_loop.call_count == 1
+    assert watched == 0
+    assert test_worker._last_login_verification_failed is True

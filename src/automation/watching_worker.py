@@ -3744,52 +3744,60 @@ class WatchingWorker:
             self.driver.execute_script(r"""
                 try {
                     // CRITICAL: NEVER focus an HTML5 video when scrolling, because ArrowDown lowers volume!
-                    if (document.activeElement && document.activeElement.tagName === 'VIDEO') {
+                    if (document.activeElement && (document.activeElement.tagName === 'VIDEO' || document.activeElement.tagName === 'INPUT')) {
                         document.activeElement.blur();
                     }
                     var container = document.querySelector('#shorts-container') ||
                                     document.querySelector('ytd-shorts') ||
+                                    document.querySelector('#shorts-inner-container') ||
                                     document.body;
-                    if (container && container.focus) { container.focus(); }
+                    if (container) {
+                        if (!container.hasAttribute('tabindex')) {
+                            container.setAttribute('tabindex', '-1');
+                        }
+                        if (container.focus) { container.focus(); }
+                    }
+                    var evDown = new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true });
+                    window.dispatchEvent(evDown);
+                    document.dispatchEvent(evDown);
                 } catch(e) {}
             """)
         except Exception:
             pass
 
-        if not clicked:
-            try:
-                self.driver.execute_script(r"""
-                    return (function() {
-                        var active = document.querySelector('ytd-reel-video-renderer[is-active]');
-                        if (active && active.nextElementSibling) {
-                            try {
-                                active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                            } catch(e) {}
-                        }
-
-                        var container = document.querySelector('#shorts-container') ||
-                                        document.querySelector('ytd-shorts') ||
-                                        document.querySelector('#shorts-inner-container');
-                        if (container && container.scrollTop !== undefined) {
-                            try { container.scrollTop += (window.innerHeight || 800); } catch(e) {}
-                        }
-
+        try:
+            self.driver.execute_script(r"""
+                return (function() {
+                    var active = document.querySelector('ytd-reel-video-renderer[is-active]');
+                    if (active && active.nextElementSibling) {
                         try {
-                            var wheelTarget = container || document.body;
-                            wheelTarget.dispatchEvent(new WheelEvent('wheel', {
-                                deltaY: window.innerHeight || 800,
-                                deltaMode: 0,
-                                bubbles: true,
-                                cancelable: true,
-                                view: window
-                            }));
+                            active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
                         } catch(e) {}
+                    }
 
-                        return false;
-                    })();
-                """)
-            except Exception:
-                pass
+                    var container = document.querySelector('#shorts-container') ||
+                                    document.querySelector('ytd-shorts') ||
+                                    document.querySelector('#shorts-inner-container');
+                    if (container && container.scrollTop !== undefined) {
+                        try { container.scrollTop += (window.innerHeight || 800); } catch(e) {}
+                    }
+
+                    try {
+                        var wheelTarget = container || document.body;
+                        wheelTarget.dispatchEvent(new WheelEvent('wheel', {
+                            deltaY: window.innerHeight || 800,
+                            deltaMode: 0,
+                            bubbles: true,
+                            cancelable: true,
+                            view: window
+                        }));
+                    } catch(e) {}
+
+                    return false;
+                })();
+            """)
+        except Exception:
+            pass
 
         try:
             ActionChains(self.driver).send_keys(Keys.ARROW_DOWN).perform()
@@ -3801,7 +3809,7 @@ class WatchingWorker:
 
         try:
             active_el = self.driver.switch_to.active_element
-            if active_el and active_el.tag_name.lower() != "video":
+            if active_el and active_el.tag_name.lower() not in ("video", "input"):
                 active_el.send_keys(Keys.ARROW_DOWN)
         except Exception:
             pass
@@ -3830,6 +3838,14 @@ class WatchingWorker:
                     ActionChains(self.driver).send_keys(Keys.PAGE_DOWN).perform()
                 except Exception:
                     pass
+                try:
+                    self.driver.execute_script(r"""
+                        var evJ = new KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', keyCode: 74, which: 74, bubbles: true, cancelable: true });
+                        window.dispatchEvent(evJ);
+                        document.dispatchEvent(evJ);
+                    """)
+                except Exception:
+                    pass
             elif attempt in (4, 8):
                 try:
                     self.driver.execute_script(r"""
@@ -3842,6 +3858,7 @@ class WatchingWorker:
                     """)
                 except Exception:
                     pass
+                try:
                     self.driver.execute_script(r"""
                         var btn = document.querySelector('#navigation-button-down button, ytd-shorts #navigation-button-down button, button[aria-label*="Next" i], [id="navigation-button-down"] button');
                         if (btn) { btn.click(); }
@@ -3851,10 +3868,13 @@ class WatchingWorker:
             elif attempt == 11:
                 try:
                     self.driver.execute_script(r"""
-                        var nextRenderer = document.querySelector('ytd-reel-video-renderer[is-active] + ytd-reel-video-renderer');
+                        var nextRenderer = document.querySelector('ytd-reel-video-renderer[is-active] + ytd-reel-video-renderer, ytd-reel-video-renderer[is-active] ~ ytd-reel-video-renderer');
                         if (nextRenderer) {
+                            nextRenderer.scrollIntoView({ behavior: 'instant', block: 'start' });
                             var link = nextRenderer.querySelector('a[href*="/shorts/"]');
                             if (link) { link.click(); }
+                        } else {
+                            window.scrollBy(0, window.innerHeight || 800);
                         }
                     """)
                 except Exception:
@@ -3899,6 +3919,7 @@ class WatchingWorker:
 
         total_target_shorts_watched = 0
         total_non_target_shorts_seen = 0
+        consecutive_reel_stuck_count = 0
 
         emit(
             self.log_queue,
@@ -4099,6 +4120,26 @@ class WatchingWorker:
                 total_target_shorts_watched = watched_in_reel
                 total_non_target_shorts_seen += non_targets_in_reel
 
+                if exit_reason == "reel_stuck":
+                    consecutive_reel_stuck_count += 1
+                    if consecutive_reel_stuck_count >= 2:
+                        emit(
+                            self.log_queue,
+                            f"Shorts reel stuck repeatedly ({consecutive_reel_stuck_count} consecutive reel_stuck exits). Aborting Shorts cycle to protect session.",
+                            logging.WARNING,
+                        )
+                        break
+                elif exit_reason == "login_verification_failed":
+                    emit(
+                        self.log_queue,
+                        "Shorts reel aborted due to unresolved manual verification / login issue. Halting Shorts cycle.",
+                        logging.WARNING,
+                    )
+                    self._last_login_verification_failed = True
+                    break
+                else:
+                    consecutive_reel_stuck_count = 0
+
                 if exit_reason == "target_achieved" or total_target_shorts_watched >= cycle_target_shorts:
                     emit(
                         self.log_queue,
@@ -4173,6 +4214,26 @@ class WatchingWorker:
             )
             total_target_shorts_watched = watched_in_reel
             total_non_target_shorts_seen += non_targets_in_reel
+
+            if exit_reason == "reel_stuck":
+                consecutive_reel_stuck_count += 1
+                if consecutive_reel_stuck_count >= 2:
+                    emit(
+                        self.log_queue,
+                        f"Shorts reel stuck repeatedly ({consecutive_reel_stuck_count} consecutive reel_stuck exits). Aborting Shorts cycle to protect session.",
+                        logging.WARNING,
+                    )
+                    break
+            elif exit_reason == "login_verification_failed":
+                emit(
+                    self.log_queue,
+                    "Shorts reel aborted due to unresolved manual verification / login issue. Halting Shorts cycle.",
+                    logging.WARNING,
+                )
+                self._last_login_verification_failed = True
+                break
+            else:
+                consecutive_reel_stuck_count = 0
 
             if exit_reason == "target_achieved" or total_target_shorts_watched >= cycle_target_shorts:
                 emit(
