@@ -1,6 +1,7 @@
 """Unit and integration tests for Session Watch Time Email Reporting."""
 
 import queue
+import time
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -1447,6 +1448,59 @@ def test_send_alert_notification_threads_under_session_thread(tmp_path):
         assert mock_reply_res.call_args.kwargs["thread_url"] == thread_info["thread_url"]
         assert "NOTIFICATION: MANUAL CHALLENGE RESOLVED - RESUMING SESSION" in mock_reply_res.call_args.kwargs["plain_text"]
         assert "challenge has cleared and normal browsing / video playback has resumed" in mock_reply_res.call_args.kwargs["plain_text"]
+
+
+def test_perform_google_login_skips_extended_wait_when_wait_for_challenge_false():
+    """Verify perform_google_login immediately returns False without waiting 600s when wait_for_challenge_resolution is False."""
+    from src.automation.login import perform_google_login
+
+    mock_driver = MagicMock()
+    mock_driver.current_url = "https://accounts.google.com/signin/v2/challenge/pwd"
+    account = Account(email="test@gmail.com", password="pwd")
+
+    with patch("src.automation.login.check_login_state", return_value="signed_out"), \
+         patch("src.automation.login.detect_manual_challenge", return_value=("Bot Challenge", "Verification challenge")), \
+         patch("src.automation.login._handle_account_chooser"), \
+         patch("src.automation.login._handle_email_input"), \
+         patch("src.automation.login._handle_password_input"), \
+         patch("src.automation.login._handle_post_login_prompts"), \
+         patch("src.automation.login.safe_get"), \
+         patch("time.sleep"):
+        ok = perform_google_login(mock_driver, account, wait_for_challenge_resolution=False)
+
+        assert ok is False
+
+
+def test_send_via_browser_gmail_passes_wait_false_to_compose_after_thread_login_failure():
+    """Verify send_via_browser_gmail passes wait_for_challenge_resolution=False to compose fallback after thread reply login failure."""
+    mock_driver = MagicMock()
+    mock_driver.session_id = "test-session"
+    mock_driver.execute_script.return_value = 1
+    report = MagicMock()
+    report.thread_url = "https://mail.google.com/mail/u/0/#inbox/123"
+    report.custom_subject = "Test Subject"
+    report.generate_subject.return_value = "Test Subject"
+    report.generate_plain_text.return_value = "Plain report text"
+    report.generate_html_body.return_value = "<p>Html report</p>"
+    report.account_email = "test@gmail.com"
+
+    def mock_thread_reply(*args, **kwargs):
+        EmailReporter._last_login_challenge_unresolved = True
+        return False
+
+    with patch.object(EmailReporter, "_deliver_via_gmail_thread_reply", side_effect=mock_thread_reply), \
+         patch.object(EmailReporter, "_deliver_via_gmail_compose", return_value=True) as mock_compose, \
+         patch("src.automation.driver.is_driver_alive", return_value=True):
+        ok = EmailReporter.send_via_browser_gmail(
+            driver=mock_driver,
+            report=report,
+            recipient_email="admin@example.com",
+        )
+
+        assert ok is True
+        mock_compose.assert_called_once()
+        assert mock_compose.call_args.kwargs.get("wait_for_challenge_resolution") is False
+
 
 
 

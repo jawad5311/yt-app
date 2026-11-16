@@ -622,6 +622,7 @@ class EmailReporter:
 
     last_thread_url: Optional[str] = None
     last_message_id: Optional[str] = None
+    _last_login_challenge_unresolved: bool = False
     _recent_alert_times: Dict[tuple, float] = {}
 
     @classmethod
@@ -629,6 +630,7 @@ class EmailReporter:
         """Reset cached class-level thread IDs and URLs when a new session starts."""
         cls.last_message_id = None
         cls.last_thread_url = None
+        cls._last_login_challenge_unresolved = False
         cls._recent_alert_times.clear()
 
     @classmethod
@@ -752,6 +754,7 @@ class EmailReporter:
         account: Optional[Account] = None,
         config_mgr: Optional[Any] = None,
         fallback_driver: Optional[Any] = None,
+        wait_for_challenge_resolution: bool = True,
     ) -> bool:
         """Core Gmail compose automation in Chrome (works for visible and headless Chrome)."""
         if not driver:
@@ -831,6 +834,7 @@ class EmailReporter:
                             account,
                             log_queue=log_queue,
                             config_mgr=config_mgr,
+                            wait_for_challenge_resolution=wait_for_challenge_resolution,
                         )
                         if login_ok:
                             if log_queue:
@@ -1309,10 +1313,14 @@ class EmailReporter:
                                 log_queue=log_queue,
                                 config_mgr=config_mgr,
                             )
+                            if not login_ok:
+                                cls._last_login_challenge_unresolved = True
+                                return False
                             if login_ok and target_url:
                                 driver.get(target_url)
                                 time.sleep(3.0)
                         except Exception:
+                            cls._last_login_challenge_unresolved = True
                             return False
                     else:
                         return False
@@ -1612,35 +1620,62 @@ class EmailReporter:
         if not account and report.account_email:
             account = Account(email=report.account_email, password="")
 
-        if target_thread or report.custom_subject:
-            reply_ok = cls._deliver_via_gmail_thread_reply(
-                driver=driver,
-                plain_text=report.generate_plain_text(),
-                thread_url=target_thread,
-                subject=report.generate_subject(),
-                recipient_email=recipient_email,
-                bcc_email=bcc_email,
-                log_queue=log_queue,
-                email_description="session watch time report",
-                thread_info=thread_info,
-                html_content=report.generate_html_body(),
-                account=account,
-                config_mgr=config_mgr,
-            )
-            if reply_ok:
-                return True
+        cls._last_login_challenge_unresolved = False
+        try:
+            if target_thread or report.custom_subject:
+                reply_ok = cls._deliver_via_gmail_thread_reply(
+                    driver=driver,
+                    plain_text=report.generate_plain_text(),
+                    thread_url=target_thread,
+                    subject=report.generate_subject(),
+                    recipient_email=recipient_email,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    email_description="session watch time report",
+                    thread_info=thread_info,
+                    html_content=report.generate_html_body(),
+                    account=account,
+                    config_mgr=config_mgr,
+                )
+                if reply_ok:
+                    return True
 
-            if not is_driver_alive(driver):
-                return False
+                if not is_driver_alive(driver):
+                    return False
 
-            # Retry by navigating to Sent folder to locate session thread
+                # Only search Sent folder if initial thread reply didn't fail due to unresolved login challenge
+                if not getattr(cls, "_last_login_challenge_unresolved", False):
+                    # Retry by navigating to Sent folder to locate session thread
+                    if log_queue:
+                        emit(log_queue, "Initial thread reply attempt did not succeed. Searching Sent mail to locate session thread...", logging.INFO)
+                    reply_ok = cls._deliver_via_gmail_thread_reply(
+                        driver=driver,
+                        plain_text=report.generate_plain_text(),
+                        thread_url="https://mail.google.com/mail/u/0/#sent",
+                        subject=report.generate_subject(),
+                        recipient_email=recipient_email,
+                        bcc_email=bcc_email,
+                        log_queue=log_queue,
+                        email_description="session watch time report",
+                        thread_info=thread_info,
+                        html_content=report.generate_html_body(),
+                        account=account,
+                        config_mgr=config_mgr,
+                    )
+                    if reply_ok:
+                        return True
+
+                    if not is_driver_alive(driver):
+                        return False
+
             if log_queue:
-                emit(log_queue, "Initial thread reply attempt did not succeed. Searching Sent mail to locate session thread...", logging.INFO)
-            reply_ok = cls._deliver_via_gmail_thread_reply(
+                emit(log_queue, "Could not reply directly to existing thread. Falling back to compose delivery...", logging.WARNING)
+
+            skip_challenge_wait = bool(getattr(cls, "_last_login_challenge_unresolved", False))
+            return cls._deliver_via_gmail_compose(
                 driver=driver,
-                plain_text=report.generate_plain_text(),
-                thread_url="https://mail.google.com/mail/u/0/#sent",
                 subject=report.generate_subject(),
+                plain_text=report.generate_plain_text(),
                 recipient_email=recipient_email,
                 bcc_email=bcc_email,
                 log_queue=log_queue,
@@ -1649,29 +1684,10 @@ class EmailReporter:
                 html_content=report.generate_html_body(),
                 account=account,
                 config_mgr=config_mgr,
+                wait_for_challenge_resolution=not skip_challenge_wait,
             )
-            if reply_ok:
-                return True
-
-            if not is_driver_alive(driver):
-                return False
-
-        if log_queue:
-            emit(log_queue, "Could not reply directly to existing thread. Falling back to compose delivery...", logging.WARNING)
-
-        return cls._deliver_via_gmail_compose(
-            driver=driver,
-            subject=report.generate_subject(),
-            plain_text=report.generate_plain_text(),
-            recipient_email=recipient_email,
-            bcc_email=bcc_email,
-            log_queue=log_queue,
-            email_description="session watch time report",
-            thread_info=thread_info,
-            html_content=report.generate_html_body(),
-            account=account,
-            config_mgr=config_mgr,
-        )
+        finally:
+            cls._last_login_challenge_unresolved = False
 
     @classmethod
     def create_headless_reporting_driver(
@@ -1765,6 +1781,7 @@ class EmailReporter:
             if driver and source_driver and is_driver_alive(source_driver):
                 sync_cookies_between_drivers(source_driver, driver)
 
+            cls._last_login_challenge_unresolved = False
             target_thread = thread_url or cls.last_thread_url
             if target_thread or ("start" not in email_description.lower() and subject):
                 reply_ok = cls._deliver_via_gmail_thread_reply(
@@ -1785,6 +1802,7 @@ class EmailReporter:
                 if reply_ok:
                     return True
 
+            skip_challenge_wait = bool(getattr(cls, "_last_login_challenge_unresolved", False))
             return cls._deliver_via_gmail_compose(
                 driver=driver,
                 subject=subject,
@@ -1798,6 +1816,7 @@ class EmailReporter:
                 account=account,
                 config_mgr=config_mgr,
                 fallback_driver=source_driver,
+                wait_for_challenge_resolution=not skip_challenge_wait,
             )
         except Exception as exc:
             if log_queue:
