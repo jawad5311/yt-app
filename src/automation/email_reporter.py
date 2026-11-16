@@ -716,10 +716,18 @@ class EmailReporter:
             if port == 465:
                 server = smtplib.SMTP_SSL(host, port, timeout=25)
             else:
-                server = smtplib.SMTP(host, port, timeout=25)
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
+                try:
+                    server = smtplib.SMTP(host, port, timeout=25)
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                except (smtplib.SMTPServerDisconnected, OSError) as conn_err:
+                    if host == "smtp.gmail.com" and port != 465:
+                        if log_queue:
+                            emit(log_queue, f"SMTP port {port} connection closed ({conn_err}). Attempting fallback to port 465 (SSL)...", logging.INFO)
+                        server = smtplib.SMTP_SSL(host, 465, timeout=25)
+                    else:
+                        raise
 
             user_login = (username or sender).strip()
             server.login(user_login, password)
@@ -736,7 +744,17 @@ class EmailReporter:
 
         except Exception as exc:
             if log_queue:
-                emit(log_queue, f"SMTP email delivery failed: {exc}", logging.ERROR)
+                err_msg = str(exc)
+                emit(log_queue, f"SMTP email delivery failed: {err_msg}", logging.ERROR)
+                if "smtp.gmail.com" in host.lower():
+                    if "connection unexpectedly closed" in err_msg.lower() or "534" in err_msg or "password" in err_msg.lower() or "auth" in err_msg.lower():
+                        emit(
+                            log_queue,
+                            "[Configuration Guidance] Gmail SMTP requires a 16-character Google App Password (not your standard Google account password). "
+                            "To resolve this, enable 2-Step Verification in your Google Account and generate an App Password at: "
+                            "https://myaccount.google.com/apppasswords. Then update SmtpPassword in your settings.",
+                            logging.WARNING,
+                        )
             return False
 
     @classmethod
@@ -2341,10 +2359,18 @@ class EmailReporter:
             if port == 465:
                 server = smtplib.SMTP_SSL(host, port, timeout=25)
             else:
-                server = smtplib.SMTP(host, port, timeout=25)
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
+                try:
+                    server = smtplib.SMTP(host, port, timeout=25)
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                except (smtplib.SMTPServerDisconnected, OSError) as conn_err:
+                    if host == "smtp.gmail.com" and port != 465:
+                        if log_queue:
+                            emit(log_queue, f"SMTP port {port} connection closed ({conn_err}). Attempting fallback to port 465 (SSL)...", logging.INFO)
+                        server = smtplib.SMTP_SSL(host, 465, timeout=25)
+                    else:
+                        raise
             server.login(user, pwd)
             all_recipients = [recipient]
             if bcc_email and "@" in bcc_email and bcc_email.lower() != recipient.lower():
@@ -2356,7 +2382,17 @@ class EmailReporter:
             return True
         except Exception as exc:
             if log_queue:
-                emit(log_queue, f"SMTP start notification delivery failed: {exc}", logging.ERROR)
+                err_msg = str(exc)
+                emit(log_queue, f"SMTP start notification delivery failed: {err_msg}", logging.ERROR)
+                if "smtp.gmail.com" in host.lower():
+                    if "connection unexpectedly closed" in err_msg.lower() or "534" in err_msg or "password" in err_msg.lower() or "auth" in err_msg.lower():
+                        emit(
+                            log_queue,
+                            "[Configuration Guidance] Gmail SMTP requires a 16-character Google App Password (not your standard Google account password). "
+                            "To resolve this, enable 2-Step Verification in your Google Account and generate an App Password at: "
+                            "https://myaccount.google.com/apppasswords. Then update SmtpPassword in your settings.",
+                            logging.WARNING,
+                        )
             return False
 
     @classmethod

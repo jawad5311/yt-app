@@ -496,6 +496,52 @@ class TestRecipientResolutionAndBcc:
         assert "To: client@example.com" in msg_str
         assert "Bcc:" not in msg_str
 
+    @patch("smtplib.SMTP_SSL")
+    @patch("smtplib.SMTP")
+    def test_smtp_falls_back_to_port_465_on_connection_closed(self, mock_smtp, mock_smtp_ssl, sample_report):
+        import smtplib
+        mock_smtp.side_effect = smtplib.SMTPServerDisconnected("Connection unexpectedly closed")
+        mock_ssl_instance = MagicMock()
+        mock_smtp_ssl.return_value = mock_ssl_instance
+
+        ok = EmailReporter.send_via_smtp(
+            report=sample_report,
+            recipient_email="client@example.com",
+            host="smtp.gmail.com",
+            port=587,
+            password="test-password",
+            sender_email="sender@gmail.com",
+        )
+        assert ok is True
+        mock_smtp_ssl.assert_called_with("smtp.gmail.com", 465, timeout=25)
+        mock_ssl_instance.login.assert_called_with("sender@gmail.com", "test-password")
+        mock_ssl_instance.sendmail.assert_called()
+
+    @patch("smtplib.SMTP_SSL")
+    @patch("smtplib.SMTP")
+    def test_smtp_logs_app_password_guidance_on_auth_failure(self, mock_smtp, mock_smtp_ssl, sample_report):
+        import smtplib
+        mock_instance = MagicMock()
+        mock_instance.login.side_effect = smtplib.SMTPAuthenticationError(534, b"5.7.9 Application-specific password required")
+        mock_smtp.return_value = mock_instance
+
+        log_q = queue.Queue()
+        ok = EmailReporter.send_via_smtp(
+            report=sample_report,
+            recipient_email="client@example.com",
+            host="smtp.gmail.com",
+            port=587,
+            password="wrong-password",
+            sender_email="sender@gmail.com",
+            log_queue=log_q,
+        )
+        assert ok is False
+        logs = []
+        while not log_q.empty():
+            logs.append(log_q.get())
+        guidance = [m for m in logs if "Google App Password" in str(m)]
+        assert len(guidance) > 0
+
     @patch("time.sleep", return_value=None)
     def test_gmail_compose_url_includes_bcc(self, mock_sleep):
         mock_driver = MagicMock()
