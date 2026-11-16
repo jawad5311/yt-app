@@ -5106,6 +5106,19 @@ class WatchingWorker:
         if not login_ok and not self.stop_event.is_set():
             emit(self.log_queue, f"Notice: Google sign-in verification check after morning wake-up for {self.account.email}.", logging.WARNING)
 
+        # Re-initialize dedicated headless reporting browser with synchronized cookies for background notifications
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower() if self.config_mgr else "auto"
+        if "smtp" not in method and not getattr(self, "reporting_driver", None):
+            try:
+                self.reporting_driver = EmailReporter.create_headless_reporting_driver(
+                    account=self.account,
+                    log_queue=self.log_queue,
+                    source_driver=getattr(self, "driver", None),
+                )
+            except Exception as exc:
+                logging.debug(f"Could not initialize reporting driver after morning wake-up: {exc}")
+                self.reporting_driver = None
+
         # Deliver morning wake-up session resumption notification email under the exact same session thread
         try:
             emit(
@@ -5641,6 +5654,19 @@ class WatchingWorker:
         login_ok = self._ensure_signed_in_and_wait()
         if not login_ok and not self.stop_event.is_set():
             emit(self.log_queue, f"Notice: Google sign-in verification check after wake-up for {self.account.email}.", logging.WARNING)
+
+        # Re-initialize dedicated headless reporting browser with synchronized cookies for background notifications
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower() if self.config_mgr else "auto"
+        if "smtp" not in method and not getattr(self, "reporting_driver", None):
+            try:
+                self.reporting_driver = EmailReporter.create_headless_reporting_driver(
+                    account=self.account,
+                    log_queue=self.log_queue,
+                    source_driver=getattr(self, "driver", None),
+                )
+            except Exception as exc:
+                logging.debug(f"Could not initialize reporting driver after nap wake-up: {exc}")
+                self.reporting_driver = None
 
         # Deliver nap resumption notification email under the exact same session thread
         try:

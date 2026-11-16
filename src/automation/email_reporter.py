@@ -2504,26 +2504,27 @@ class EmailReporter:
                 if log_queue:
                     emit(log_queue, f"Headless browser email delivery encountered an issue: {_clean_error_msg(exc)}.", logging.WARNING)
 
-        # 4. Fallback: If an active main window browser driver was already supplied and is alive:
-        active_main = main_driver
-        if active_main is not None and active_main is not driver:
-            from .driver import is_driver_alive
-            if is_driver_alive(active_main):
-                if log_queue:
-                    emit(log_queue, "Attempting email delivery via active main browser window...", logging.INFO)
-                browser_ok = cls.send_via_browser_gmail(
-                    active_main,
-                    report,
-                    recipient,
-                    bcc_email=bcc_email,
-                    log_queue=log_queue,
-                    thread_info=thread_info,
-                    config_mgr=config_mgr,
-                )
-                if browser_ok:
-                    return True
-                if log_queue:
-                    emit(log_queue, "Active main browser window email delivery did not succeed.", logging.WARNING)
+        # 4. Fallback: Only use active main window browser driver if user explicitly configured "Active Browser Gmail"
+        if "active" in method.lower() and "headless" not in method.lower():
+            active_main = main_driver
+            if active_main is not None and active_main is not driver:
+                from .driver import is_driver_alive
+                if is_driver_alive(active_main):
+                    if log_queue:
+                        emit(log_queue, "Attempting email delivery via active main browser window...", logging.INFO)
+                    browser_ok = cls.send_via_browser_gmail(
+                        active_main,
+                        report,
+                        recipient,
+                        bcc_email=bcc_email,
+                        log_queue=log_queue,
+                        thread_info=thread_info,
+                        config_mgr=config_mgr,
+                    )
+                    if browser_ok:
+                        return True
+                    if log_queue:
+                        emit(log_queue, "Active main browser window email delivery did not succeed.", logging.WARNING)
 
         # 5. Final Fallback: SMTP if creds available
         if has_smtp_creds:

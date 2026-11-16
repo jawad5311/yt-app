@@ -1349,6 +1349,19 @@ class TestHeadlessFirstEmailDeliveryAndMainWindowFallback:
             assert mock_headless.call_args.kwargs.get("headless") is True
             mock_browser.assert_not_called()
 
+        # Case 3: Main driver alive and headless fails in Auto/Headless mode -> does NOT hijack active main window
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=False) as mock_headless, \
+             patch.object(EmailReporter, "send_via_browser_gmail") as mock_browser:
+            ok = EmailReporter.dispatch_report(
+                report=sample_report,
+                config_mgr=cfg,
+                account=account,
+                main_driver=mock_main_driver,
+            )
+            assert ok is False
+            assert mock_headless.call_count == 1
+            mock_browser.assert_not_called()
+
 
 def test_channel_watch_time_displays_only_hours_and_minutes_without_decimal_hours():
     """Verify that in email reports, channel watch time is displayed in hours and minutes only
