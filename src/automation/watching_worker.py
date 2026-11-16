@@ -1159,6 +1159,7 @@ class WatchingWorker:
             session_start_time=self.session_start_time,
         )
         self._logged_night_bypass_window_id: Optional[str] = None
+        self._last_login_verification_failed: bool = False
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -4757,8 +4758,12 @@ class WatchingWorker:
                     return None
 
                 if watch_res is None or (not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
-                    if watch_res and watch_res.reason == "login_verification_failed":
-                        emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
+                    if watch_res is not None and watch_res.reason == "login_verification_failed":
+                        emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue. Halting candidate search to protect account from bot detection.", logging.WARNING)
+                        self._last_login_verification_failed = True
+                        if vid_id:
+                            session_watched_keys.add(vid_id)
+                        return None
                     if vid_id:
                         session_watched_keys.add(vid_id)
                     continue
@@ -4831,8 +4836,12 @@ class WatchingWorker:
                         return None
 
                     if watch_res is None or (not watch_res.completed and (watch_res.watched_seconds or 0) <= 0):
-                        if watch_res and watch_res.reason == "login_verification_failed":
-                            emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue.", logging.WARNING)
+                        if watch_res is not None and watch_res.reason == "login_verification_failed":
+                            emit(self.log_queue, f"Search playback aborted for '{title}' due to unresolved manual verification / login issue. Halting channel search to protect account from bot detection.", logging.WARNING)
+                            self._last_login_verification_failed = True
+                            if vid_id:
+                                session_watched_keys.add(vid_id)
+                            return None
                         if vid_id:
                             session_watched_keys.add(vid_id)
                         continue
@@ -5011,6 +5020,7 @@ class WatchingWorker:
 
         session_watched_keys.clear()
         self.cycle_report_dispatched = False
+        self._last_login_verification_failed = False
         self.target_attempts = 0
         self.watched_count = 0
 
@@ -5225,6 +5235,7 @@ class WatchingWorker:
         # 6. Reset session tracking and restart browser
         session_watched_keys.clear()
         self.cycle_report_dispatched = False
+        self._last_login_verification_failed = False
         self.target_attempts = 0
         self.watched_count = 0
 
@@ -5357,6 +5368,7 @@ class WatchingWorker:
 
         session_watched_keys.clear()
         self.cycle_report_dispatched = False
+        self._last_login_verification_failed = False
         self.target_attempts = 0
         self.watched_count = 0
 
@@ -5543,6 +5555,7 @@ class WatchingWorker:
         # Start from FRESH stats!
         session_watched_keys.clear()
         self.cycle_report_dispatched = False
+        self._last_login_verification_failed = False
         self.target_attempts = 0
         self.watched_count = 0
 
@@ -5904,11 +5917,10 @@ class WatchingWorker:
                             failed_rec_ids.add(cand_id)
                             continue
                         elif not watch_res.completed and watch_res.reason == "login_verification_failed":
-                            emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Trying next candidate...", logging.WARNING)
+                            emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Halting suggested candidate attempts to protect account from bot detection.", logging.WARNING)
+                            self._last_login_verification_failed = True
                             failed_rec_ids.add(cand_id)
-                            if self.stop_event.is_set():
-                                break
-                            continue
+                            break
                         elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
                             emit(self.log_queue, f"Video '{title}' stopped without playback ({watch_res.reason or 'not watched'}). Skipping to next candidate...", logging.INFO)
                             failed_rec_ids.add(cand_id)
@@ -6097,10 +6109,20 @@ class WatchingWorker:
                         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
                         continue
                     elif not watch_res.completed and watch_res.reason == "login_verification_failed":
-                        emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Trying next candidate...", logging.WARNING)
+                        emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Halting Home feed attempts to protect account from bot detection.", logging.WARNING)
+                        self._last_login_verification_failed = True
                         if self.stop_event.is_set():
                             break
-                        continue
+                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                        if woke_up:
+                            self._last_login_verification_failed = False
+                            cycle_long_vids_watched = 0
+                            suggested_miss_count = 0
+                            consecutive_target_watched = 0
+                            channel_buffer_counts.clear()
+                            continue
+                        else:
+                            break
                     elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
                         emit(self.log_queue, f"Home video '{title}' stopped without playback ({watch_res.reason or 'not watched'}).", logging.INFO)
                         if self.stop_event.is_set():
@@ -6176,6 +6198,23 @@ class WatchingWorker:
                         )
                         continue
                     else:
+                        if getattr(self, "_last_login_verification_failed", False):
+                            emit(
+                                self.log_queue,
+                                "[Manual Action Required] Search playback halted due to unresolved manual challenge. Skipping Shorts and entering sleep cycle to avoid bot detection.",
+                                logging.WARNING,
+                            )
+                            woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                            if woke_up:
+                                self._last_login_verification_failed = False
+                                cycle_long_vids_watched = 0
+                                suggested_miss_count = 0
+                                consecutive_target_watched = 0
+                                channel_buffer_counts.clear()
+                                continue
+                            else:
+                                break
+
                         emit(
                             self.log_queue,
                             "No long-form video found on Home feed or via Search. Checking YouTube Shorts for targeted channels...",

@@ -1309,3 +1309,44 @@ class TestAdSlotFiltering:
                 assert "dispatchEvent" not in s
                 assert "new MouseEvent" not in s
                 assert "arguments[0].click()" not in s
+
+
+class TestLoginVerificationHalt:
+    def test_search_and_play_halts_immediately_on_login_verification_failed(self, tmp_path):
+        cfg = ConfigManager(config_file=tmp_path / "config.json")
+        stats = StatsStore(stats_file=tmp_path / "stats.json")
+        acct = Account(email="test@gmail.com", password="pwd")
+        worker = WatchingWorker(
+            account=acct,
+            config_mgr=cfg,
+            stats_store=stats,
+            channels=[Channel(name="Target Channel 1", enabled=True), Channel(name="Target Channel 2", enabled=True)],
+        )
+        worker.driver = MagicMock()
+
+        # Mock candidates in config queue
+        mock_candidates = [
+            {"title": "Video 1", "url": "https://www.youtube.com/watch?v=vid1", "channel": "Target Channel 1", "enabled": True},
+            {"title": "Video 2", "url": "https://www.youtube.com/watch?v=vid2", "channel": "Target Channel 2", "enabled": True},
+        ]
+        cfg.set_video_queue(mock_candidates)
+
+        played_calls = []
+
+        def mock_play(card, url, title, ch, session_keys, is_home=False, source=None):
+            played_calls.append(title)
+            return WatchResult(completed=False, reason="login_verification_failed", interrupted=True)
+
+        worker._play_target_video = mock_play
+        worker.search_youtube_query = MagicMock(return_value=True)
+
+        with patch("src.automation.watching_worker.find_and_click_search_result", return_value={"title": "Video 1", "url": "https://www.youtube.com/watch?v=vid1"}), \
+             patch.object(worker, "is_candidate_eligible", return_value=(True, "", 0.0)):
+            res = worker.search_and_play_target_video(session_watched_keys=set())
+
+            # Verify it stopped on the first candidate and did NOT attempt Video 2
+            assert res is None
+            assert len(played_calls) == 1
+            assert played_calls == ["Video 1"]
+            assert worker._last_login_verification_failed is True
+
