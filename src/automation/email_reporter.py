@@ -250,7 +250,7 @@ class SessionReport:
                 if tot_vids is None:
                     tot_vids = ch.get("regular_videos_count", 0) + ch.get("shorts_count", 0)
                 vids_fmt = f"{tot_vids} video(s)"
-                ses_fmt = f"{format_duration(ses_sec)} ({format_hours(ses_sec)})"
+                ses_fmt = format_duration(ses_sec)
                 lines.append(f"  {name:<22} | {ses_fmt:<21} | {tgt_txt:<25} | {vids_fmt}")
 
         lines.extend([
@@ -318,7 +318,7 @@ class SessionReport:
             rows_html.append(f"""
                 <tr style="border-bottom: 1px solid #e2e8f0;">
                     <td style="padding: 12px 14px; font-weight: 600; color: #1e293b; vertical-align: middle;">{name}{link_html}</td>
-                    <td style="padding: 12px 14px; color: #059669; font-weight: 700; vertical-align: middle;">{format_duration(ses_sec)} <span style="font-size: 11px; color: #64748b; font-weight: normal;">({format_hours(ses_sec)})</span></td>
+                    <td style="padding: 12px 14px; color: #059669; font-weight: 700; vertical-align: middle;">{format_duration(ses_sec)}</td>
                     <td style="padding: 12px 14px; font-size: 12px; vertical-align: middle;">{tgt_badge}{progress_bar}</td>
                     <td style="padding: 12px 14px; color: #475569; font-size: 12px; vertical-align: middle;">{vids_html}</td>
                 </tr>

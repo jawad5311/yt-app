@@ -1315,3 +1315,47 @@ class TestHeadlessFirstEmailDeliveryAndMainWindowFallback:
             # 2nd attempt (fallback): headless=False (headed main window)
             assert mock_headless.call_args_list[1].kwargs.get("headless") is False
 
+
+def test_channel_watch_time_displays_only_hours_and_minutes_without_decimal_hours():
+    """Verify that in email reports, channel watch time is displayed in hours and minutes only
+    (e.g. '1h 51m' or '6m 29s') without trailing decimal hour annotations like '(1.9 hours)' or '(0.1 hours)'."""
+    now = datetime(2026, 11, 16, 8, 0, 0)
+    report = SessionReport(
+        account_email="test@gmail.com",
+        session_mode="Continuous Browsing",
+        status="Completed",
+        channel_reports=[
+            {
+                "name": "Lifestyle Mapping",
+                "session_watch_seconds": 6660.0,  # 1h 51m -> formerly '1h 51m (1.9 hours)'
+                "total_videos_count": 2,
+                "target_goal_text": "2h 00m (92.5%)",
+            },
+            {
+                "name": "The Kidney Nutrition Institute",
+                "session_watch_seconds": 389.0,  # 6m 29s -> formerly '6m 29s (0.1 hours)'
+                "total_videos_count": 1,
+                "target_goal_text": "30m 00s (21.6%)",
+            },
+        ],
+        start_time=now - timedelta(hours=2),
+        end_time=now,
+        duration_seconds=7200.0,
+        total_session_watch_seconds=7049.0,
+    )
+
+    # 1. Plain text verification
+    plain = report.generate_plain_text()
+    assert "1h 51m" in plain
+    assert "6m 29s" in plain
+    assert "(1.9 hours)" not in plain
+    assert "(0.1 hours)" not in plain
+
+    # 2. HTML body verification
+    html_body = report.generate_html_body()
+    assert "1h 51m" in html_body
+    assert "6m 29s" in html_body
+    assert "(1.9 hours)" not in html_body
+    assert "(0.1 hours)" not in html_body
+
+
