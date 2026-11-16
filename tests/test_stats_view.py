@@ -275,3 +275,42 @@ def test_stats_view_period_dropdown_menu_items(tk_root):
     menu.close()
     view.destroy()
 
+
+def test_stats_view_filters_out_unconfigured_channels(tk_root):
+    """Verify that unconfigured channels (e.g. WOOD TV8) present in stats_store records
+    are not displayed in StatsView KPI, channel list, or dropdown when user has configured channels."""
+    controller = MagicMock()
+    controller.config_mgr.get_channels.return_value = [
+        {"name": "Lifestyle Mapping", "url": "https://youtube.com/@lifestylemapping"},
+        {"name": "The Kidney Nutrition Institute", "url": "https://youtube.com/@thekidneynutritioninstitute"},
+    ]
+    controller.stats_store.all.return_value = {
+        "lm1": StatRecord(channel="Lifestyle Mapping", watch_seconds=3600.0, runs=1, successes=1),
+        "kni1": StatRecord(channel="The Kidney Nutrition Institute", watch_seconds=1800.0, runs=1, successes=1),
+        # Unconfigured third-party record
+        "wood1": StatRecord(channel="WOOD TV8", watch_seconds=0.0, runs=0, successes=0, video_duration=120.0),
+    }
+    controller.queued_video_tasks = []
+    controller.session_tracker = None
+
+    view = StatsView(tk_root, controller)
+    view.pack(fill="both", expand=True)
+    tk_root.update()
+
+    # Active channels KPI must show 2 channels (2 of 2 channels generating time)
+    assert view.card_slot2.cget("text") == "2 Channels"
+    assert "2 of 2 channels generating time" in view.card_slot2.footer_lbl.cget("text")
+
+    # Dropdown menu must only include the 2 configured channels
+    view._open_channel_dropdown()
+    menu = view._active_dropdown_menu
+    assert menu is not None
+    labels = [item.get("label", "") for item in menu._items if item.get("type") == "command"]
+    assert any("Lifestyle Mapping" in lbl for lbl in labels)
+    assert any("The Kidney Nutrition Institute" in lbl for lbl in labels)
+    assert not any("WOOD TV8" in lbl for lbl in labels)
+    menu.close()
+
+    view.destroy()
+
+

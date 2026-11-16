@@ -6,6 +6,7 @@ bar graphs, donut breakdown charts, KPI metric cards, and time filtering
 """
 from __future__ import annotations
 
+import re
 import tkinter as tk
 import webbrowser
 from datetime import datetime, timedelta
@@ -108,15 +109,37 @@ def compute_channel_stats(
     channel_urls: Dict[str, str] = {}
     channel_targets: Dict[str, float] = {}
 
+    alias_to_key: Dict[str, str] = {}
+    has_configured_channels = False
+
     for ch in channels:
-        name = getattr(ch, "name", "") if hasattr(ch, "name") else ch.get("name", "")
+        name = getattr(ch, "name", "") if hasattr(ch, "name") else (ch.get("name", "") if isinstance(ch, dict) else "")
         if not name:
             continue
+        has_configured_channels = True
         key = name.strip().lower().lstrip("@")
         channel_display_names[key] = name
-        url = getattr(ch, "url", "") if hasattr(ch, "url") else ch.get("url", "")
+        alias_to_key[key] = key
+        alias_to_key[key.replace(" ", "")] = key
+
+        url = getattr(ch, "url", "") if hasattr(ch, "url") else (ch.get("url", "") if isinstance(ch, dict) else "")
         channel_urls[key] = url
-        target_h = getattr(ch, "target_hours", 0.0) if hasattr(ch, "target_hours") else ch.get("target_hours", 0.0)
+        if url:
+            match = re.search(r"@([a-zA-Z0-9_.-]+)", url)
+            if match:
+                handle = match.group(1).rstrip("/").lower().lstrip("@")
+                if handle:
+                    alias_to_key[handle] = key
+                    alias_to_key[handle.replace(" ", "")] = key
+
+        match_name = re.search(r"@([a-zA-Z0-9_.-]+)", name)
+        if match_name:
+            h_name = match_name.group(1).rstrip("/").lower().lstrip("@")
+            if h_name:
+                alias_to_key[h_name] = key
+                alias_to_key[h_name.replace(" ", "")] = key
+
+        target_h = getattr(ch, "target_hours", 0.0) if hasattr(ch, "target_hours") else (ch.get("target_hours", 0.0) if isinstance(ch, dict) else 0.0)
         channel_targets[key] = float(target_h or 0.0)
 
         channel_data[key] = {
@@ -148,28 +171,44 @@ def compute_channel_stats(
             if not rec_ch_key:
                 continue
 
-            # If channel is not yet in channel_data, register it dynamically
-            if rec_ch_key not in channel_data:
-                channel_display_names[rec_ch_key] = rec_channel
-                channel_urls[rec_ch_key] = ""
-                channel_targets[rec_ch_key] = 0.0
-                channel_data[rec_ch_key] = {
-                    "key": rec_ch_key,
-                    "name": rec_channel,
-                    "url": "",
-                    "watch_seconds": 0.0,
-                    "ad_seconds": 0.0,
-                    "runs": 0,
-                    "successes": 0,
-                    "failures": 0,
-                    "attempts": 0,
-                    "regular_vids_count": 0,
-                    "shorts_count": 0,
-                    "regular_watch_seconds": 0.0,
-                    "shorts_watch_seconds": 0.0,
-                    "last_active": "",
-                    "target_hours": 0.0,
-                }
+            target_key = alias_to_key.get(rec_ch_key) or alias_to_key.get(rec_ch_key.replace(" ", ""))
+
+            # If user has configured channels, ONLY track and display configured channels!
+            if has_configured_channels:
+                if not target_key or target_key not in channel_data:
+                    continue
+            else:
+                # If no channels were configured by the user at all, only register channels with actual watch activity
+                w_sec_raw = float(getattr(record, "watch_seconds", 0.0) or 0.0)
+                runs_raw = int(getattr(record, "runs", 0) or 0)
+                if w_sec_raw <= 0 and runs_raw <= 0:
+                    continue
+
+                if not target_key:
+                    target_key = rec_ch_key
+                    alias_to_key[rec_ch_key] = target_key
+                    alias_to_key[rec_ch_key.replace(" ", "")] = target_key
+                    if target_key not in channel_data:
+                        channel_display_names[target_key] = rec_channel
+                        channel_urls[target_key] = ""
+                        channel_targets[target_key] = 0.0
+                        channel_data[target_key] = {
+                            "key": target_key,
+                            "name": rec_channel,
+                            "url": "",
+                            "watch_seconds": 0.0,
+                            "ad_seconds": 0.0,
+                            "runs": 0,
+                            "successes": 0,
+                            "failures": 0,
+                            "attempts": 0,
+                            "regular_vids_count": 0,
+                            "shorts_count": 0,
+                            "regular_watch_seconds": 0.0,
+                            "shorts_watch_seconds": 0.0,
+                            "last_active": "",
+                            "target_hours": 0.0,
+                        }
 
             # Check timestamp for time window filter
             last_ts_str = getattr(record, "last_completed", "") or getattr(record, "last_run", "")
@@ -188,7 +227,7 @@ def compute_channel_stats(
                 if rec_dt is None or rec_dt < cutoff:
                     continue
 
-            entry = channel_data[rec_ch_key]
+            entry = channel_data[target_key]
             w_sec = float(getattr(record, "watch_seconds", 0.0) or 0.0)
             ad_sec = float(getattr(record, "ad_seconds", 0.0) or 0.0)
             r_runs = int(getattr(record, "runs", 0) or 0)
@@ -246,13 +285,19 @@ def compute_channel_stats(
             r_cnt = 0
             s_cnt = 0
             for k, val in session_watch_map.items():
-                if k.strip().lower().lstrip("@") == ch_key:
+                k_clean = k.strip().lower().lstrip("@")
+                target_k = alias_to_key.get(k_clean) or alias_to_key.get(k_clean.replace(" ", "")) or k_clean
+                if target_k == ch_key:
                     s_sec += float(val or 0.0)
             for k, val in session_reg_vids_map.items():
-                if k.strip().lower().lstrip("@") == ch_key:
+                k_clean = k.strip().lower().lstrip("@")
+                target_k = alias_to_key.get(k_clean) or alias_to_key.get(k_clean.replace(" ", "")) or k_clean
+                if target_k == ch_key:
                     r_cnt += int(val or 0)
             for k, val in session_shorts_map.items():
-                if k.strip().lower().lstrip("@") == ch_key:
+                k_clean = k.strip().lower().lstrip("@")
+                target_k = alias_to_key.get(k_clean) or alias_to_key.get(k_clean.replace(" ", "")) or k_clean
+                if target_k == ch_key:
                     s_cnt += int(val or 0)
 
             # If session_start_t is known, also include any records saved in stats_store during this session
@@ -261,7 +306,9 @@ def compute_channel_stats(
                     if v_key.startswith("channel::"):
                         continue
                     rec_ch = getattr(record, "channel", "") or ""
-                    if rec_ch.strip().lower().lstrip("@") != ch_key:
+                    rec_clean = rec_ch.strip().lower().lstrip("@")
+                    target_k = alias_to_key.get(rec_clean) or alias_to_key.get(rec_clean.replace(" ", "")) or rec_clean
+                    if target_k != ch_key:
                         continue
                     last_ts_str = getattr(record, "last_completed", "") or getattr(record, "last_run", "")
                     if not last_ts_str:
@@ -297,9 +344,10 @@ def compute_channel_stats(
             for ch_canon, s_sec in session_watch_map.items():
                 if s_sec > 0:
                     clean_k = ch_canon.strip().lower().lstrip("@")
-                    if clean_k in channel_data:
-                        channel_data[clean_k]["watch_seconds"] += float(s_sec)
-                        channel_data[clean_k]["regular_watch_seconds"] += float(s_sec)
+                    target_k = alias_to_key.get(clean_k) or alias_to_key.get(clean_k.replace(" ", "")) or clean_k
+                    if target_k in channel_data:
+                        channel_data[target_k]["watch_seconds"] += float(s_sec)
+                        channel_data[target_k]["regular_watch_seconds"] += float(s_sec)
 
     # Calculate percentages and totals
     total_watch_seconds = sum(c["watch_seconds"] for c in channel_data.values())

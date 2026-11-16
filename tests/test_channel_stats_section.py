@@ -326,6 +326,70 @@ def test_compute_channel_stats_video_multiplier_goal():
     assert ch["goal_progress_pct"] == 37.5
 
 
+def test_compute_channel_stats_excludes_unconfigured_channels():
+    """Ensure that third-party / unconfigured channels not present in the user's
+    target channels list (e.g. WOOD TV8 from random browsing or queue records)
+    are excluded from channel stats, KPIs, and goals."""
+    channels = [
+        {"name": "Lifestyle Mapping", "url": "https://youtube.com/@lifestylemapping"},
+        {"name": "The Kidney Nutrition Institute", "url": "https://youtube.com/@thekidneynutritioninstitute"},
+    ]
+
+    records = {
+        "lm_vid": StatRecord(
+            channel="Lifestyle Mapping",
+            watch_seconds=71700.0,  # 19h 55m
+            runs=23,
+            successes=23,
+        ),
+        "kni_vid": StatRecord(
+            channel="The Kidney Nutrition Institute",
+            watch_seconds=22380.0,  # 6h 13m
+            runs=12,
+            successes=12,
+        ),
+        # Unconfigured third-party channel (e.g. from YouTube feed or test)
+        "wood_vid": StatRecord(
+            channel="WOOD TV8",
+            watch_seconds=0.0,
+            runs=0,
+            successes=0,
+            video_duration=120.0,
+        ),
+    }
+
+    queued_tasks = [
+        VideoTask(
+            url="https://youtube.com/watch?v=wood1",
+            title="Local News",
+            channel="WOOD TV8",
+            duration_seconds=120,
+            target_multiplier=3.0,
+        ),
+    ]
+
+    stats = compute_channel_stats(
+        channels=channels,
+        records=records,
+        queued_videos=queued_tasks,
+        time_filter="All Time",
+    )
+
+    # Only the 2 configured channels must be present
+    assert stats["total_channels_count"] == 2
+    assert stats["active_channels_count"] == 2
+    channel_names = [c["name"] for c in stats["channels"]]
+    assert "WOOD TV8" not in channel_names
+    assert "Lifestyle Mapping" in channel_names
+    assert "The Kidney Nutrition Institute" in channel_names
+    assert len(stats["channels"]) == 2
+
+    # Goal for WOOD TV8 must not pollute total_goal_seconds
+    # Neither configured channel had tasks, so goals should not include WOOD TV8's 6m
+    assert stats["total_goal_seconds"] == 0.0
+
+
+
 def test_channel_stats_section_theme_switch(tk_root):
     controller = MagicMock()
     controller.config_mgr.get_channels.return_value = []
