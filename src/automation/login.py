@@ -114,7 +114,8 @@ def check_login_state(driver: Any, expected_account: Optional[Account] = None) -
         full_url_lower = url.lower()
 
         # Challenges, CAPTCHA, or 2-Step Verification pages do not count as logged in
-        if any(c in full_url_lower for c in ("challenge", "captcha", "2step", "speedbump")):
+        # Note: Do not treat standard password entry challenge (/challenge/pwd) as unknown non-signin
+        if any(c in full_url_lower for c in ("captcha", "2step", "speedbump", "challenge/totp", "challenge/ipp", "challenge/selection")):
             return LoginState.UNKNOWN
 
         expected_email = normalize_account_id(expected_account.email) if expected_account else None
@@ -279,6 +280,89 @@ def _handle_account_chooser(
     return False
 
 
+def _handle_confirm_identifier(
+    driver: Any,
+    account: Account,
+    log_queue: Optional[queue.Queue] = None,
+) -> bool:
+    """If Google displays the 'confirmidentifier' verification screen, click the Next button."""
+    try:
+        url = (getattr(driver, "current_url", "") or "").lower()
+        page_source = ""
+        try:
+            page_source = (getattr(driver, "page_source", "") or "").lower()
+        except Exception:
+            pass
+
+        # Check if URL or page indicates the confirm identifier screen
+        is_confirm_identifier = (
+            "confirmidentifier" in url
+            or (
+                "accounts.google.com" in url
+                and "identifiernext" in page_source
+                and "identifierid" not in page_source
+            )
+        )
+        if not is_confirm_identifier:
+            return False
+
+        emit(log_queue, f"Confirm identifier screen detected for {account.email}; clicking Next...")
+
+        next_selectors = [
+            "//div[@id='identifierNext']//button",
+            "//button[@id='identifierNext']",
+            "//*[@id='identifierNext']//button",
+            "//button[.//span[normalize-space(text())='Next' or normalize-space(text())='Weiter']]",
+            "//*[@id='identifierNext']",
+        ]
+
+        next_btn = None
+        for sel in next_selectors:
+            try:
+                elements = driver.find_elements(By.XPATH, sel)
+                for el in elements:
+                    if el.is_displayed():
+                        next_btn = el
+                        break
+                if next_btn:
+                    break
+            except Exception:
+                continue
+
+        if not next_btn:
+            try:
+                next_btn = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, "//div[@id='identifierNext']//button | //*[@id='identifierNext']//button | //button[.//span[text()='Next']]")
+                    )
+                )
+            except Exception:
+                pass
+
+        if next_btn:
+            try:
+                next_btn.click()
+            except Exception:
+                driver.execute_script(
+                    """
+                    var el = arguments[0];
+                    el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                    el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+                    el.click();
+                    """,
+                    next_btn,
+                )
+            human_like_delay(2.0, 3.5)
+            return True
+
+        emit(log_queue, "Could not find Next button on confirm identifier screen.", logging.WARNING)
+        return False
+    except Exception as exc:
+        err_msg = str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__
+        emit(log_queue, f"Notice during confirm identifier resolution: {err_msg}", logging.DEBUG)
+        return False
+
+
 def _handle_email_input(
     driver: Any,
     account: Account,
@@ -313,7 +397,10 @@ def _handle_email_input(
                 By.XPATH,
                 "//button[contains(., 'Next') or contains(., 'weiter') or @id='identifierNext'] | //div[@id='identifierNext']//button",
             )
-            next_btn.click()
+            try:
+                next_btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", next_btn)
         except Exception:
             email_input.send_keys(Keys.ENTER)
 
@@ -360,7 +447,7 @@ def _handle_password_input(
 
         pwd_input = WebDriverWait(driver, 15).until(
             EC.element_to_be_clickable(
-                (By.XPATH, "//input[@type='password' or @name='Passwd' or @name='password']")
+                (By.XPATH, "//input[@type='password' or @name='Passwd' or @name='password' or @aria-label='Enter your password']")
             )
         )
         emit(log_queue, f"Entering password for {account.email}...")
@@ -372,9 +459,20 @@ def _handle_password_input(
         try:
             pwd_next = driver.find_element(
                 By.XPATH,
-                "//button[contains(., 'Next') or @id='passwordNext'] | //div[@id='passwordNext']//button",
+                "//div[@id='passwordNext']//button | //button[@id='passwordNext'] | //button[contains(., 'Next') or @id='passwordNext'] | //button[.//span[normalize-space(text())='Next' or normalize-space(text())='Weiter']]",
             )
-            pwd_next.click()
+            try:
+                pwd_next.click()
+            except Exception:
+                driver.execute_script(
+                    """
+                    var el = arguments[0];
+                    el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                    el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+                    el.click();
+                    """,
+                    pwd_next,
+                )
         except Exception:
             pwd_input.send_keys(Keys.ENTER)
 
@@ -384,6 +482,103 @@ def _handle_password_input(
         err_msg = str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__
         emit(log_queue, f"Password input not completed automatically: {err_msg}", logging.DEBUG)
         return False
+
+
+def _perform_automated_login_steps(
+    driver: Any,
+    account: Account,
+    log_queue: Optional[queue.Queue] = None,
+    stop_event: Optional[threading.Event] = None,
+) -> bool:
+    """Execute sequential automated sign-in steps (Account Chooser -> Confirm Identifier -> Email -> Password -> Prompts)."""
+    max_steps = 6
+    password_entered = False
+
+    for _ in range(max_steps):
+        if stop_event is not None and stop_event.is_set():
+            return False
+
+        # If already signed in, stop
+        state = check_login_state(driver, account)
+        if state == LoginState.SIGNED_IN_MATCH:
+            return True
+
+        current_url = (getattr(driver, "current_url", "") or "").lower()
+        page_source = ""
+        try:
+            page_source = (getattr(driver, "page_source", "") or "").lower()
+        except Exception:
+            pass
+
+        # Stop if a genuine bot/CAPTCHA or phone 2FA challenge is present
+        # Note: Do not treat confirmidentifier or password entry as manual challenge
+        is_bot = (
+            "/sorry/index" in current_url
+            or "challenge/recaptcha" in current_url
+            or "captchaimg" in page_source
+            or "unusual traffic" in page_source
+            or "show you're not a robot" in page_source
+        )
+        is_phone_2fa = (
+            any(c in current_url for c in ("challenge/totp", "challenge/ipp", "challenge/selection", "2step"))
+            or any(p in page_source for p in ("check your phone", "google sent a notification to your phone", "enter the 2-digit number", "tap yes on your phone"))
+        )
+        if is_bot or is_phone_2fa:
+            break
+
+        action_taken = False
+
+        # 1. Account chooser
+        if "accountchooser" in current_url or "choose an account" in page_source:
+            if _handle_account_chooser(driver, account, log_queue):
+                action_taken = True
+                human_like_delay(2.0, 3.5)
+                continue
+
+        # 2. Confirm identifier screen
+        if "confirmidentifier" in current_url or ("accounts.google.com" in current_url and "identifiernext" in page_source and "identifierid" not in page_source):
+            if _handle_confirm_identifier(driver, account, log_queue):
+                action_taken = True
+                human_like_delay(2.0, 3.5)
+                continue
+
+        # 3. Email input screen
+        has_email_box = False
+        try:
+            email_boxes = driver.find_elements(By.XPATH, "//input[@id='identifierId' or @name='identifier' or @type='email']")
+            has_email_box = any(b.is_displayed() for b in email_boxes)
+        except Exception:
+            pass
+
+        if has_email_box:
+            if _handle_email_input(driver, account, log_queue):
+                action_taken = True
+                human_like_delay(2.0, 3.5)
+                continue
+
+        # 4. Password input screen
+        has_pwd_box = False
+        try:
+            pwd_boxes = driver.find_elements(By.XPATH, "//input[@type='password' or @name='Passwd' or @name='password']")
+            has_pwd_box = any(b.is_displayed() for b in pwd_boxes)
+        except Exception:
+            pass
+
+        if ("challenge/pwd" in current_url or has_pwd_box) and not password_entered:
+            if _handle_password_input(driver, account, log_queue):
+                password_entered = True
+                action_taken = True
+                human_like_delay(2.5, 4.0)
+                _handle_post_login_prompts(driver, log_queue)
+                continue
+
+        # 5. Post login prompts
+        _handle_post_login_prompts(driver, log_queue)
+
+        if not action_taken:
+            break
+
+    return password_entered
 
 
 def _handle_post_login_prompts(driver: Any, log_queue: Optional[queue.Queue] = None) -> None:
@@ -498,33 +693,47 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
                     "Google presented a CAPTCHA or bot verification challenge. Manual completion in the browser is required.",
                 )
 
+            is_confirm_identifier = "confirmidentifier" in url or ("identifiernext" in page_source and "identifierid" not in page_source)
+            has_pwd_input = "challenge/pwd" in url or "type=\"password\"" in page_source or "type='password'" in page_source
+            has_wrong_password = any(p in page_source for p in ("wrong password", "falsches passwort", "incorrect password"))
+
+            if has_wrong_password:
+                return (
+                    "Manual Action Required - Incorrect Password",
+                    "Google rejected the password for this account. Please update credentials or sign in manually.",
+                )
+
             # 2-Step Verification / Security Challenge / Phone prompt
-            if any(c in url for c in ("2step", "challenge/pwd", "challenge/totp", "challenge/ipp", "challenge/az", "challenge/selection", "speedbump")) or \
+            # Note: challenge/pwd is the standard password prompt and must NOT be treated as a 2FA challenge
+            if any(c in url for c in ("2step", "challenge/totp", "challenge/ipp", "challenge/selection", "speedbump")) or \
                any(phrase in page_source for phrase in (
                    "2-step verification",
                    "check your phone",
                    "google sent a notification to your phone",
                    "enter the 2-digit number",
                    "get a verification code",
-                   "verify it's you",
-               )):
+                   "tap yes on your phone",
+               )) or (
+                   not is_confirm_identifier and not has_pwd_input and "verify it's you" in page_source
+               ):
                 return (
                     "Manual Action Required - 2-Step Verification / Security Challenge",
                     "Google presented a 2-Step Verification prompt or security challenge. Please verify on your device or browser manually.",
                 )
 
-            # Re-authentication / password re-entry
-            if any(phrase in page_source for phrase in (
-                "sign in again",
-                "your session has expired",
-                "re-enter your password",
-                "confirm your password",
-                "verify your identity",
-            )):
-                return (
-                    "Manual Action Required - Google Re-Authentication Required",
-                    "Google / Gmail is asking for sign-in or password confirmation again. Manual re-authentication is required.",
-                )
+            # Re-authentication / password re-entry (only when not on an actionable confirmidentifier or password input screen)
+            if not is_confirm_identifier and not has_pwd_input:
+                if any(phrase in page_source for phrase in (
+                    "sign in again",
+                    "your session has expired",
+                    "re-enter your password",
+                    "confirm your password",
+                    "verify your identity",
+                )):
+                    return (
+                        "Manual Action Required - Google Re-Authentication Required",
+                        "Google / Gmail is asking for sign-in or password confirmation again. Manual re-authentication is required.",
+                    )
 
         return None
     except Exception:
@@ -541,10 +750,15 @@ def perform_google_login(
     """Perform Google sign-in or verify existing active session matching the requested account."""
     emit(log_queue, f"Checking Google sign-in status for {account.email}...")
 
-    try:
-        safe_get(driver, "https://accounts.google.com/", timeout=30, log_queue=log_queue)
-    except Exception:
-        pass
+    current_url = (getattr(driver, "current_url", "") or "").lower()
+    already_on_signin = "accounts.google.com" in current_url and any(
+        p in current_url for p in ("signin", "confirmidentifier", "accountchooser", "identifier", "challenge")
+    )
+    if not already_on_signin:
+        try:
+            safe_get(driver, "https://accounts.google.com/", timeout=30, log_queue=log_queue)
+        except Exception:
+            pass
 
     # Pause up to 10 seconds while monitoring if page redirects automatically to myaccount.google.com
     start_wait = time.time()
@@ -564,36 +778,38 @@ def perform_google_login(
             emit(log_queue, details, logging.ERROR)
             _dispatch_login_alert("Manual Action Required - Wrong Account Signed In", details, account, config_mgr, alert_callback, driver, log_queue)
             return False
+        elif already_on_signin and state == LoginState.SIGNED_OUT:
+            break
 
         time.sleep(1.0)
 
     emit(log_queue, f"Attempting sign-in for {account.email}...")
 
     try:
-        _handle_account_chooser(driver, account, log_queue)
-        time.sleep(1.0)
-        _handle_email_input(driver, account, log_queue)
-        _handle_password_input(driver, account, log_queue)
-        _handle_post_login_prompts(driver, log_queue)
+        _perform_automated_login_steps(driver, account, log_queue, stop_event=stop_event)
     except Exception as exc:
         err_msg = str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__
         emit(log_queue, f"Automatic login input notice: {err_msg}", logging.WARNING)
 
     # Check if driver is running in headless mode
-    is_headless = bool(getattr(driver, "_is_headless", False) or getattr(driver, "_is_reporting", False))
+    _is_h = getattr(driver, "_is_headless", False)
+    _is_r = getattr(driver, "_is_reporting", False)
+    is_headless = _is_h is True or _is_r is True
     if not is_headless:
         try:
             caps = getattr(driver, "capabilities", {}) or {}
-            chrome_opts = caps.get("chrome", {}) or caps.get("goog:chromeOptions", {})
-            args = chrome_opts.get("args", [])
-            if any("--headless" in a for a in args):
-                is_headless = True
+            if isinstance(caps, dict):
+                chrome_opts = caps.get("chrome", {}) or caps.get("goog:chromeOptions", {})
+                if isinstance(chrome_opts, dict):
+                    args = chrome_opts.get("args", [])
+                    if isinstance(args, (list, tuple)) and any("--headless" in a for a in args):
+                        is_headless = True
         except Exception:
             pass
     if not is_headless:
         try:
             ua = driver.execute_script("return navigator.userAgent") or ""
-            if "headless" in ua.lower():
+            if isinstance(ua, str) and "headless" in ua.lower():
                 is_headless = True
         except Exception:
             pass
@@ -633,6 +849,18 @@ def perform_google_login(
             emit(log_queue, details, logging.ERROR)
             _dispatch_login_alert("Manual Action Required - Wrong Account Signed In", details, account, config_mgr, alert_callback, driver, log_queue)
             return False
+
+        # In case confirmidentifier or password appears dynamically during the wait loop
+        cur_u = (getattr(driver, "current_url", "") or "").lower()
+        if "confirmidentifier" in cur_u:
+            if _handle_confirm_identifier(driver, account, log_queue):
+                human_like_delay(2.0, 3.5)
+                continue
+        elif "challenge/pwd" in cur_u:
+            if _handle_password_input(driver, account, log_queue):
+                human_like_delay(2.5, 4.0)
+                _handle_post_login_prompts(driver, log_queue)
+                continue
 
         challenge_info = detect_manual_challenge(driver)
         if not challenge_logged and challenge_info is not None:

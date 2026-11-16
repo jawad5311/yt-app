@@ -270,8 +270,9 @@ class TestCheckAccountLoggedInBeforePlay:
             )
 
         assert ok is True
-        mock_alert.assert_called_once()
-        assert "Cool Video" in mock_alert.call_args[0][1]
+        assert mock_alert.call_count == 2
+        assert "Cool Video" in mock_alert.call_args_list[0][0][1]
+        assert "Resolved" in mock_alert.call_args_list[1][0][0]
 
     def test_captcha_wait_loop_aborts_on_stop_event(self):
         driver = MagicMock()
