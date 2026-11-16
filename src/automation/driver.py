@@ -358,6 +358,8 @@ def setup_driver(
                 pass
 
         driver._profile_lock = profile_lock
+        driver._is_headless = bool(headless)
+        driver._is_reporting = bool(is_reporting)
 
         # Ensure calling driver.quit() directly also safely releases the profile lock
         orig_quit = getattr(driver, "quit", None)

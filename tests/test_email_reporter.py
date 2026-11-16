@@ -1391,4 +1391,63 @@ def test_sync_cookies_between_drivers_transfers_session():
     assert passed_cookies[1]["name"] == "HSID"
 
 
+def test_send_alert_notification_threads_under_session_thread(tmp_path):
+    """Verify that send_alert_notification delivers via active reporting driver under the existing session thread."""
+    cfg = ConfigManager(tmp_path / "settings.json")
+    cfg.update_settings({
+        "ReportRecipientEmail": "admin@example.com",
+        "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
+    })
+    account = Account(email="botuser@gmail.com", password="pwd")
+
+    mock_reporting_driver = MagicMock()
+    mock_reporting_driver.session_id = "reporting-session"
+    mock_reporting_driver.execute_script.return_value = 1
+    mock_reporting_driver._is_reporting = True
+
+    thread_info = {
+        "thread_url": "https://mail.google.com/mail/u/0/#sent/FMfcgzGslblKThReAd123",
+        "message_id": "<thread123@google.com>",
+    }
+
+    # 1. Challenge Alert
+    with patch.object(EmailReporter, "_deliver_via_gmail_thread_reply", return_value=True) as mock_reply:
+        ok = EmailReporter.send_alert_notification(
+            account=account,
+            alert_type="Bot Challenge / CAPTCHA Alert",
+            message_details="Google presented a CAPTCHA challenge on this PC.",
+            config_mgr=cfg,
+            custom_subject="System - Entertainment Hub Session [Thread-001] - botuser@gmail.com",
+            thread_url=thread_info["thread_url"],
+            thread_info=thread_info,
+            driver=mock_reporting_driver,
+            force=True,
+        )
+        assert ok is True
+        mock_reply.assert_called_once()
+        assert mock_reply.call_args.kwargs["thread_url"] == thread_info["thread_url"]
+        assert "URGENT ALERT: BOT CHALLENGE / CAPTCHA ALERT" in mock_reply.call_args.kwargs["plain_text"]
+        assert "Please access this PC directly" in mock_reply.call_args.kwargs["plain_text"]
+
+    # 2. Challenge Resolved Notification under same thread
+    with patch.object(EmailReporter, "_deliver_via_gmail_thread_reply", return_value=True) as mock_reply_res:
+        ok_res = EmailReporter.send_alert_notification(
+            account=account,
+            alert_type="Manual Challenge Resolved - Resuming Session",
+            message_details="CAPTCHA challenge resolved. Resuming video playback.",
+            config_mgr=cfg,
+            custom_subject="System - Entertainment Hub Session [Thread-001] - botuser@gmail.com",
+            thread_url=thread_info["thread_url"],
+            thread_info=thread_info,
+            driver=mock_reporting_driver,
+            force=True,
+        )
+        assert ok_res is True
+        mock_reply_res.assert_called_once()
+        assert mock_reply_res.call_args.kwargs["thread_url"] == thread_info["thread_url"]
+        assert "NOTIFICATION: MANUAL CHALLENGE RESOLVED - RESUMING SESSION" in mock_reply_res.call_args.kwargs["plain_text"]
+        assert "challenge has cleared and normal browsing / video playback has resumed" in mock_reply_res.call_args.kwargs["plain_text"]
+
+
+
 

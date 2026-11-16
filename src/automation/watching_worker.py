@@ -2812,6 +2812,17 @@ class WatchingWorker:
                     except Exception:
                         pass
 
+            # 3. Check for mid-playback CAPTCHA or Google challenge
+            last_chal_check = getattr(self, "_last_playback_chal_check", 0.0)
+            now_ts = time.time()
+            if now_ts - last_chal_check >= 15.0:
+                self._last_playback_chal_check = now_ts
+                curr_url = (getattr(self.driver, "current_url", "") or "").lower()
+                if any(c in curr_url for c in ("sorry/index", "challenge", "captcha", "2step", "speedbump")):
+                    emit(self.log_queue, f"[Manual Action Required] CAPTCHA / bot challenge detected during playback for {self.account.email}!", logging.WARNING)
+                    if not self._check_account_login_before_play(content_type="video", content_title=task_label):
+                        return "captcha_challenge_failed"
+
             return False
 
         target_watch_duration = registered_task.parse_duration_seconds()
@@ -6322,6 +6333,11 @@ class WatchingWorker:
             while time.time() < wait_end and not self.stop_event.is_set():
                 if is_logged_in(self.driver, self.account):
                     emit(self.log_queue, f"Sign-in detected for {self.account.email} during wait!", logging.INFO)
+                    self._send_critical_alert(
+                        "Manual Challenge Resolved - Resuming Session",
+                        f"Google sign-in detected and verified for account {self.account.email} on this PC. Resuming session.",
+                        force=True,
+                    )
                     return True
 
                 remaining = int(wait_end - time.time())
@@ -6471,7 +6487,7 @@ class WatchingWorker:
             self._report_status(f"Manual action needed on this PC for {account.email}.", "error")
         return ok
 
-    def _send_critical_alert(self, alert_type: str, details: str) -> None:
+    def _send_critical_alert(self, alert_type: str, details: str, force: bool = False) -> None:
         """Send urgent alert email for bot challenges, disconnections, or crashes."""
         if not self.config_mgr:
             return
@@ -6488,6 +6504,7 @@ class WatchingWorker:
                 thread_message_id=getattr(self, "session_thread_message_id", None),
                 thread_info=getattr(self, "session_thread_info", None),
                 driver=self.reporting_driver or self.driver,
+                force=force,
             )
             if getattr(self, "session_thread_info", None) and isinstance(self.session_thread_info, dict):
                 if self.session_thread_info.get("thread_url"):

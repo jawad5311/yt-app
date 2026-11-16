@@ -1888,19 +1888,34 @@ class EmailReporter:
                 f"- OS Platform:  {os_platform}\n"
             )
 
-        plain_text = (
-            f"URGENT ALERT: {alert_type.upper()}\n"
-            f"{'=' * 50}\n\n"
-            f"Manual action is required on this PC:\n\n"
-            f"{system_line}"
-            f"- Account:      {email_addr}\n"
-            f"- Alert Type:   {alert_type}\n"
-            f"- Timestamp:    {stamp_str}\n"
-            f"- Details:      {message_details}\n\n"
-            f"Please access this PC directly or via Remote Desktop to perform the required action manually.\n"
-            f"Session has been paused or stopped to protect the account.\n"
-            f"A session entertainment report will follow in this email thread."
-        )
+        is_resolved = "resolved" in alert_type.lower()
+        if is_resolved:
+            plain_text = (
+                f"NOTIFICATION: {alert_type.upper()}\n"
+                f"{'=' * 50}\n\n"
+                f"Manual challenge has been successfully resolved on this PC:\n\n"
+                f"{system_line}"
+                f"- Account:      {email_addr}\n"
+                f"- Status:       {alert_type}\n"
+                f"- Timestamp:    {stamp_str}\n"
+                f"- Details:      {message_details}\n\n"
+                f"The challenge has cleared and normal browsing / video playback has resumed.\n"
+                f"A session entertainment report will follow in this email thread once the session completes."
+            )
+        else:
+            plain_text = (
+                f"URGENT ALERT: {alert_type.upper()}\n"
+                f"{'=' * 50}\n\n"
+                f"Manual action is required on this PC:\n\n"
+                f"{system_line}"
+                f"- Account:      {email_addr}\n"
+                f"- Alert Type:   {alert_type}\n"
+                f"- Timestamp:    {stamp_str}\n"
+                f"- Details:      {message_details}\n\n"
+                f"Please access this PC directly or via Remote Desktop to solve the CAPTCHA or complete verification.\n"
+                f"Session has been paused and is waiting for manual challenge resolution.\n"
+                f"A confirmation notification will follow in this email thread once the challenge is solved."
+            )
 
         method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip() if config_mgr else "Auto"
         smtp_pass = config_mgr.get_setting("SmtpPassword", "") if config_mgr else ""
@@ -1926,62 +1941,71 @@ class EmailReporter:
                 config_mgr=config_mgr,
                 bcc_email=bcc_email,
                 account=account,
-                log_queue=None,
+                log_queue=log_queue,
                 thread_message_id=target_thread_id,
                 thread_info=thread_info,
             )
             if ok:
                 cls._recent_alert_times[alert_key] = now_ts
                 if log_queue:
-                    emit(log_queue, f"Dispatched critical alert email to '{recipient}' via SMTP ({alert_type}).", logging.WARNING)
+                    emit(log_queue, f"Dispatched alert notification to '{recipient}' via SMTP ({alert_type}).", logging.WARNING)
                 return True
 
-        # 1b. Explicit Active Browser Gmail (only if user explicitly configured "Active Browser Gmail")
-        if driver is not None and "active" in method.lower() and "headless" not in method.lower():
-            if target_thread_url:
-                reply_ok = cls._deliver_via_gmail_thread_reply(
+        # 2. If a dedicated reporting browser driver is already supplied and alive, deliver directly via it
+        if driver is not None and getattr(driver, "_is_reporting", False):
+            from .driver import is_driver_alive
+            if is_driver_alive(driver):
+                if log_queue:
+                    emit(log_queue, f"Delivering alert email via active reporting browser ({alert_type})...", logging.INFO)
+                if target_thread_url or custom_subject:
+                    reply_ok = cls._deliver_via_gmail_thread_reply(
+                        driver=driver,
+                        plain_text=plain_text,
+                        thread_url=target_thread_url,
+                        subject=subject,
+                        recipient_email=recipient,
+                        bcc_email=bcc_email,
+                        log_queue=log_queue,
+                        email_description=f"alert ({alert_type})",
+                        thread_info=thread_info,
+                        account=account,
+                        config_mgr=config_mgr,
+                    )
+                    if reply_ok:
+                        cls._recent_alert_times[alert_key] = now_ts
+                        if log_queue:
+                            emit(log_queue, f"Dispatched alert notification to '{recipient}' under session thread ({alert_type}).")
+                        return True
+                comp_ok = cls._deliver_via_gmail_compose(
                     driver=driver,
-                    plain_text=plain_text,
-                    thread_url=target_thread_url,
                     subject=subject,
+                    plain_text=plain_text,
                     recipient_email=recipient,
                     bcc_email=bcc_email,
-                    log_queue=None,
+                    log_queue=log_queue,
                     email_description=f"alert ({alert_type})",
                     thread_info=thread_info,
                     account=account,
                     config_mgr=config_mgr,
                 )
-                if reply_ok:
+                if comp_ok:
                     cls._recent_alert_times[alert_key] = now_ts
+                    if log_queue:
+                        emit(log_queue, f"Dispatched alert notification to '{recipient}' via reporting browser ({alert_type}).")
                     return True
-            comp_ok = cls._deliver_via_gmail_compose(
-                driver=driver,
-                subject=subject,
-                plain_text=plain_text,
-                recipient_email=recipient,
-                bcc_email=bcc_email,
-                log_queue=None,
-                email_description=f"alert ({alert_type})",
-                thread_info=thread_info,
-                account=account,
-                config_mgr=config_mgr,
-            )
-            if comp_ok:
-                cls._recent_alert_times[alert_key] = now_ts
-                return True
 
-        # 2. Primary: Headless Browser Gmail
-        # Must attempt headless browser first for alert notifications.
+        # 3. Primary Headless Browser Delivery (fresh instance if no persistent reporting driver open)
         if account is not None:
             try:
+                if log_queue:
+                    emit(log_queue, f"Launching headless browser to deliver alert email ({alert_type})...", logging.INFO)
                 headless_ok = cls.send_via_headless_browser_gmail(
                     account=account,
                     subject=subject,
                     body_text=plain_text,
                     recipient_email=recipient,
                     bcc_email=bcc_email,
-                    log_queue=None,
+                    log_queue=log_queue,
                     email_description=f"alert ({alert_type})",
                     thread_url=target_thread_url,
                     thread_info=thread_info,
@@ -1992,12 +2016,15 @@ class EmailReporter:
                 )
                 if headless_ok:
                     cls._recent_alert_times[alert_key] = now_ts
+                    if log_queue:
+                        emit(log_queue, f"Dispatched alert notification to '{recipient}' via headless browser ({alert_type}).")
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                if log_queue:
+                    emit(log_queue, f"Headless alert email delivery error: {_clean_error_msg(exc)}", logging.WARNING)
 
-        # 3. Fallback: Active browser session if already available
-        if driver is not None:
+        # 4. Fallback: Active browser session if already available and not dedicated reporting driver
+        if driver is not None and not getattr(driver, "_is_reporting", False):
             from .driver import is_driver_alive
             if is_driver_alive(driver):
                 if target_thread_url:
@@ -2008,7 +2035,7 @@ class EmailReporter:
                         subject=subject,
                         recipient_email=recipient,
                         bcc_email=bcc_email,
-                        log_queue=None,
+                        log_queue=log_queue,
                         email_description=f"alert ({alert_type})",
                         thread_info=thread_info,
                         account=account,
@@ -2016,6 +2043,8 @@ class EmailReporter:
                     )
                     if reply_ok:
                         cls._recent_alert_times[alert_key] = now_ts
+                        if log_queue:
+                            emit(log_queue, f"Dispatched alert notification to '{recipient}' via active browser ({alert_type}).")
                         return True
                 comp_ok = cls._deliver_via_gmail_compose(
                     driver=driver,
@@ -2023,7 +2052,7 @@ class EmailReporter:
                     plain_text=plain_text,
                     recipient_email=recipient,
                     bcc_email=bcc_email,
-                    log_queue=None,
+                    log_queue=log_queue,
                     email_description=f"alert ({alert_type})",
                     thread_info=thread_info,
                     account=account,
@@ -2031,7 +2060,28 @@ class EmailReporter:
                 )
                 if comp_ok:
                     cls._recent_alert_times[alert_key] = now_ts
+                    if log_queue:
+                        emit(log_queue, f"Dispatched alert notification to '{recipient}' via active browser ({alert_type}).")
                     return True
+
+        # 5. Final Fallback: SMTP if creds available
+        if has_smtp:
+            ok = cls._send_plain_smtp(
+                recipient=recipient,
+                subject=subject,
+                text=plain_text,
+                config_mgr=config_mgr,
+                bcc_email=bcc_email,
+                account=account,
+                log_queue=log_queue,
+                thread_message_id=target_thread_id,
+                thread_info=thread_info,
+            )
+            if ok:
+                cls._recent_alert_times[alert_key] = now_ts
+                if log_queue:
+                    emit(log_queue, f"Dispatched alert notification to '{recipient}' via fallback SMTP ({alert_type}).", logging.WARNING)
+                return True
 
         return False
 

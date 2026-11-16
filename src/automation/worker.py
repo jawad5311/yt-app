@@ -766,6 +766,11 @@ class AutomationWorker:
             while time.time() < wait_end and not self.stop_event.is_set():
                 if is_logged_in(self.driver, self.account):
                     emit(self.log_queue, f"Sign-in detected for {self.account.email} during wait!", logging.INFO)
+                    self._send_critical_alert(
+                        "Manual Challenge Resolved - Resuming Session",
+                        f"Google sign-in detected and verified for account {self.account.email} on this PC. Resuming session.",
+                        force=True,
+                    )
                     return True
 
                 self.stop_event.wait(timeout=min(2.0, max(0.1, wait_end - time.time())))
@@ -910,7 +915,7 @@ class AutomationWorker:
             self._report_status(f"Manual action needed on this PC for {self.account.email}.", "error")
         return ok
 
-    def _send_critical_alert(self, alert_type: str, details: str) -> None:
+    def _send_critical_alert(self, alert_type: str, details: str, force: bool = False) -> None:
         """Send urgent alert email for bot challenges, disconnections, or crashes."""
         if not self.config_mgr:
             return
@@ -927,6 +932,7 @@ class AutomationWorker:
                 thread_message_id=getattr(self, "session_thread_message_id", None),
                 thread_info=getattr(self, "session_thread_info", None),
                 driver=getattr(self, "reporting_driver", None) or self.driver,
+                force=force,
             )
             if getattr(self, "session_thread_info", None) and isinstance(self.session_thread_info, dict):
                 if self.session_thread_info.get("thread_url"):

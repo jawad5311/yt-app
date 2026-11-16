@@ -75,7 +75,7 @@ class BrowsingWorker:
     def _report_progress(self, processed: int, total: int) -> None:
         self._emit_event(("progress", self.worker_id, processed, total))
 
-    def _send_critical_alert(self, alert_type: str, details: str) -> None:
+    def _send_critical_alert(self, alert_type: str, details: str, force: bool = False) -> None:
         """Send urgent alert email for bot challenges, disconnections, or manual action needed."""
         if not self.config_mgr:
             return
@@ -88,6 +88,7 @@ class BrowsingWorker:
                 config_mgr=self.config_mgr,
                 log_queue=self.log_queue,
                 driver=self.driver,
+                force=force,
             )
         except Exception as exc:
             logging.debug(f"Failed dispatching critical alert email in BrowsingWorker: {exc}")

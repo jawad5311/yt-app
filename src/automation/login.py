@@ -415,14 +415,20 @@ def _dispatch_login_alert(
     details: str,
     account: Account,
     config_mgr: Optional[Any] = None,
-    alert_callback: Optional[Callable[[str, str], None]] = None,
+    alert_callback: Optional[Callable[..., None]] = None,
     driver: Optional[Any] = None,
     log_queue: Optional[queue.Queue] = None,
+    force: bool = False,
 ) -> None:
     """Dispatch an alert via custom worker callback or standard EmailReporter."""
     if alert_callback:
         try:
-            alert_callback(alert_type, details)
+            import inspect
+            sig = inspect.signature(alert_callback)
+            if "force" in sig.parameters:
+                alert_callback(alert_type, details, force=force)
+            else:
+                alert_callback(alert_type, details)
             return
         except Exception as exc:
             emit(log_queue, f"Notice during alert callback dispatch: {exc}", logging.DEBUG)
@@ -437,6 +443,7 @@ def _dispatch_login_alert(
                 config_mgr=config_mgr,
                 log_queue=log_queue,
                 driver=driver,
+                force=force,
             )
         except Exception as exc:
             emit(log_queue, f"Notice during email alert dispatch: {exc}", logging.DEBUG)
@@ -572,15 +579,16 @@ def perform_google_login(
         emit(log_queue, f"Automatic login input notice: {err_msg}", logging.WARNING)
 
     # Check if driver is running in headless mode
-    is_headless = False
-    try:
-        caps = getattr(driver, "capabilities", {}) or {}
-        chrome_opts = caps.get("chrome", {}) or caps.get("goog:chromeOptions", {})
-        args = chrome_opts.get("args", [])
-        if any("--headless" in a for a in args):
-            is_headless = True
-    except Exception:
-        pass
+    is_headless = bool(getattr(driver, "_is_headless", False) or getattr(driver, "_is_reporting", False))
+    if not is_headless:
+        try:
+            caps = getattr(driver, "capabilities", {}) or {}
+            chrome_opts = caps.get("chrome", {}) or caps.get("goog:chromeOptions", {})
+            args = chrome_opts.get("args", [])
+            if any("--headless" in a for a in args):
+                is_headless = True
+        except Exception:
+            pass
     if not is_headless:
         try:
             ua = driver.execute_script("return navigator.userAgent") or ""
@@ -590,8 +598,8 @@ def perform_google_login(
             pass
 
     # Wait loop for login completion or manual CAPTCHA / 2FA completion
-    # In headless mode, wait at most 15s since manual user interaction is not possible without a display
-    max_wait = 15.0 if is_headless else 600.0
+    # In headless mode, wait at most 5s since manual user interaction is not possible without a display
+    max_wait = 5.0 if is_headless else 600.0
     end_time = time.time() + max_wait
     challenge_logged = False
     last_reminder = time.time()
@@ -603,6 +611,18 @@ def perform_google_login(
 
         state = check_login_state(driver, account)
         if state == LoginState.SIGNED_IN_MATCH:
+            if challenge_logged:
+                emit(log_queue, f"[Manual Action Required] Manual challenge resolved for {account.email}! Sign-in verified.", logging.INFO)
+                _dispatch_login_alert(
+                    "Manual Challenge Resolved - Resuming Session",
+                    f"Google CAPTCHA / manual verification challenge has been resolved successfully for account {account.email} on this PC. Sign-in verified.",
+                    account,
+                    config_mgr,
+                    alert_callback,
+                    driver,
+                    log_queue,
+                    force=True,
+                )
             emit(log_queue, f"Login successful for {account.email}! Redirecting to YouTube...")
             safe_get(driver, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
             human_like_delay(2.0, 3.0)
@@ -720,6 +740,16 @@ def check_account_logged_in(
                     log_queue,
                     f"[Manual Action Required] Manual challenge resolved for {account.email}! Resuming {content_type} playback.",
                     logging.INFO,
+                )
+                _dispatch_login_alert(
+                    "Manual Challenge Resolved - Resuming Session",
+                    f"Google CAPTCHA / manual verification challenge has been resolved successfully for account {account.email} on this PC. Resuming {content_type} playback.",
+                    account,
+                    config_mgr,
+                    alert_callback,
+                    driver,
+                    log_queue,
+                    force=True,
                 )
                 human_like_delay(1.5, 2.5)
                 return True
