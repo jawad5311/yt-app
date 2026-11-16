@@ -2194,7 +2194,10 @@ class QueueView(Frame):
             if is_short_item:
                 status_prefix = "[MAX VIEWS REACHED] "
             else:
-                target_hit = task.target_multiplier > 0 and effective_duration > 0 and (watch_sec / effective_duration) >= task.target_multiplier
+                target_hit = task.target_multiplier > 0 and effective_duration > 0 and (
+                    watch_sec >= task.target_multiplier * effective_duration
+                    or round(watch_sec / effective_duration, 1) >= task.target_multiplier
+                )
                 views_hit = task.max_runs > 0 and current_runs >= task.max_runs
                 if target_hit and views_hit:
                     status_prefix = "[TARGET & MAX VIEWS REACHED] "
@@ -2281,7 +2284,7 @@ class QueueView(Frame):
                 justify="center",
             )
             target_val = getattr(task, "target_multiplier", 0.0)
-            target_entry.insert(0, str(int(target_val)) if target_val.is_integer() else f"{target_val:.1f}")
+            target_entry.insert(0, str(int(target_val)) if target_val.is_integer() else f"{target_val:g}")
             target_entry.pack(side="left", padx=(0, 2))
             ctk.CTkLabel(action_btn_frame, text="x", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
 

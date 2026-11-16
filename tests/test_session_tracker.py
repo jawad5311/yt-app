@@ -79,10 +79,15 @@ def test_session_tracker_checkpoints_before_and_after_60_minutes(tmp_path):
 
     # Add 1 more minute (60 seconds) -> reaches 60 minutes!
     tracker.add_watch_delta("@ChannelA", 60.0)
-    # All 3600 seconds have been checkpointed exactly once.
+    # All 3600 seconds have been checkpointed.
     assert ch_a.watch_seconds == 3600.0
-    # Minute counter rolled over to 0
-    assert tracker.get_counter_minutes("@ChannelA") == 0
+    # Minute counter does NOT roll over to 0; it keeps counting continuously
+    assert tracker.get_counter_minutes("@ChannelA") == 60
+
+    # Add another minute -> 61 minutes
+    tracker.add_watch_delta("@ChannelA", 60.0)
+    assert ch_a.watch_seconds == 3660.0
+    assert tracker.get_counter_minutes("@ChannelA") == 61
     # Event emitted to update UI in app
     assert any(ev[0] == "channel_watch_time_updated" for ev in events)
 
@@ -225,3 +230,45 @@ def test_parallel_channel_checkpoints_accumulate_atomically(tmp_path):
         thread.join()
     assert errors == []
     assert config.get_channels()[0]["watch_seconds"] == 2.5
+
+
+def test_session_counter_continuous_past_60m_for_full_video(tmp_path):
+    """Session minute counter keeps counting past 60 minutes for the whole video without resetting to zero."""
+    import queue
+
+    config = ConfigManager(tmp_path / "settings.json")
+    ch = Channel(name="Lifestyle Mapping", watch_seconds=0.0)
+    config.set_channels([ch.to_dict()])
+    log_q = queue.Queue()
+
+    tracker = SessionChannelTracker(
+        config_mgr=config,
+        channels=[ch],
+        log_queue=log_q,
+    )
+    tracker.set_active_channel("Lifestyle Mapping")
+
+    # Simulate watching 1 through 68 minutes
+    for _ in range(68):
+        tracker.add_watch_delta("Lifestyle Mapping", 60.0)
+
+    # Counter should be 68 minutes, NOT 8 minutes!
+    assert tracker.get_counter_minutes("Lifestyle Mapping") == 68
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+
+    # Verify log messages at and past 60m
+    m60_logs = [l for l in logs if "session counter: 60m" in l]
+    m61_logs = [l for l in logs if "session counter: 61m" in l]
+    m68_logs = [l for l in logs if "session counter: 68m" in l]
+    assert len(m60_logs) == 1
+    assert len(m61_logs) == 1
+    assert len(m68_logs) == 1
+
+    # Verify no bogus "session counter: 0m"
+    assert not any("session counter: 0m" in l for l in logs)
+    # "session counter: 1m" should appear exactly once (at minute 1), NOT again after 60
+    m1_logs = [l for l in logs if "session counter: 1m" in l and "+1m" in l]
+    assert len(m1_logs) == 1

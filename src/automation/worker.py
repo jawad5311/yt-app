@@ -442,6 +442,28 @@ class AutomationWorker:
         return outcome
 
 
+    def _update_task_target_multiplier(self, task: VideoTask, new_multiplier: float) -> None:
+        """Update video target_multiplier in settings.json video queue atomically and notify UI."""
+        if new_multiplier <= 0:
+            return
+        try:
+            rounded_mult = round(float(new_multiplier), 1)
+            task.target_multiplier = rounded_mult
+            vid_key = resolve_video_key(task, task.url)
+
+            def _updater(raw_queue: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                for v in raw_queue:
+                    if resolve_video_key(VideoTask.from_dict(v), v.get("url", "")) == vid_key:
+                        v["target_multiplier"] = rounded_mult
+                        break
+                return raw_queue
+
+            if self.config_mgr is not None:
+                self.config_mgr.update_video_queue(_updater)
+            self._emit_event(("update_task_target_multiplier", task.to_dict(), rounded_mult))
+        except Exception as exc:
+            logging.debug(f"Could not update task target multiplier: {exc}")
+
     def _record(self, outcome: TaskOutcome) -> None:
         """Persist one finished task; a stats error never aborts a session."""
         if self.stats_store is None or not outcome.attempts:
@@ -595,6 +617,20 @@ class AutomationWorker:
                         succeeded += 1
                     try:
                         self._record(outcome)
+                        if outcome.success and not outcome.interrupted and self.stats_store:
+                            rec = self.stats_store.find_for_task(task)
+                            total_w = rec.watch_seconds if rec else float(outcome.watched_seconds or 0.0)
+                            eff_d = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or float(outcome.video_duration or 0.0) or getattr(task, "duration_seconds", 0.0)
+                            if eff_d > 0 and total_w > 0:
+                                achieved_m = round(total_w / eff_d, 1)
+                                curr_set_m = float(getattr(task, "target_multiplier", 0.0) or 0.0)
+                                if curr_set_m > 0.0 and achieved_m > curr_set_m:
+                                    emit(
+                                        self.log_queue,
+                                        f"Video '{task.title}' reached and exceeded target multiplier ({curr_set_m:g}x -> {achieved_m:g}x) after successful watch. Updated target multiplier to {achieved_m:g}x.",
+                                        logging.INFO,
+                                    )
+                                    self._update_task_target_multiplier(task, achieved_m)
                     except Exception as rec_exc:
                         emit(self.log_queue, f"Persistence error for task '{task.title or task.keywords or task.url}': {rec_exc}. Video excluded.", logging.ERROR)
                     processed += 1
@@ -736,6 +772,13 @@ class AutomationWorker:
         """Initialize headless reporting browser and send start notification asynchronously in background with retry and auto-recovery."""
         if not self.config_mgr or self.worker_id != 0:
             return
+        if not self.config_mgr.get_bool("EmailReportingEnabled", True):
+            return
+        if not self.config_mgr.get_bool("SessionStartNotification", True):
+            return
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower()
+        if method in ("disabled", "off", "none"):
+            return
 
         delays = getattr(self, "_start_notification_delays", [5.0, 10.0, 15.0, 20.0])
         max_attempts = len(delays) + 1
@@ -746,7 +789,7 @@ class AutomationWorker:
 
             try:
                 method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
-                if "headless" in method.lower() and not getattr(self, "reporting_driver", None):
+                if "smtp" not in method.lower() and not getattr(self, "reporting_driver", None):
                     try:
                         self.reporting_driver = EmailReporter.create_headless_reporting_driver(
                             account=self.account,
@@ -775,7 +818,7 @@ class AutomationWorker:
                 # Cleanup failed reporting driver so next attempt can re-sync profile cookies
                 if getattr(self, "reporting_driver", None):
                     try:
-                        self.reporting_driver.quit()
+                        close_driver(self.reporting_driver, log_queue=self.log_queue)
                     except Exception:
                         pass
                     self.reporting_driver = None
@@ -797,6 +840,13 @@ class AutomationWorker:
         """Deliver start notification email via headless browser. Returns True on success, False otherwise."""
         if not self.config_mgr or self.worker_id != 0:
             return False
+        if not self.config_mgr.get_bool("EmailReportingEnabled", True):
+            return False
+        if not self.config_mgr.get_bool("SessionStartNotification", True):
+            return False
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower()
+        if method in ("disabled", "off", "none"):
+            return False
         try:
             total_sec = 0.0
             if hasattr(self, "channel_tracker") and self.channel_tracker:
@@ -814,6 +864,7 @@ class AutomationWorker:
                 log_queue=self.log_queue,
                 thread_info=self.session_thread_info,
                 driver=self.reporting_driver,
+                fallback_driver=getattr(self, "driver", None),
             )
             if self.session_thread_info.get("thread_url"):
                 self.session_thread_url = self.session_thread_info["thread_url"]
@@ -877,6 +928,13 @@ class AutomationWorker:
         if not self.config_mgr:
             self._emit_event(("report_sent", False, "No configuration manager available."))
             return
+        if not self.config_mgr.get_bool("EmailReportingEnabled", True):
+            self._emit_event(("report_sent", False, "Email reporting is disabled."))
+            return
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower()
+        if method in ("disabled", "off", "none"):
+            self._emit_event(("report_sent", False, "Email reporting is disabled by configuration."))
+            return
         if not hasattr(self, "channel_tracker") or not self.channel_tracker:
             self._emit_event(("report_sent", False, "No session tracking data."))
             return
@@ -928,14 +986,14 @@ class AutomationWorker:
             if watch_driver and not is_driver_alive(watch_driver):
                 watch_driver = None
 
-            chosen_driver = rep_driver or watch_driver
             ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
-                driver=chosen_driver,
+                driver=rep_driver,
                 account=self.account,
                 log_queue=self.log_queue,
                 thread_info=getattr(self, "session_thread_info", None),
+                main_driver=watch_driver,
             )
             if not ok:
                 emit(self.log_queue, "Session report email delivery could not be completed.", logging.WARNING)

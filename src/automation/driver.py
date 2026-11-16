@@ -155,7 +155,7 @@ def setup_driver(
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     profile_lock = ProfileLock(profile_dir)
-    profile_lock.acquire()
+    profile_lock.acquire(timeout=2.0)
 
     try:
         cleanup_profile_locks(profile_dir)
@@ -228,6 +228,22 @@ def setup_driver(
                 pass
 
         driver._profile_lock = profile_lock
+
+        # Ensure calling driver.quit() directly also safely releases the profile lock
+        orig_quit = getattr(driver, "quit", None)
+        if callable(orig_quit):
+            def _safe_quit(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return orig_quit(*args, **kwargs)
+                finally:
+                    lock = getattr(driver, "_profile_lock", None)
+                    if lock is not None:
+                        try:
+                            lock.release()
+                        except Exception:
+                            pass
+            driver.quit = _safe_quit
+
         emit(log_queue, f"Chrome driver successfully started for {account.email}.")
         return driver
     except Exception as exc:

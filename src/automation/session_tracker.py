@@ -149,11 +149,6 @@ class SessionChannelTracker:
                         f"Session watch counter: Channel '{channel_name}' +{mins}m (session counter: {current_mins}m).",
                     )
 
-                # Keep the session display within the current hour. The time
-                # itself was already checkpointed, so do not commit it again.
-                if current_mins >= 60:
-                    self.minute_counters[key] = current_mins % 60
-
             # Check if this channel has achieved its target watch time
             if self.is_channel_target_achieved(channel_name):
                 if self.log_queue:

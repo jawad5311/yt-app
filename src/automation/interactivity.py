@@ -45,7 +45,9 @@ return (function() {
     try {
         var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
         var isFs = !!(document.fullscreenElement || (player && player.classList.contains('ytp-fullscreen')));
-        if (isFs) return { success: true, already: true, mode: 'fullscreen' };
+        var watchEl = document.querySelector('ytd-watch-flexy, ytd-watch-grid');
+        var isTheater = !!(watchEl && (watchEl.hasAttribute('theater') || watchEl.theater === true));
+        if (isFs || isTheater) return { success: true, already: true, mode: isFs ? 'fullscreen' : 'theater' };
         
         var btn = document.querySelector('button.ytp-fullscreen-button, .ytp-fullscreen-button');
         if (btn) {
@@ -109,9 +111,11 @@ return (function() {
 ENTER_THEATER_JS = r"""
 return (function() {
     try {
+        var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+        var isFs = !!(document.fullscreenElement || (player && player.classList.contains('ytp-fullscreen')));
         var watchEl = document.querySelector('ytd-watch-flexy, ytd-watch-grid');
         var isTheater = !!(watchEl && (watchEl.hasAttribute('theater') || watchEl.theater === true));
-        if (isTheater) return { success: true, already: true, mode: 'theater' };
+        if (isFs || isTheater) return { success: true, already: true, mode: isFs ? 'fullscreen' : 'theater' };
 
         var btn = document.querySelector('button.ytp-size-button, .ytp-size-button');
         if (btn) {
@@ -1225,7 +1229,12 @@ def _format_time(seconds: float) -> str:
 def is_in_fullscreen(driver: Any) -> bool:
     """Check if YouTube player is currently in full screen mode."""
     try:
-        return bool(driver.execute_script(IS_FULLSCREEN_JS))
+        res = driver.execute_script(IS_FULLSCREEN_JS)
+        if isinstance(res, dict):
+            return bool(res.get("is_fullscreen", False))
+        if isinstance(res, bool):
+            return res
+        return False
     except Exception:
         return False
 
@@ -1233,15 +1242,29 @@ def is_in_fullscreen(driver: Any) -> bool:
 def is_in_theater(driver: Any) -> bool:
     """Check if YouTube watch page is currently in theater mode."""
     try:
-        return bool(driver.execute_script(IS_THEATER_JS))
+        res = driver.execute_script(IS_THEATER_JS)
+        if isinstance(res, dict):
+            return bool(res.get("is_theater", False))
+        if isinstance(res, bool):
+            return res
+        return False
     except Exception:
         return False
 
 
 def enter_fullscreen_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
-    """Make the video full screen using YouTube player controls."""
+    """Make the video full screen using YouTube player controls if not already in full screen or theater mode."""
     try:
-        driver.execute_script(ENTER_FULLSCREEN_JS)
+        # Checkpoint: verify if already in full screen or theater mode
+        if is_in_fullscreen(driver) or is_in_theater(driver):
+            logging.debug("enter_fullscreen_mode checkpoint: video already in full screen or theater mode. Skipping.")
+            return False
+
+        res = driver.execute_script(ENTER_FULLSCREEN_JS)
+        if isinstance(res, dict) and res.get("already"):
+            logging.debug("enter_fullscreen_mode checkpoint: JS detected already in full screen or theater mode. Skipping.")
+            return False
+
         if not is_in_fullscreen(driver):
             try:
                 from selenium.webdriver import ActionChains
@@ -1261,8 +1284,13 @@ def enter_fullscreen_mode(driver: Any, log_queue: Optional[queue.Queue] = None) 
 
 
 def exit_fullscreen_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
-    """Exit full screen mode back to standard view."""
+    """Exit full screen mode back to standard view only if currently in full screen."""
     try:
+        # Checkpoint: only execute exit command if currently in full screen mode
+        if not is_in_fullscreen(driver):
+            logging.debug("exit_fullscreen_mode checkpoint: video is not in full screen mode. Skipping exit.")
+            return False
+
         driver.execute_script(EXIT_FULLSCREEN_JS)
         if is_in_fullscreen(driver):
             try:
@@ -1279,9 +1307,18 @@ def exit_fullscreen_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -
 
 
 def enter_theater_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
-    """Switch video to theater mode using YouTube controls."""
+    """Switch video to theater mode using YouTube controls if not already in theater or full screen mode."""
     try:
-        driver.execute_script(ENTER_THEATER_JS)
+        # Checkpoint: verify if already in theater or full screen mode
+        if is_in_theater(driver) or is_in_fullscreen(driver):
+            logging.debug("enter_theater_mode checkpoint: video already in theater or full screen mode. Skipping.")
+            return False
+
+        res = driver.execute_script(ENTER_THEATER_JS)
+        if isinstance(res, dict) and res.get("already"):
+            logging.debug("enter_theater_mode checkpoint: JS detected already in theater or full screen mode. Skipping.")
+            return False
+
         if not is_in_theater(driver):
             try:
                 from selenium.webdriver import ActionChains
@@ -1301,8 +1338,12 @@ def enter_theater_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> 
 
 
 def exit_theater_mode(driver: Any, log_queue: Optional[queue.Queue] = None) -> bool:
-    """Exit theater mode back to standard view."""
+    """Exit theater mode back to standard view only if currently in theater mode."""
     try:
+        if not is_in_theater(driver):
+            logging.debug("exit_theater_mode checkpoint: video is not in theater mode. Skipping exit.")
+            return False
+
         driver.execute_script(EXIT_THEATER_JS)
         emit(log_queue, "Natural interaction: exited theater mode.")
         return True
@@ -1331,7 +1372,9 @@ class HumanInteractivitySimulator:
         caption_chance: float = 0.65,
         pause_chance: float = 0.40,
         fullscreen_theater_mode: bool = True,
-        fullscreen_chance: float = 0.75,
+        fullscreen_chance: float = 0.70,
+        theater_chance: Optional[float] = None,
+        normal_chance: Optional[float] = None,
         cutoff_progress: float = 0.94,
         screen_mode_enter_delay: Optional[float] = None,
     ):
@@ -1351,6 +1394,22 @@ class HumanInteractivitySimulator:
         self.pause_chance = pause_chance
         self.fullscreen_theater_mode = bool(enabled and fullscreen_theater_mode)
         self.fullscreen_chance = fullscreen_chance
+        if theater_chance is not None and normal_chance is not None:
+            self.theater_chance = theater_chance
+            self.normal_chance = normal_chance
+        elif fullscreen_chance == 0.70:
+            self.theater_chance = 0.20
+            self.normal_chance = 0.10
+        elif fullscreen_chance == 1.0:
+            self.theater_chance = 0.0
+            self.normal_chance = 0.0
+        elif fullscreen_chance == 0.0:
+            self.theater_chance = 1.0
+            self.normal_chance = 0.0
+        else:
+            remaining = max(0.0, 1.0 - fullscreen_chance)
+            self.theater_chance = remaining * (2.0 / 3.0)
+            self.normal_chance = remaining * (1.0 / 3.0)
         self.cutoff_progress = cutoff_progress
         self.screen_mode_enter_delay = screen_mode_enter_delay
         self.screen_mode_chosen: Optional[str] = None
@@ -1440,14 +1499,24 @@ class HumanInteractivitySimulator:
 
         # Fullscreen & Theater mode simulation
         if self.fullscreen_theater_mode:
-            # Most videos in full screen (~75%), some in theater mode (~25%)
-            self.screen_mode_chosen = "fullscreen" if random.random() < self.fullscreen_chance else "theater"
-            enter_delay = (
-                self.screen_mode_enter_delay
-                if self.screen_mode_enter_delay is not None
-                else random.uniform(4.0, 7.0)
-            )
-            self.screen_mode_enter_time = min(enter_delay, max(2.0, effective_duration * 0.25))
+            # 70% in full screen, 20% in theater mode, 10% in normal as it is
+            rand_val = random.random()
+            if rand_val < self.fullscreen_chance:
+                self.screen_mode_chosen = "fullscreen"
+            elif rand_val < (self.fullscreen_chance + self.theater_chance):
+                self.screen_mode_chosen = "theater"
+            else:
+                self.screen_mode_chosen = "normal"
+
+            if self.screen_mode_chosen in ("fullscreen", "theater"):
+                enter_delay = (
+                    self.screen_mode_enter_delay
+                    if self.screen_mode_enter_delay is not None
+                    else random.uniform(4.0, 7.0)
+                )
+                self.screen_mode_enter_time = min(enter_delay, max(2.0, effective_duration * 0.25))
+            else:
+                self.screen_mode_enter_time = 0.0
         else:
             self.screen_mode_chosen = None
             self.screen_mode_enter_time = 0.0
@@ -1529,10 +1598,10 @@ class HumanInteractivitySimulator:
         if not self.planned:
             return result
 
-        # ---------------- Screen mode enter: Fullscreen (most) or Theater (some) -
+        # ---------------- Screen mode enter: Fullscreen (70%) or Theater (20%) or Normal (10%) -
         if (
             self.fullscreen_theater_mode
-            and self.screen_mode_chosen
+            and self.screen_mode_chosen in ("fullscreen", "theater")
             and not self.screen_mode_entered
             and not paused
             and not is_ad
@@ -1540,7 +1609,7 @@ class HumanInteractivitySimulator:
         ):
             if self.screen_mode_chosen == "fullscreen":
                 enter_fullscreen_mode(driver, log_queue=log_queue)
-            else:
+            elif self.screen_mode_chosen == "theater":
                 enter_theater_mode(driver, log_queue=log_queue)
             self.screen_mode_entered = True
             result["screen_mode"] = self.screen_mode_chosen
@@ -1555,15 +1624,17 @@ class HumanInteractivitySimulator:
             and (curr_time / video_duration) >= self.cutoff_progress
         ):
             if self.screen_mode_chosen == "fullscreen":
-                exit_fullscreen_mode(driver, log_queue=log_queue)
+                exited = exit_fullscreen_mode(driver, log_queue=log_queue)
                 self.screen_mode_exited = True
-                result["screen_mode_exited"] = True
-                emit(
-                    log_queue,
-                    f"Video reached {int(self.cutoff_progress * 100)}% progress ({_format_time(curr_time)} / {_format_time(video_duration)}). "
-                    f"Exited full screen to standard mode to find next suggested video.",
-                )
+                result["screen_mode_exited"] = exited
+                if exited:
+                    emit(
+                        log_queue,
+                        f"Video reached {int(self.cutoff_progress * 100)}% progress ({_format_time(curr_time)} / {_format_time(video_duration)}). "
+                        f"Exited full screen to standard mode to find next suggested video.",
+                    )
             elif self.screen_mode_chosen == "theater":
+                # User rule: There is no need to exit theater mode, we can just do the scrolling
                 self.screen_mode_exited = True
                 result["screen_mode_exited"] = False
                 emit(
@@ -1571,6 +1642,9 @@ class HumanInteractivitySimulator:
                     f"Video reached {int(self.cutoff_progress * 100)}% progress ({_format_time(curr_time)} / {_format_time(video_duration)}). "
                     f"Remaining in theater mode to find next suggested video.",
                 )
+            elif self.screen_mode_chosen == "normal":
+                self.screen_mode_exited = True
+                result["screen_mode_exited"] = False
             result["target_cutoff_reached"] = True
 
         # ---------------- Early playback: Quality adjustment & 1x speed lock

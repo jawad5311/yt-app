@@ -705,14 +705,14 @@ def test_watch_video_rewinds_when_ended_at_start_from_history(monkeypatch):
 
 
 def test_watch_video_rewinds_async_history_jump_during_early_playback(monkeypatch):
-    """When YouTube asynchronously jumps to history position during early playback, watch_video rewinds."""
+    """When YouTube asynchronously jumps to history position > 3 mins during early playback, watch_video rewinds."""
     import queue
     from src.automation import youtube_actions as module
 
     log_q = queue.Queue()
     states = [
         playback_state(0.0, duration=4100.0),   # Initial 0s
-        playback_state(150.0, duration=4100.0), # Async jump to 150s before 5s watched
+        playback_state(210.0, duration=4100.0), # Async jump to 210s (> 3m) before 5s watched
         playback_state(0.0, duration=4100.0),   # Rewound to 0s
         playback_state(3.0, duration=4100.0),
         playback_state(6.0, duration=4100.0),
@@ -731,6 +731,71 @@ def test_watch_video_rewinds_async_history_jump_during_early_playback(monkeypatc
         logs.append(log_q.get_nowait())
     log_text = " ".join(logs)
 
-    assert "Video playback resumed at 02:30 from account history. Rewinding to 0:00..." in log_text
+    assert "Video playback resumed at 03:30 from account history (> 3m). Rewinding to 0:00..." in log_text
     assert result.completed is True
     assert result.watched_seconds == 6.0
+
+
+def test_watch_video_does_not_rewind_when_resumed_under_3_minutes(monkeypatch):
+    """When a video resumes <= 3 minutes (180s) on timeline, watch_video does NOT rewind and plays from that point."""
+    import queue
+    from src.automation import youtube_actions as module
+
+    log_q = queue.Queue()
+    # Resumes at 12s (like the non-target buffer video in the user's log)
+    states = [
+        playback_state(12.0, duration=4100.0),
+        playback_state(15.0, duration=4100.0),
+        playback_state(18.0, duration=4100.0),
+    ]
+
+    result, ticks = run_scripted_watch(
+        monkeypatch,
+        states,
+        duration_seconds=6,
+        ensure_start_at_beginning=True,
+        log_queue=log_q,
+    )
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    assert "Rewinding to 0:00" not in log_text
+    assert "account history (> 3m)" not in log_text
+    assert result.completed is True
+    assert result.watched_seconds == 6.0
+
+
+def test_watch_video_does_not_rewind_mid_stream_after_10s_watched(monkeypatch):
+    """Timing drift or pause after 10s of watching must never trigger a mid-playback rewind."""
+    import queue
+    from src.automation import youtube_actions as module
+
+    log_q = queue.Queue()
+    # Video watched for 12 seconds, then has a small 4s drift
+    states = [
+        playback_state(0.0, duration=4100.0),
+        playback_state(3.0, duration=4100.0),
+        playback_state(6.0, duration=4100.0),
+        playback_state(9.0, duration=4100.0),
+        playback_state(12.0, duration=4100.0),
+        playback_state(16.0, duration=4100.0),  # 4s ahead of watched_seconds (12s)
+        playback_state(19.0, duration=4100.0),
+    ]
+
+    result, ticks = run_scripted_watch(
+        monkeypatch,
+        states,
+        duration_seconds=18,
+        ensure_start_at_beginning=True,
+        log_queue=log_q,
+    )
+
+    logs = []
+    while not log_q.empty():
+        logs.append(log_q.get_nowait())
+    log_text = " ".join(logs)
+
+    assert "Rewinding to 0:00" not in log_text

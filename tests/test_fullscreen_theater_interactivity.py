@@ -24,74 +24,134 @@ def test_fullscreen_helpers():
     driver = MagicMock()
     log_q = queue.Queue()
 
-    # is_in_fullscreen True
+    # 1. is_in_fullscreen True / False
     driver.execute_script.return_value = True
     assert is_in_fullscreen(driver) is True
 
-    # is_in_fullscreen False
     driver.execute_script.return_value = False
     assert is_in_fullscreen(driver) is False
 
-    # enter_fullscreen_mode executes JS and logs
-    driver.execute_script.return_value = {"success": True, "mode": "fullscreen"}
-    assert enter_fullscreen_mode(driver, log_queue=log_q) is True
-    driver.execute_script.assert_called()
-    assert not log_q.empty()
-    msg = log_q.get()
-    assert "switched video to full screen mode" in msg
+    driver.execute_script.return_value = {"is_fullscreen": True}
+    assert is_in_fullscreen(driver) is True
 
-    # exit_fullscreen_mode executes JS and logs
-    driver.execute_script.return_value = {"success": True, "mode": "standard"}
-    assert exit_fullscreen_mode(driver, log_queue=log_q) is True
-    assert not log_q.empty()
-    msg2 = log_q.get()
-    assert "exited full screen mode" in msg2
+    driver.execute_script.return_value = {"is_fullscreen": False}
+    assert is_in_fullscreen(driver) is False
+
+    # 2. enter_fullscreen_mode when neither fullscreen nor theater -> succeeds
+    with patch("src.automation.interactivity.is_in_fullscreen", return_value=False), \
+         patch("src.automation.interactivity.is_in_theater", return_value=False):
+        driver.execute_script.return_value = {"success": True, "mode": "fullscreen"}
+        assert enter_fullscreen_mode(driver, log_queue=log_q) is True
+        assert not log_q.empty()
+        assert "switched video to full screen mode" in log_q.get()
+
+    # 3. Checkpoint: enter_fullscreen_mode when already in fullscreen -> skips and returns False
+    with patch("src.automation.interactivity.is_in_fullscreen", return_value=True), \
+         patch("src.automation.interactivity.is_in_theater", return_value=False):
+        driver.execute_script.reset_mock()
+        assert enter_fullscreen_mode(driver, log_queue=log_q) is False
+        driver.execute_script.assert_not_called()
+
+    # 4. Checkpoint: enter_fullscreen_mode when already in theater mode -> skips and returns False
+    with patch("src.automation.interactivity.is_in_fullscreen", return_value=False), \
+         patch("src.automation.interactivity.is_in_theater", return_value=True):
+        driver.execute_script.reset_mock()
+        assert enter_fullscreen_mode(driver, log_queue=log_q) is False
+        driver.execute_script.assert_not_called()
+
+    # 5. Checkpoint: exit_fullscreen_mode when NOT in fullscreen -> skips and returns False
+    with patch("src.automation.interactivity.is_in_fullscreen", return_value=False):
+        driver.execute_script.reset_mock()
+        assert exit_fullscreen_mode(driver, log_queue=log_q) is False
+        driver.execute_script.assert_not_called()
+
+    # 6. exit_fullscreen_mode when currently in fullscreen -> executes exit and returns True
+    with patch("src.automation.interactivity.is_in_fullscreen", side_effect=[True, False]):
+        driver.execute_script.return_value = {"success": True, "mode": "standard"}
+        assert exit_fullscreen_mode(driver, log_queue=log_q) is True
+        assert not log_q.empty()
+        assert "exited full screen mode" in log_q.get()
 
 
 def test_theater_helpers():
     driver = MagicMock()
     log_q = queue.Queue()
 
-    # is_in_theater
+    # 1. is_in_theater True / False
     driver.execute_script.return_value = True
     assert is_in_theater(driver) is True
 
     driver.execute_script.return_value = False
     assert is_in_theater(driver) is False
 
-    # enter_theater_mode
-    driver.execute_script.return_value = {"success": True, "mode": "theater"}
-    assert enter_theater_mode(driver, log_queue=log_q) is True
-    assert not log_q.empty()
-    assert "switched video to theater mode" in log_q.get()
+    driver.execute_script.return_value = {"is_theater": True}
+    assert is_in_theater(driver) is True
 
-    # exit_theater_mode
-    driver.execute_script.return_value = {"success": True, "mode": "standard"}
-    assert exit_theater_mode(driver, log_queue=log_q) is True
-    assert not log_q.empty()
-    assert "exited theater mode" in log_q.get()
+    # 2. enter_theater_mode when neither in theater nor fullscreen -> succeeds
+    with patch("src.automation.interactivity.is_in_theater", return_value=False), \
+         patch("src.automation.interactivity.is_in_fullscreen", return_value=False):
+        driver.execute_script.return_value = {"success": True, "mode": "theater"}
+        assert enter_theater_mode(driver, log_queue=log_q) is True
+        assert not log_q.empty()
+        assert "switched video to theater mode" in log_q.get()
+
+    # 3. Checkpoint: enter_theater_mode when already in theater mode -> skips and returns False
+    with patch("src.automation.interactivity.is_in_theater", return_value=True), \
+         patch("src.automation.interactivity.is_in_fullscreen", return_value=False):
+        driver.execute_script.reset_mock()
+        assert enter_theater_mode(driver, log_queue=log_q) is False
+        driver.execute_script.assert_not_called()
+
+    # 4. Checkpoint: enter_theater_mode when already in fullscreen mode -> skips and returns False
+    with patch("src.automation.interactivity.is_in_theater", return_value=False), \
+         patch("src.automation.interactivity.is_in_fullscreen", return_value=True):
+        driver.execute_script.reset_mock()
+        assert enter_theater_mode(driver, log_queue=log_q) is False
+        driver.execute_script.assert_not_called()
+
+    # 5. Checkpoint: exit_theater_mode when NOT in theater mode -> skips and returns False
+    with patch("src.automation.interactivity.is_in_theater", return_value=False):
+        driver.execute_script.reset_mock()
+        assert exit_theater_mode(driver, log_queue=log_q) is False
+        driver.execute_script.assert_not_called()
+
+    # 6. exit_theater_mode when in theater mode -> executes exit and returns True
+    with patch("src.automation.interactivity.is_in_theater", return_value=True):
+        driver.execute_script.return_value = {"success": True, "mode": "standard"}
+        assert exit_theater_mode(driver, log_queue=log_q) is True
+        assert not log_q.empty()
+        assert "exited theater mode" in log_q.get()
 
 
 def test_simulator_plans_fullscreen_and_theater_distribution():
-    # When fullscreen_chance is 1.0 -> always chooses fullscreen
-    sim_fs = HumanInteractivitySimulator(
+    # 70% fullscreen, 20% theater, 10% normal mode distribution defaults
+    sim = HumanInteractivitySimulator(
         enabled=True,
         fullscreen_theater_mode=True,
-        fullscreen_chance=1.0,
     )
-    sim_fs.plan_session(video_duration=300.0)
-    assert sim_fs.screen_mode_chosen == "fullscreen"
-    assert sim_fs.screen_mode_enter_time > 0.0
+    assert sim.fullscreen_chance == 0.70
+    assert sim.theater_chance == 0.20
+    assert sim.normal_chance == 0.10
 
-    # When fullscreen_chance is 0.0 -> always chooses theater
-    sim_th = HumanInteractivitySimulator(
-        enabled=True,
-        fullscreen_theater_mode=True,
-        fullscreen_chance=0.0,
-    )
-    sim_th.plan_session(video_duration=300.0)
-    assert sim_th.screen_mode_chosen == "theater"
-    assert sim_th.screen_mode_enter_time > 0.0
+    # Test rand < 0.70 -> fullscreen
+    with patch("random.random", return_value=0.50):
+        sim.plan_session(video_duration=300.0)
+        assert sim.screen_mode_chosen == "fullscreen"
+        assert sim.screen_mode_enter_time > 0.0
+
+    # Test 0.70 <= rand < 0.90 -> theater
+    sim_th = HumanInteractivitySimulator(enabled=True, fullscreen_theater_mode=True)
+    with patch("random.random", return_value=0.75):
+        sim_th.plan_session(video_duration=300.0)
+        assert sim_th.screen_mode_chosen == "theater"
+        assert sim_th.screen_mode_enter_time > 0.0
+
+    # Test rand >= 0.90 -> normal
+    sim_norm = HumanInteractivitySimulator(enabled=True, fullscreen_theater_mode=True)
+    with patch("random.random", return_value=0.95):
+        sim_norm.plan_session(video_duration=300.0)
+        assert sim_norm.screen_mode_chosen == "normal"
+        assert sim_norm.screen_mode_enter_time == 0.0
 
     # When fullscreen_theater_mode is False -> neither is planned
     sim_disabled = HumanInteractivitySimulator(
@@ -228,6 +288,7 @@ def test_watch_video_with_fullscreen_simulation_cutoff_at_94_percent():
         res = watch_video(
             driver,
             duration_seconds=None,  # Full Video mode
+            ensure_start_at_beginning=False,  # Skip history rewind check for mock jumps
             log_queue=log_q,
             enable_interactivity=True,
             interactivity_config={"fullscreen_theater_mode": True},

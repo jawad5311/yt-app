@@ -1215,3 +1215,103 @@ def test_html_dashboard_generation_includes_progress_bars_and_buttons(sample_rep
     body = sample_report.generate_html_body()
     assert "Open YouTube" in body
     assert "<!DOCTYPE html>" not in body
+
+
+class TestHeadlessFirstEmailDeliveryAndMainWindowFallback:
+    def test_start_notification_uses_headless_and_falls_back_to_main_window(self, tmp_path):
+        """Verify that start notification tries headless browser first, and falls back to main window if headless fails."""
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "ReportRecipientEmail": "admin@example.com",
+            "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
+        })
+        account = Account(email="user@gmail.com", password="pwd")
+        mock_main_driver = MagicMock()
+        mock_main_driver.session_id = "main-window-session"
+        mock_main_driver.execute_script.return_value = 1
+
+        # Case 1: Headless succeeds
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=True) as mock_headless, \
+             patch.object(EmailReporter, "_deliver_via_gmail_compose") as mock_compose:
+            ok = EmailReporter.send_start_notification(
+                account=account,
+                session_mode="Continuous Browsing",
+                config_mgr=cfg,
+                fallback_driver=mock_main_driver,
+            )
+            assert ok is True
+            mock_headless.assert_called_once()
+            assert mock_headless.call_args.kwargs.get("headless") is True
+            mock_compose.assert_not_called()
+
+        # Case 2: Headless fails -> falls back to main window driver
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=False) as mock_headless, \
+             patch.object(EmailReporter, "_deliver_via_gmail_compose", return_value=True) as mock_compose:
+            ok = EmailReporter.send_start_notification(
+                account=account,
+                session_mode="Continuous Browsing",
+                config_mgr=cfg,
+                fallback_driver=mock_main_driver,
+            )
+            assert ok is True
+            mock_headless.assert_called_once()
+            assert mock_headless.call_args.kwargs.get("headless") is True
+            mock_compose.assert_called_once()
+            assert mock_compose.call_args.kwargs.get("driver") is mock_main_driver
+
+    def test_dispatch_report_uses_headless_first_and_falls_back_to_main_window(self, tmp_path, sample_report):
+        """Verify that dispatch_report attempts headless browser first, and falls back to main window if headless fails."""
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "ReportRecipientEmail": "admin@example.com",
+            "ReportEmailMethod": "Headless Browser Gmail (Recommended)",
+        })
+        account = Account(email="user@gmail.com", password="pwd")
+        mock_main_driver = MagicMock()
+        mock_main_driver.session_id = "main-window-session"
+        mock_main_driver.execute_script.return_value = 1
+
+        # Case 1: Headless delivery succeeds
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=True) as mock_headless, \
+             patch.object(EmailReporter, "send_via_browser_gmail") as mock_browser:
+            ok = EmailReporter.dispatch_report(
+                report=sample_report,
+                config_mgr=cfg,
+                account=account,
+                main_driver=mock_main_driver,
+            )
+            assert ok is True
+            mock_headless.assert_called_once()
+            assert mock_headless.call_args.kwargs.get("headless") is True
+            mock_browser.assert_not_called()
+
+        # Case 2: Headless fails -> falls back to main window (send_via_browser_gmail)
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=False) as mock_headless, \
+             patch.object(EmailReporter, "send_via_browser_gmail", return_value=True) as mock_browser:
+            ok = EmailReporter.dispatch_report(
+                report=sample_report,
+                config_mgr=cfg,
+                account=account,
+                main_driver=mock_main_driver,
+            )
+            assert ok is True
+            assert mock_headless.call_args_list[0].kwargs.get("headless") is True
+            mock_browser.assert_called_once()
+            assert mock_browser.call_args[0][0] is mock_main_driver
+
+        # Case 3: No main window open (main_driver is None) and headless fails -> opens headed browser
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", side_effect=[False, True]) as mock_headless, \
+             patch.object(EmailReporter, "send_via_browser_gmail") as mock_browser:
+            ok = EmailReporter.dispatch_report(
+                report=sample_report,
+                config_mgr=cfg,
+                account=account,
+                main_driver=None,
+            )
+            assert ok is True
+            assert mock_headless.call_count == 2
+            # 1st attempt: headless=True
+            assert mock_headless.call_args_list[0].kwargs.get("headless") is True
+            # 2nd attempt (fallback): headless=False (headed main window)
+            assert mock_headless.call_args_list[1].kwargs.get("headless") is False
+

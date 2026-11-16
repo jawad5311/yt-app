@@ -354,6 +354,7 @@ class LogsView(Frame):
             pass
 
     def clear_logs(self):
+        """Clear only the console display in the app. The log files on disk remain completely intact."""
         try:
             self.log_textbox.configure(state="normal")
             self.log_textbox.delete("1.0", "end")
@@ -378,18 +379,21 @@ class LogsView(Frame):
             pass
 
     def copy_logs(self):
+        """Copy only the logs currently showing in the app console."""
+        copied = False
         try:
             content = self.log_textbox.get("1.0", "end-1c")
-            if not content.strip():
-                return
-            self.clipboard_clear()
-            self.clipboard_append(content)
+            if content.strip():
+                self.clipboard_clear()
+                self.clipboard_append(content)
+                self.update_idletasks()
+                copied = True
         except Exception:
             pass
 
         # Flash feedback on the button for 2-3 seconds without showing a pop-up
         try:
-            if hasattr(self, "copy_btn") and self.copy_btn is not None:
+            if hasattr(self, "copy_btn") and self.copy_btn is not None and copied:
                 if getattr(self, "_copy_reset_timer", None):
                     try:
                         self.after_cancel(self._copy_reset_timer)
@@ -403,7 +407,8 @@ class LogsView(Frame):
             pass
 
     def copy_complete_logs(self):
-        """Copy all logs of the current session stored in the session log file."""
+        """Copy complete logs of the running session or most recent session from the session log file."""
+        copied = False
         try:
             from ...utils.logger import read_current_session_logs
 
@@ -411,17 +416,17 @@ class LogsView(Frame):
             if not content.strip():
                 content = self.log_textbox.get("1.0", "end-1c")
 
-            if not content.strip():
-                return
-
-            self.clipboard_clear()
-            self.clipboard_append(content)
+            if content.strip():
+                self.clipboard_clear()
+                self.clipboard_append(content)
+                self.update_idletasks()
+                copied = True
         except Exception:
             pass
 
         # Flash feedback on the button for 2-3 seconds without showing a pop-up
         try:
-            if hasattr(self, "copy_complete_btn") and self.copy_complete_btn is not None:
+            if hasattr(self, "copy_complete_btn") and self.copy_complete_btn is not None and copied:
                 if getattr(self, "_copy_complete_reset_timer", None):
                     try:
                         self.after_cancel(self._copy_complete_reset_timer)

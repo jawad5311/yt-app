@@ -374,7 +374,7 @@ def check_video_task_eligibility(
             watch_sec = record.watch_seconds
             v_dur = (record.video_duration if record.video_duration > 0 else 0.0) or getattr(task, "duration_seconds", 0.0)
             if task.is_target_reached(current_runs, watch_sec, v_dur):
-                reason = f"target multiplier {task.target_multiplier:.1f}x reached" if (getattr(task, "target_multiplier", 0.0) > 0 and v_dur > 0 and watch_sec / v_dur >= task.target_multiplier) else f"max views limit of {task.max_runs} reached"
+                reason = f"target multiplier {task.target_multiplier:.1f}x reached" if (getattr(task, "target_multiplier", 0.0) > 0 and v_dur > 0 and (watch_sec >= task.target_multiplier * v_dur or round(watch_sec / v_dur, 1) >= task.target_multiplier)) else f"max views limit of {task.max_runs} reached"
                 return False, reason
 
     if task.channel:

@@ -2009,6 +2009,28 @@ class WatchingWorker:
         except Exception:
             pass
 
+    def _update_task_target_multiplier(self, task: VideoTask, new_multiplier: float) -> None:
+        """Update video target_multiplier in settings.json video queue atomically and notify UI."""
+        if new_multiplier <= 0:
+            return
+        try:
+            rounded_mult = round(float(new_multiplier), 1)
+            task.target_multiplier = rounded_mult
+            vid_key = resolve_video_key(task, task.url)
+
+            def _updater(raw_queue: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                for v in raw_queue:
+                    if resolve_video_key(VideoTask.from_dict(v), v.get("url", "")) == vid_key:
+                        v["target_multiplier"] = rounded_mult
+                        break
+                return raw_queue
+
+            if self.config_mgr is not None:
+                self.config_mgr.update_video_queue(_updater)
+            self._emit_event(("update_task_target_multiplier", task.to_dict(), rounded_mult))
+        except Exception as exc:
+            logging.debug(f"Could not update task target multiplier: {exc}")
+
     def _get_cooldown_hours(self) -> float:
         mgr = getattr(self, "config_mgr", None)
         if mgr is None:
@@ -2084,7 +2106,7 @@ class WatchingWorker:
             eff_dur = video_duration if video_duration > 0 else task_dur
             limit_disp = existing_task.max_runs if existing_task.max_runs > 0 else 3
             if existing_task.is_target_reached(current_runs, watch_seconds, eff_dur):
-                reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and watch_seconds / eff_dur >= existing_task.target_multiplier) else f"run limit ({current_runs}/{limit_disp} runs completed)"
+                reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and (watch_seconds >= existing_task.target_multiplier * eff_dur or round(watch_seconds / eff_dur, 1) >= existing_task.target_multiplier)) else f"run limit ({current_runs}/{limit_disp} runs completed)"
                 return False, existing_task, f"already reached {reason}"
 
             # Check cooldown before confirming eligibility
@@ -2575,10 +2597,6 @@ class WatchingWorker:
         human_like_delay(2.0, 3.5)
         dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
         ensure_video_playing(self.driver, log_queue=self.log_queue)
-        try:
-            ensure_video_at_start(self.driver, log_queue=self.log_queue)
-        except Exception:
-            pass
 
         if not self._check_account_login_before_play(content_type="random video", content_title=title):
             return False
@@ -2598,6 +2616,7 @@ class WatchingWorker:
             end_buffer_seconds=self._end_buffer_seconds(),
             enable_interactivity=False,
             pause_event=self.pause_event,
+            ensure_start_at_beginning=False,
         )
 
         if target_rec_id:
@@ -2778,33 +2797,9 @@ class WatchingWorker:
                     emit(self.log_queue, f"Video '{latest_task.title or task_label}' was unchecked/disabled. Stopping playback.")
                     return "task_disabled"
 
-                latest_max_runs = latest_task.max_runs
-                latest_multiplier = latest_task.target_multiplier
-
-                if self.stats_store is not None:
-                    rec = self.stats_store.find_for_task(latest_task)
-                    if rec is None and registered_task is not None:
-                        rec = self.stats_store.find_for_task(registered_task)
-                    current_runs = rec.runs if rec is not None else 0
-                    prev_watched = rec.watch_seconds if rec else 0.0
-                    curr_watch = self.channel_tracker.get_active_watch_delta() if hasattr(self, "channel_tracker") else 0.0
-                    total_watched = prev_watched + curr_watch
-                    eff_dur = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or getattr(latest_task, "duration_seconds", 0.0)
-
-                    if latest_max_runs > 0 and current_runs >= latest_max_runs:
-                        emit(self.log_queue, f"Video '{latest_task.title or task_label}' reached max runs limit ({current_runs}/{latest_max_runs}). Stopping playback.")
-                        return "task_limit_reached"
-
-                    if latest_multiplier > 0.0 and eff_dur > 0.0:
-                        if total_watched >= latest_multiplier * eff_dur:
-                            emit(self.log_queue, f"Video '{latest_task.title or task_label}' reached target multiplier ({latest_multiplier:.2f}x). Stopping video playback.")
-                            return "video_target_achieved"
-
             # 2. Check channel status
             current_ch_name = (latest_task.channel if latest_task else ch_name) or ch_name
             if current_ch_name:
-                if hasattr(self, "channel_tracker") and self.channel_tracker.is_channel_target_achieved(current_ch_name):
-                    return "channel_target_achieved"
                 cfg = getattr(self, "config_mgr", None)
                 if cfg is not None and hasattr(cfg, "get_channels"):
                     try:
@@ -2887,6 +2882,21 @@ class WatchingWorker:
             f"Updated video time for '{title}': watched {actual_watched:.1f}s (duration: {actual_dur:.1f}s, completed={watch_res.completed}){runs_info}.",
             logging.INFO,
         )
+
+        # Target multiplier calculation and update at the end of successful video playback
+        if (watch_res.completed or watch_res.playback_finished) and not watch_res.interrupted and actual_watched > 0:
+            eff_dur = (rec.video_duration if rec and rec.video_duration > 0 else 0.0) or actual_dur or getattr(registered_task, "duration_seconds", 0.0)
+            total_watch_seconds = rec.watch_seconds if rec else actual_watched
+            if eff_dur > 0 and total_watch_seconds > 0:
+                achieved_mult = round(total_watch_seconds / eff_dur, 1)
+                current_set_mult = float(getattr(registered_task, "target_multiplier", 0.0) or 0.0)
+                if current_set_mult > 0.0 and achieved_mult > current_set_mult:
+                    emit(
+                        self.log_queue,
+                        f"Video '{title}' reached and exceeded target multiplier ({current_set_mult:g}x -> {achieved_mult:g}x) after successful watch. Updated target multiplier to {achieved_mult:g}x.",
+                        logging.INFO,
+                    )
+                    self._update_task_target_multiplier(registered_task, achieved_mult)
 
         # If playback stalled unresponsively, return cleanly to YouTube Home before next cycle
         if watch_res.reason == "stalled_unresponsive":
@@ -6322,6 +6332,14 @@ class WatchingWorker:
 
     def _async_init_and_send_start_notification(self) -> None:
         """Initialize headless reporting browser and send start notification asynchronously in background with retry and auto-recovery."""
+        if not self.config_mgr:
+            return
+        if not self.config_mgr.get_bool("EmailReportingEnabled", True):
+            return
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower()
+        if method in ("disabled", "off", "none"):
+            return
+
         delays = getattr(self, "_start_notification_delays", [5.0, 10.0, 15.0, 20.0])
         max_attempts = len(delays) + 1
 
@@ -6331,7 +6349,7 @@ class WatchingWorker:
 
             try:
                 method = self.config_mgr.get_setting("ReportEmailMethod", "Auto") if self.config_mgr else "Auto"
-                if "headless" in method.lower() and not getattr(self, "reporting_driver", None):
+                if "smtp" not in method.lower() and not getattr(self, "reporting_driver", None):
                     try:
                         self.reporting_driver = EmailReporter.create_headless_reporting_driver(
                             account=self.account,
@@ -6360,7 +6378,7 @@ class WatchingWorker:
                 # Cleanup failed reporting driver so next attempt can re-sync profile cookies
                 if getattr(self, "reporting_driver", None):
                     try:
-                        self.reporting_driver.quit()
+                        close_driver(self.reporting_driver, log_queue=self.log_queue)
                     except Exception:
                         pass
                     self.reporting_driver = None
@@ -6382,6 +6400,13 @@ class WatchingWorker:
         """Deliver start notification email via headless browser. Returns True on success, False otherwise."""
         if not self.config_mgr:
             return False
+        if not self.config_mgr.get_bool("EmailReportingEnabled", True):
+            return False
+        if not self.config_mgr.get_bool("SessionStartNotification", True):
+            return False
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower()
+        if method in ("disabled", "off", "none"):
+            return False
         try:
             total_sec = 0.0
             if hasattr(self, "channel_tracker") and self.channel_tracker:
@@ -6399,6 +6424,7 @@ class WatchingWorker:
                 log_queue=self.log_queue,
                 thread_info=self.session_thread_info,
                 driver=self.reporting_driver,
+                fallback_driver=getattr(self, "driver", None),
             )
             if self.session_thread_info.get("thread_url"):
                 self.session_thread_url = self.session_thread_info["thread_url"]
@@ -6484,6 +6510,13 @@ class WatchingWorker:
         if not self.config_mgr:
             self._emit_event(("report_sent", False, "No configuration manager available."))
             return
+        if not self.config_mgr.get_bool("EmailReportingEnabled", True):
+            self._emit_event(("report_sent", False, "Email reporting is disabled."))
+            return
+        method = (self.config_mgr.get_setting("ReportEmailMethod", "Auto") or "").strip().lower()
+        if method in ("disabled", "off", "none"):
+            self._emit_event(("report_sent", False, "Email reporting is disabled by configuration."))
+            return
         if not hasattr(self, "channel_tracker") or not self.channel_tracker:
             self._emit_event(("report_sent", False, "No session tracking data."))
             return
@@ -6527,7 +6560,7 @@ class WatchingWorker:
                 sleep_mode_type=sleep_mode_type,
             )
             rep_driver = getattr(self, "reporting_driver", None)
-            if rep_driver:
+            if rep_driver and not is_driver_alive(rep_driver):
                 try:
                     close_driver(rep_driver, log_queue=self.log_queue)
                 except Exception:
@@ -6539,14 +6572,14 @@ class WatchingWorker:
             if watch_driver and not is_driver_alive(watch_driver):
                 watch_driver = None
 
-            chosen_driver = watch_driver
             ok = EmailReporter.dispatch_report(
                 report=report,
                 config_mgr=self.config_mgr,
-                driver=chosen_driver,
+                driver=rep_driver,
                 account=self.account,
                 log_queue=self.log_queue,
                 thread_info=getattr(self, "session_thread_info", None),
+                main_driver=watch_driver,
             )
             if not ok:
                 emit(self.log_queue, "Session report email delivery could not be completed.", logging.WARNING)

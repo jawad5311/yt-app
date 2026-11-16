@@ -1776,6 +1776,16 @@ class EmailReporter:
         force: bool = False,
     ) -> bool:
         """Send an urgent alert notification email for bot challenges, disconnections, or crashes."""
+        if not config_mgr:
+            return False
+
+        if not config_mgr.get_bool("EmailReportingEnabled", True):
+            return False
+
+        method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip() if config_mgr else "Auto"
+        if method.lower() in ("disabled", "off", "none"):
+            return False
+
         recipient, bcc_email = resolve_report_recipients(config_mgr)
         alert_dt = datetime.now()
         stamp_str = alert_dt.strftime("%d %b %Y - %I:%M:%S %p")
@@ -1878,8 +1888,8 @@ class EmailReporter:
                     emit(log_queue, f"Dispatched critical alert email to '{recipient}' via SMTP ({alert_type}).", logging.WARNING)
                 return True
 
-        # 2. If browser driver is active and visible
-        if driver is not None and "active" in method.lower():
+        # 1b. Explicit Active Browser Gmail (only if user explicitly configured "Active Browser Gmail")
+        if driver is not None and "active" in method.lower() and "headless" not in method.lower():
             if target_thread_url:
                 reply_ok = cls._deliver_via_gmail_thread_reply(
                     driver=driver,
@@ -1895,8 +1905,9 @@ class EmailReporter:
                     config_mgr=config_mgr,
                 )
                 if reply_ok:
+                    cls._recent_alert_times[alert_key] = now_ts
                     return True
-            return cls._deliver_via_gmail_compose(
+            comp_ok = cls._deliver_via_gmail_compose(
                 driver=driver,
                 subject=subject,
                 plain_text=plain_text,
@@ -1908,21 +1919,96 @@ class EmailReporter:
                 account=account,
                 config_mgr=config_mgr,
             )
+            if comp_ok:
+                cls._recent_alert_times[alert_key] = now_ts
+                return True
 
-        # 3. Headless Browser Gmail
+        # 2. Primary: Headless Browser Gmail
+        # Must attempt headless browser first for alert notifications.
         if account is not None:
-            return cls.send_via_headless_browser_gmail(
-                account=account,
-                subject=subject,
-                body_text=plain_text,
-                recipient_email=recipient,
-                bcc_email=bcc_email,
-                log_queue=None,
-                email_description=f"alert ({alert_type})",
-                thread_url=target_thread_url,
-                thread_info=thread_info,
-                config_mgr=config_mgr,
-            )
+            try:
+                headless_ok = cls.send_via_headless_browser_gmail(
+                    account=account,
+                    subject=subject,
+                    body_text=plain_text,
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=None,
+                    email_description=f"alert ({alert_type})",
+                    thread_url=target_thread_url,
+                    thread_info=thread_info,
+                    config_mgr=config_mgr,
+                    headless=True,
+                    is_reporting=True,
+                )
+                if headless_ok:
+                    cls._recent_alert_times[alert_key] = now_ts
+                    return True
+            except Exception:
+                pass
+
+        # 3. Fallback: Main Window without going headless
+        # 3a. If active browser driver supplied
+        if driver is not None:
+            from .driver import is_driver_alive
+            if is_driver_alive(driver):
+                if target_thread_url:
+                    reply_ok = cls._deliver_via_gmail_thread_reply(
+                        driver=driver,
+                        plain_text=plain_text,
+                        thread_url=target_thread_url,
+                        subject=subject,
+                        recipient_email=recipient,
+                        bcc_email=bcc_email,
+                        log_queue=None,
+                        email_description=f"alert ({alert_type})",
+                        thread_info=thread_info,
+                        account=account,
+                        config_mgr=config_mgr,
+                    )
+                    if reply_ok:
+                        cls._recent_alert_times[alert_key] = now_ts
+                        return True
+                comp_ok = cls._deliver_via_gmail_compose(
+                    driver=driver,
+                    subject=subject,
+                    plain_text=plain_text,
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=None,
+                    email_description=f"alert ({alert_type})",
+                    thread_info=thread_info,
+                    account=account,
+                    config_mgr=config_mgr,
+                )
+                if comp_ok:
+                    cls._recent_alert_times[alert_key] = now_ts
+                    return True
+
+        # 3b. Open main window (headed browser, headless=False)
+        if account is not None:
+            try:
+                from .driver import is_driver_alive
+                has_active_main = driver is not None and is_driver_alive(driver)
+                headed_ok = cls.send_via_headless_browser_gmail(
+                    account=account,
+                    subject=subject,
+                    body_text=plain_text,
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=None,
+                    email_description=f"alert ({alert_type})",
+                    thread_url=target_thread_url,
+                    thread_info=thread_info,
+                    config_mgr=config_mgr,
+                    headless=False,
+                    is_reporting=True if has_active_main else False,
+                )
+                if headed_ok:
+                    cls._recent_alert_times[alert_key] = now_ts
+                    return True
+            except Exception:
+                pass
 
         return False
 
@@ -1939,11 +2025,22 @@ class EmailReporter:
         extra_details: Optional[Dict[str, Any]] = None,
         thread_info: Optional[Dict[str, Any]] = None,
         driver: Optional[Any] = None,
+        fallback_driver: Optional[Any] = None,
     ) -> bool:
-        """Send a simple email notification when automation starts."""
+        """Send a simple email notification when automation starts using headless browser, with main window fallback."""
         cls.reset_session_thread()
         if thread_info is not None and isinstance(thread_info, dict):
             thread_info.clear()
+        if not config_mgr:
+            return False
+
+        if not config_mgr.get_bool("EmailReportingEnabled", True):
+            return False
+
+        method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip() if config_mgr else "Auto"
+        if method.lower() in ("disabled", "off", "none"):
+            return False
+
         recipient, bcc_email = resolve_report_recipients(config_mgr)
 
         start_dt = start_time or datetime.now()
@@ -1978,22 +2075,7 @@ class EmailReporter:
         method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip()
         smtp_pass = config_mgr.get_setting("SmtpPassword", "")
 
-        # 1. Prefer persistent headless/visible reporting browser if provided
-        if driver is not None:
-            return cls._deliver_via_gmail_compose(
-                driver=driver,
-                subject=subject,
-                plain_text=plain_text,
-                recipient_email=recipient,
-                bcc_email=bcc_email,
-                log_queue=log_queue,
-                email_description="start notification email",
-                thread_info=thread_info,
-                account=account,
-                config_mgr=config_mgr,
-            )
-
-        # 2. Try SMTP if configured
+        # 1. Explicit SMTP Connection method
         if "smtp" in method.lower() and "browser" not in method.lower() and smtp_pass:
             ok = cls._send_plain_smtp(
                 recipient=recipient,
@@ -2009,19 +2091,150 @@ class EmailReporter:
                 emit(log_queue, "Notified successfully")
             return ok
 
-        # 3. Default: Headless Browser Gmail
-        return cls.send_via_headless_browser_gmail(
-            account=account,
-            subject=subject,
-            body_text=plain_text,
-            recipient_email=recipient,
-            bcc_email=bcc_email,
-            log_queue=log_queue,
-            email_description="start notification email",
-            thread_info=thread_info,
-            config_mgr=config_mgr,
-            is_reporting=True,
-        )
+        # 1b. Explicit Active Browser Gmail (only if user explicitly configured "Active Browser Gmail")
+        if "active" in method.lower() and "headless" not in method.lower():
+            active_target = fallback_driver or driver
+            if active_target is not None:
+                from .driver import is_driver_alive
+                if is_driver_alive(active_target):
+                    return cls._deliver_via_gmail_compose(
+                        driver=active_target,
+                        subject=subject,
+                        plain_text=plain_text,
+                        recipient_email=recipient,
+                        bcc_email=bcc_email,
+                        log_queue=log_queue,
+                        email_description="start notification email (active browser)",
+                        thread_info=thread_info,
+                        account=account,
+                        config_mgr=config_mgr,
+                    )
+
+        # 2. Primary: Headless Browser Delivery
+        # The app must use a headless browser first for sending session starting email.
+        headless_done = False
+        if driver is not None:
+            try:
+                from .driver import is_driver_alive
+                if is_driver_alive(driver):
+                    headless_done = cls._deliver_via_gmail_compose(
+                        driver=driver,
+                        subject=subject,
+                        plain_text=plain_text,
+                        recipient_email=recipient,
+                        bcc_email=bcc_email,
+                        log_queue=log_queue,
+                        email_description="start notification email (headless)",
+                        thread_info=thread_info,
+                        account=account,
+                        config_mgr=config_mgr,
+                    )
+                    if headless_done:
+                        return True
+            except Exception as exc:
+                if log_queue:
+                    emit(log_queue, f"Persistent headless driver delivery error: {_clean_error_msg(exc)}", logging.WARNING)
+
+        if not headless_done and account is not None:
+            # If a persistent reporting driver was supplied but delivery failed, close it first
+            # to release the reporting profile lock before launching a fresh headless browser instance.
+            if driver is not None:
+                from .driver import close_driver
+                try:
+                    close_driver(driver, log_queue=log_queue)
+                except Exception:
+                    pass
+                driver = None
+            try:
+                headless_done = cls.send_via_headless_browser_gmail(
+                    account=account,
+                    subject=subject,
+                    body_text=plain_text,
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    email_description="start notification email (headless)",
+                    thread_info=thread_info,
+                    config_mgr=config_mgr,
+                    headless=True,
+                    is_reporting=True,
+                )
+                if headless_done:
+                    return True
+                if log_queue:
+                    emit(log_queue, "Headless start notification email delivery was not successful. Falling back to main window without going headless...", logging.INFO)
+            except Exception as exc:
+                if log_queue:
+                    emit(log_queue, f"Headless start notification encountered an issue: {_clean_error_msg(exc)}. Falling back to main window without going headless...", logging.WARNING)
+
+        # 3. Fallback: Main Window without going headless
+        # Just in case if there is an issue using headless browser, try opening the main window and sending without going headless.
+        # 3a. If fallback_driver (the active main watching browser) is alive, try using it:
+        if fallback_driver is not None:
+            from .driver import is_driver_alive
+            if is_driver_alive(fallback_driver):
+                if log_queue:
+                    emit(log_queue, "Attempting start notification via active main browser window...", logging.INFO)
+                try:
+                    fallback_ok = cls._deliver_via_gmail_compose(
+                        driver=fallback_driver,
+                        subject=subject,
+                        plain_text=plain_text,
+                        recipient_email=recipient,
+                        bcc_email=bcc_email,
+                        log_queue=log_queue,
+                        email_description="start notification email (main window)",
+                        thread_info=thread_info,
+                        account=account,
+                        config_mgr=config_mgr,
+                    )
+                    if fallback_ok:
+                        return True
+                except Exception as exc:
+                    if log_queue:
+                        emit(log_queue, f"Active main browser window start notification error: {_clean_error_msg(exc)}", logging.WARNING)
+
+        # 3b. Open main window (headed browser, headless=False):
+        if account is not None:
+            try:
+                from .driver import is_driver_alive
+                has_active_main = fallback_driver is not None and is_driver_alive(fallback_driver)
+                headed_ok = cls.send_via_headless_browser_gmail(
+                    account=account,
+                    subject=subject,
+                    body_text=plain_text,
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    email_description="start notification email (headed main window fallback)",
+                    thread_info=thread_info,
+                    config_mgr=config_mgr,
+                    headless=False,
+                    is_reporting=True if has_active_main else False,
+                )
+                if headed_ok:
+                    return True
+            except Exception as exc:
+                if log_queue:
+                    emit(log_queue, f"Main window fallback start notification error: {_clean_error_msg(exc)}", logging.WARNING)
+
+        # 4. Final Fallback: SMTP if configured
+        if smtp_pass:
+            ok = cls._send_plain_smtp(
+                recipient=recipient,
+                subject=subject,
+                text=plain_text,
+                config_mgr=config_mgr,
+                bcc_email=bcc_email,
+                account=account,
+                log_queue=log_queue,
+                thread_info=thread_info,
+            )
+            if ok and log_queue:
+                emit(log_queue, "Notified successfully")
+            return ok
+
+        return False
 
     @classmethod
     def _send_plain_smtp(
@@ -2113,10 +2326,18 @@ class EmailReporter:
         account: Optional[Account] = None,
         log_queue: Optional[queue.Queue] = None,
         thread_info: Optional[Dict[str, Any]] = None,
+        main_driver: Optional[Any] = None,
         recipient_override: Optional[str] = None,
     ) -> bool:
         """Route report delivery based on configuration and available transports."""
         if not config_mgr:
+            return False
+
+        if not config_mgr.get_bool("EmailReportingEnabled", True):
+            return False
+
+        method = config_mgr.get_setting("ReportEmailMethod", "Auto").strip() if config_mgr else "Auto"
+        if method.lower() in ("disabled", "off", "none"):
             return False
 
         if not getattr(report, "system_name", ""):
@@ -2154,47 +2375,109 @@ class EmailReporter:
                 thread_info=thread_info,
             )
 
-        # 2. If a browser driver is already supplied and alive:
+        # 2. If a dedicated reporting driver is already supplied and alive:
         if driver is not None:
             from .driver import is_driver_alive
             if is_driver_alive(driver):
-                browser_ok = cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue, thread_info=thread_info)
+                browser_ok = cls.send_via_browser_gmail(
+                    driver,
+                    report,
+                    recipient,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    thread_info=thread_info,
+                    config_mgr=config_mgr,
+                )
                 if browser_ok:
                     return True
                 if log_queue:
-                    emit(log_queue, "Active browser email delivery did not succeed. Attempting fallback delivery...", logging.INFO)
+                    emit(log_queue, "Supplied browser email delivery did not succeed. Attempting fallback delivery...", logging.INFO)
             else:
                 if log_queue:
-                    emit(log_queue, "Supplied browser session is disconnected or inactive. Falling back to fresh headless browser / SMTP...", logging.INFO)
+                    emit(log_queue, "Supplied browser session is disconnected or inactive. Falling back to fresh headless browser...", logging.INFO)
 
-        # 3. Browser Gmail (Default / Auto / Fallback):
-        # Uses fresh headed browser with the account profile if account is available.
-        # (Headed browser ensures Google auth cookies and Gmail web compose function reliably).
+        # 3. Primary Delivery: Headless Browser Gmail
+        # For session starting email, in-session notifications, and session ending report:
+        # It must use a headless browser first.
+        headless_ok = False
         if account is not None:
-            browser_ok = cls.send_via_headless_browser_gmail(
-                account=account,
-                subject=report.generate_subject(),
-                body_text=report.generate_plain_text(),
-                html_content=report.generate_html_body(),
-                recipient_email=recipient,
-                bcc_email=bcc_email,
-                log_queue=log_queue,
-                email_description="session watch time report",
-                thread_url=report.thread_url or cls.last_thread_url,
-                thread_info=thread_info,
-                headless=False,
-            )
-            if browser_ok:
-                return True
+            try:
+                headless_ok = cls.send_via_headless_browser_gmail(
+                    account=account,
+                    subject=report.generate_subject(),
+                    body_text=report.generate_plain_text(),
+                    html_content=report.generate_html_body(),
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    email_description="session watch time report",
+                    thread_url=report.thread_url or cls.last_thread_url,
+                    thread_info=thread_info,
+                    headless=True,
+                    is_reporting=True,
+                    config_mgr=config_mgr,
+                )
+                if headless_ok:
+                    return True
+                if log_queue:
+                    emit(log_queue, "Headless browser email delivery was not successful. Falling back to main window without going headless...", logging.INFO)
+            except Exception as exc:
+                if log_queue:
+                    emit(log_queue, f"Headless browser email delivery encountered an issue: {_clean_error_msg(exc)}. Falling back to main window without going headless...", logging.WARNING)
 
-        # Fallback to driver if alive and not yet attempted
-        if driver is not None:
+        # 4. Fallback: Main Window without going headless
+        # If there is an issue using headless browser, try opening the main window and sending using the main window without going headless.
+        # 4a. If an active main window browser driver is supplied and alive, try using it:
+        active_main = main_driver
+        if active_main is not None and active_main is not driver:
             from .driver import is_driver_alive
-            if is_driver_alive(driver):
-                return cls.send_via_browser_gmail(driver, report, recipient, bcc_email=bcc_email, log_queue=log_queue, thread_info=thread_info)
+            if is_driver_alive(active_main):
+                if log_queue:
+                    emit(log_queue, "Attempting email delivery via active main browser window...", logging.INFO)
+                browser_ok = cls.send_via_browser_gmail(
+                    active_main,
+                    report,
+                    recipient,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    thread_info=thread_info,
+                    config_mgr=config_mgr,
+                )
+                if browser_ok:
+                    return True
+                if log_queue:
+                    emit(log_queue, "Active main browser window email delivery did not succeed.", logging.WARNING)
 
-        # Fallback to SMTP if creds available
+        # 4b. Open the main window (headed browser, headless=False) to deliver the email:
+        if account is not None:
+            try:
+                from .driver import is_driver_alive
+                has_active_main = active_main is not None and is_driver_alive(active_main)
+                headed_ok = cls.send_via_headless_browser_gmail(
+                    account=account,
+                    subject=report.generate_subject(),
+                    body_text=report.generate_plain_text(),
+                    html_content=report.generate_html_body(),
+                    recipient_email=recipient,
+                    bcc_email=bcc_email,
+                    log_queue=log_queue,
+                    email_description="session watch time report (headed main window fallback)",
+                    thread_url=report.thread_url or cls.last_thread_url,
+                    thread_info=thread_info,
+                    headless=False,
+                    is_reporting=True if has_active_main else False,
+                    config_mgr=config_mgr,
+                )
+                if headed_ok:
+                    return True
+            except Exception as exc:
+                if log_queue:
+                    emit(log_queue, f"Main window email delivery error: {_clean_error_msg(exc)}", logging.WARNING)
+
+        # 5. Final Fallback: SMTP if creds available
         if has_smtp_creds:
+            if log_queue:
+                emit(log_queue, "Falling back to SMTP email delivery...", logging.INFO)
             return cls.send_via_smtp(
                 report=report,
                 recipient_email=recipient,
@@ -2207,6 +2490,8 @@ class EmailReporter:
                 log_queue=log_queue,
                 thread_info=thread_info,
             )
+
+        return False
 
         if log_queue:
             emit(

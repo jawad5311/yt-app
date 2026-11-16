@@ -133,6 +133,7 @@ class ProfileLock:
     """Acquires exclusive cross-thread and cross-process ownership of a profile directory."""
 
     _thread_locks: Dict[Path, threading.Lock] = {}
+    _thread_lock_owners: Dict[Path, threading.Thread] = {}
     _thread_locks_guard = threading.Lock()
 
     def __init__(self, profile_dir: Path):
@@ -151,6 +152,12 @@ class ProfileLock:
             return True
 
         with self._thread_locks_guard:
+            prev_owner = self._thread_lock_owners.get(self.profile_dir)
+            if prev_owner is not None and not prev_owner.is_alive():
+                # Previous owner thread terminated without releasing lock! Reclaim cleanly.
+                self._thread_locks[self.profile_dir] = threading.Lock()
+                self._thread_lock_owners.pop(self.profile_dir, None)
+
             if self.profile_dir not in self._thread_locks:
                 self._thread_locks[self.profile_dir] = threading.Lock()
             self._thread_lock = self._thread_locks[self.profile_dir]
@@ -159,9 +166,20 @@ class ProfileLock:
         wait_arg = timeout if blocking else -1
         acquired_thread = self._thread_lock.acquire(blocking=blocking, timeout=wait_arg)
         if not acquired_thread:
-            raise ProfileBusyError(
-                f"Profile '{self.profile_dir.name}' is currently in use by another session in this application."
-            )
+            with self._thread_locks_guard:
+                prev_owner = self._thread_lock_owners.get(self.profile_dir)
+                if prev_owner is not None and not prev_owner.is_alive():
+                    self._thread_locks[self.profile_dir] = threading.Lock()
+                    self._thread_lock = self._thread_locks[self.profile_dir]
+                    self._thread_lock_owners.pop(self.profile_dir, None)
+                    acquired_thread = self._thread_lock.acquire(blocking=False)
+            if not acquired_thread:
+                raise ProfileBusyError(
+                    f"Profile '{self.profile_dir.name}' is currently in use by another session in this application."
+                )
+
+        with self._thread_locks_guard:
+            self._thread_lock_owners[self.profile_dir] = threading.current_thread()
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -174,6 +192,8 @@ class ProfileLock:
                 except OSError as exc:
                     self._file_handle.close()
                     self._file_handle = None
+                    with self._thread_locks_guard:
+                        self._thread_lock_owners.pop(self.profile_dir, None)
                     self._thread_lock.release()
                     raise ProfileBusyError(
                         f"Profile '{self.profile_dir.name}' is currently locked by another application instance."
@@ -185,6 +205,8 @@ class ProfileLock:
                 except (OSError, IOError) as exc:
                     self._file_handle.close()
                     self._file_handle = None
+                    with self._thread_locks_guard:
+                        self._thread_lock_owners.pop(self.profile_dir, None)
                     self._thread_lock.release()
                     raise ProfileBusyError(
                         f"Profile '{self.profile_dir.name}' is currently locked by another application instance."
@@ -197,6 +219,8 @@ class ProfileLock:
             self.is_locked = True
             return True
         except Exception:
+            with self._thread_locks_guard:
+                self._thread_lock_owners.pop(self.profile_dir, None)
             if self._file_handle and not self._file_handle.closed:
                 try:
                     self._file_handle.close()
@@ -204,7 +228,10 @@ class ProfileLock:
                     pass
                 self._file_handle = None
             if self._thread_lock and self._thread_lock.locked():
-                self._thread_lock.release()
+                try:
+                    self._thread_lock.release()
+                except Exception:
+                    pass
             raise
 
     def release(self) -> None:
@@ -233,6 +260,8 @@ class ProfileLock:
                     pass
                 self._file_handle = None
         finally:
+            with self._thread_locks_guard:
+                self._thread_lock_owners.pop(self.profile_dir, None)
             if self._thread_lock and self._thread_lock.locked():
                 try:
                     self._thread_lock.release()

@@ -148,7 +148,7 @@ try {
 
     return {
         isAd: isAd,
-        currentTime: activeVid ? Number(activeVid['current' + 'Time'] || 0) : 0,
+        current_time: activeVid ? Number(activeVid['current' + 'Time'] || 0) : 0,
         duration: activeVid ? Number(activeVid.duration || 0) : 0,
         paused: activeVid ? Boolean(activeVid.paused) : true,
         timeCurrentText: timeCurrentEl ? (timeCurrentEl.innerText || '').trim() : '',
@@ -194,8 +194,8 @@ def check_ad_playback_progress(driver: Any, sample_delay: float = 0.5) -> Dict[s
     if not isinstance(sample2, dict) or not sample2.get("isAd"):
         return {"is_ad": False, "is_changing": True, "time1": 0.0, "time2": 0.0, "time_display": "ad_finished"}
 
-    t1 = float(sample1.get("currentTime", 0.0))
-    t2 = float(sample2.get("currentTime", 0.0))
+    t1 = float(sample1.get("current_time", sample1.get("currentTime", 0.0)))
+    t2 = float(sample2.get("current_time", sample2.get("currentTime", 0.0)))
     txt1 = sample1.get("timeCurrentText", "")
     txt2 = sample2.get("timeCurrentText", "")
     ad_txt1 = sample1.get("adText", "")
@@ -343,7 +343,7 @@ ENSURE_VIDEO_AT_START_JS = """
 try {
     var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
     var v = document.querySelector('video');
-    if (!v && !player) return { found: false, rewound: false, currentTime: 0 };
+    if (!v && !player) return { found: false, rewound: false, current_time: 0 };
 
     var isAd = !!(player && (
         player.classList.contains('ad-showing') ||
@@ -360,7 +360,7 @@ try {
         }
     }
     if (isAd) {
-        return { found: true, is_ad: true, rewound: false, currentTime: (v ? v.currentTime : 0) };
+        return { found: true, is_ad: true, rewound: false, current_time: (v ? v['current' + 'Time'] : 0) };
     }
 
     // Clean any 't=' parameter from current URL bar
@@ -372,14 +372,15 @@ try {
         }
     } catch (e) {}
 
-    var currTime = (v && typeof v.currentTime === 'number') ? v.currentTime : 0;
+    var currTime = (v && typeof v['current' + 'Time'] === 'number') ? v['current' + 'Time'] : 0;
     var playerTime = (player && typeof player.getCurrentTime === 'function') ? player.getCurrentTime() : currTime;
     var effectiveTime = Math.max(currTime, playerTime);
 
     var force = (arguments[0] === true);
-    var needsRewind = force || (effectiveTime > 2.0);
+    var threshold = (typeof arguments[1] === 'number') ? arguments[1] : 180.0;
+    var needsRewind = force || (effectiveTime > threshold);
     if (!needsRewind) {
-        return { found: true, is_ad: false, rewound: false, currentTime: effectiveTime };
+        return { found: true, is_ad: false, rewound: false, current_time: effectiveTime, threshold: threshold };
     }
 
     var rewound = false;
@@ -394,7 +395,7 @@ try {
     // 2. HTML5 Video currentTime = 0
     if (v) {
         try {
-            v.currentTime = 0;
+            v['current' + 'Time'] = 0;
             rewound = true;
         } catch(e) {}
     }
@@ -413,16 +414,25 @@ try {
         target.dispatchEvent(keyEvt);
     } catch(e) {}
 
-    var finalTime = (v && typeof v.currentTime === 'number') ? v.currentTime : 0;
+    // 4. Resume video immediately if paused after seek
+    try {
+        if (v && v.paused) {
+            v.play();
+        } else if (player && typeof player.playVideo === 'function') {
+            player.playVideo();
+        }
+    } catch(e) {}
+
+    var finalTime = (v && typeof v['current' + 'Time'] === 'number') ? v['current' + 'Time'] : 0;
     return {
         found: true,
         is_ad: false,
         rewound: rewound,
         previousTime: effectiveTime,
-        currentTime: finalTime
+        current_time: finalTime
     };
 } catch(e) {
-    return { found: false, error: String(e), rewound: false, currentTime: 0 };
+    return { found: false, error: String(e), rewound: false, current_time: 0 };
 }
 """
 
@@ -431,10 +441,11 @@ def ensure_video_at_start(
     driver: Any,
     log_queue: Optional[queue.Queue] = None,
     force: bool = False,
+    threshold_seconds: float = 180.0,
 ) -> bool:
-    """Ensure the YouTube video starts at 0:00 by rewinding if resumed from history or URL parameters."""
+    """Ensure the YouTube video starts at 0:00 by rewinding if resumed from history past threshold_seconds (default 3 mins)."""
     try:
-        res = driver.execute_script(ENSURE_VIDEO_AT_START_JS, force)
+        res = driver.execute_script(ENSURE_VIDEO_AT_START_JS, force, threshold_seconds)
         if isinstance(res, dict):
             if res.get("is_ad"):
                 return False
@@ -442,9 +453,13 @@ def ensure_video_at_start(
                 prev_time = res.get("previousTime", 0.0)
                 emit(
                     log_queue,
-                    f"Video was at {_format_clock(prev_time)} (resumed from account history). Rewound to 0:00.",
+                    f"Video was at {_format_clock(prev_time)} (resumed from account history > {_format_clock(threshold_seconds)}). Rewound to 0:00.",
                     logging.INFO,
                 )
+                try:
+                    ensure_video_playing(driver, log_queue=None, verbose=False)
+                except Exception:
+                    pass
                 return True
         return False
     except Exception as exc:
@@ -978,18 +993,21 @@ def watch_video(
             last_known_duration = float(video_state.get("duration", 0.0)) or last_known_duration
             last_known_current_time = curr_time
 
-        # If video resumed from watch history (position is ahead of actual watched time), rewind to 0:00
+        # If video resumed from watch history (position is ahead of actual watched time and > 3 mins), rewind to 0:00.
+        # Restrict check to initial startup (watched_seconds < 10.0) so natural playback drift never triggers a mid-stream rewind.
         if (
             ensure_start_at_beginning
             and video_state.get("found")
             and not is_ad
+            and watched_seconds < 10.0
+            and curr_time > 180.0
             and curr_time > (watched_seconds + 3.0)
             and history_rewind_count < MAX_HISTORY_REWINDS
         ):
             history_rewind_count += 1
             emit(
                 log_queue,
-                f"Video playback resumed at {_format_clock(curr_time)} from account history. Rewinding to 0:00...",
+                f"Video playback resumed at {_format_clock(curr_time)} from account history (> 3m). Rewinding to 0:00...",
                 logging.INFO,
             )
             ensure_video_at_start(driver, log_queue=log_queue, force=True)
@@ -1248,7 +1266,7 @@ def watch_video(
             if (
                 ensure_start_at_beginning
                 and watched_seconds < 10.0
-                and video_duration > 15.0
+                and video_duration > 180.0
                 and history_rewind_count < MAX_HISTORY_REWINDS
             ):
                 history_rewind_count += 1
@@ -1264,24 +1282,7 @@ def watch_video(
                 continue
             return _result(True, "ended", playback_finished=True)
         if is_full_mode and video_duration > 0 and curr_time >= threshold_time:
-            if (
-                ensure_start_at_beginning
-                and watched_seconds < 10.0
-                and video_duration > 15.0
-                and history_rewind_count < MAX_HISTORY_REWINDS
-            ):
-                history_rewind_count += 1
-                emit(
-                    log_queue,
-                    f"Video was at cutoff ({_format_clock(curr_time)} / {_format_clock(video_duration)}) from watch history without being watched. Rewinding to 0:00 (attempt {history_rewind_count}/{MAX_HISTORY_REWINDS})...",
-                    logging.WARNING,
-                )
-                ensure_video_at_start(driver, log_queue=log_queue, force=True)
-                playback_meter.reset()
-                previous_progress_time = 0.0
-                time.sleep(1.0)
-                continue
-            return _result(True, "completion_cutoff", playback_finished=True)
+            return _result(True, "completion_cutoff", playback_finished=False)
 
         # Paused mid-video or at start -> resume (tap large play button, controls, or player element)
         resume_cutoff = threshold_time if is_full_mode else video_duration

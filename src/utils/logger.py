@@ -131,31 +131,57 @@ def stop_session_logging() -> Optional[Path]:
         return _CURRENT_SESSION_FILE
 
 
+def is_session_logging_active() -> bool:
+    """Return True if session logging is currently active (a session is running)."""
+    with _SESSION_LOCK:
+        return _CURRENT_SESSION_HANDLER is not None
+
+
+def get_most_recent_session_log_file(log_dir: Optional[Path] = None) -> Optional[Path]:
+    """Return path to the most recent completed or active session log file on disk."""
+    try:
+        s_dir = get_sessions_dir(log_dir)
+        files = sorted(s_dir.glob("session_*.log"), key=lambda p: (p.name, p.stat().st_mtime))
+        if files:
+            return files[-1]
+        if log_dir is None:
+            alt_dir = get_project_root() / "sessions"
+            if alt_dir.exists() and alt_dir != s_dir:
+                files2 = sorted(alt_dir.glob("session_*.log"), key=lambda p: (p.name, p.stat().st_mtime))
+                if files2:
+                    return files2[-1]
+    except Exception:
+        pass
+    return None
+
+
 def get_current_session_log_file(log_dir: Optional[Path] = None) -> Optional[Path]:
-    """Return path to active or most recent session log file."""
+    """Return path to active session log file if running, or the most recent session log file if idle."""
     global _CURRENT_SESSION_FILE
     with _SESSION_LOCK:
-        if log_dir is None:
-            if _CURRENT_SESSION_FILE and _CURRENT_SESSION_FILE.exists():
+        # If a session is currently running, return the active session's log file
+        if _CURRENT_SESSION_HANDLER is not None and _CURRENT_SESSION_FILE and _CURRENT_SESSION_FILE.exists():
+            if log_dir is None:
                 return _CURRENT_SESSION_FILE
-            s_dir = get_sessions_dir()
-        else:
-            s_dir = get_sessions_dir(log_dir)
-            if _CURRENT_SESSION_FILE and _CURRENT_SESSION_FILE.exists():
-                try:
-                    if _CURRENT_SESSION_FILE.resolve().is_relative_to(s_dir.resolve()):
-                        return _CURRENT_SESSION_FILE
-                except Exception:
-                    pass
-        files = sorted(s_dir.glob("session_*.log"), key=lambda p: (p.stat().st_mtime, p.name))
-        if files:
-            _CURRENT_SESSION_FILE = files[-1]
-            return _CURRENT_SESSION_FILE
-        return None
+            try:
+                s_dir = get_sessions_dir(log_dir)
+                if _CURRENT_SESSION_FILE.resolve().is_relative_to(s_dir.resolve()):
+                    return _CURRENT_SESSION_FILE
+            except Exception:
+                pass
+
+    # If no session is running (or active file missing), return the most recent session log file
+    recent_file = get_most_recent_session_log_file(log_dir)
+    if recent_file:
+        with _SESSION_LOCK:
+            _CURRENT_SESSION_FILE = recent_file
+        return recent_file
+
+    return None
 
 
 def read_current_session_logs(log_dir: Optional[Path] = None) -> str:
-    """Read and return all logs of the current session stored in the file."""
+    """Read and return all logs of the current session (if running) or most recent session (if idle)."""
     with _SESSION_LOCK:
         if _CURRENT_SESSION_HANDLER is not None:
             try:
@@ -164,13 +190,43 @@ def read_current_session_logs(log_dir: Optional[Path] = None) -> str:
                 pass
 
     file_path = get_current_session_log_file(log_dir)
-    if not file_path or not file_path.exists():
-        return ""
+    if file_path and file_path.exists():
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+            if content.strip():
+                return content
+        except Exception:
+            pass
 
+    # Fallback if no session files exist: check automation.log for the most recent session
     try:
-        return file_path.read_text(encoding="utf-8", errors="replace")
+        base_dir = log_dir if log_dir is not None else (get_project_root() / "logs")
+        auto_log = base_dir / "automation.log"
+        if not auto_log.exists():
+            auto_log = get_project_root() / "automation.log"
+        if auto_log.exists():
+            raw_text = auto_log.read_text(encoding="utf-8", errors="replace")
+            if raw_text.strip():
+                lines = raw_text.splitlines()
+                last_idx = -1
+                for idx, line in enumerate(lines):
+                    for marker in [
+                        "=== Starting YouTube Automation Session",
+                        "=== Starting Watch Session for",
+                        "Starting automation session for account:",
+                        "=== Starting Browsing Session",
+                        "=== Starting Shorts Cycle",
+                    ]:
+                        if marker in line:
+                            last_idx = idx
+                            break
+                if last_idx >= 0:
+                    return "\n".join(lines[last_idx:])
+                return raw_text
     except Exception:
-        return ""
+        pass
+
+    return ""
 
 
 def emit(log_queue: Optional[queue.Queue], message: str, level: int = logging.INFO) -> None:

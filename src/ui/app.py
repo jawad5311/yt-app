@@ -1337,6 +1337,21 @@ class YTBotApp(tk.Tk):
                     else:
                         self._shorts_queue_needs_refresh = True
             self.refresh_watch_stats()
+        elif kind == "update_task_target_multiplier" and len(event) == 3:
+            task_dict, new_mult = event[1], float(event[2])
+            queue_view = self.views.get("queue")
+            if queue_view is not None:
+                vid_key = resolve_video_key(VideoTask.from_dict(task_dict), task_dict.get("url", ""))
+                for t in queue_view.video_tasks:
+                    if resolve_video_key(t, t.url) == vid_key:
+                        t.target_multiplier = new_mult
+                        break
+                queue_view.save_queue()
+                if getattr(self, "current_view_name", "") == "queue":
+                    queue_view.refresh_list()
+                else:
+                    self._queue_needs_refresh = True
+            self.refresh_watch_stats()
         elif kind == "channel_watch_time_updated":
             self.refresh_watch_stats()
         elif kind == "status" and len(event) == 3:
