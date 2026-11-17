@@ -2614,6 +2614,7 @@ class WatchingWorker:
         ensure_video_playing(self.driver, log_queue=self.log_queue)
 
         if not self._check_account_login_before_play(content_type="random video", content_title=title):
+            self._last_login_verification_failed = True
             return False
         self._report_status(f"Watching random video ({duration_seconds:.0f}s): {title}", "info")
 
@@ -6068,6 +6069,22 @@ class WatchingWorker:
                         channel_watch_counts=channel_buffer_counts,
                         channel_consecutive_counts=channel_buffer_counts,
                     )
+                    if getattr(self, "_last_login_verification_failed", False):
+                        emit(
+                            self.log_queue,
+                            "[Manual Action Required] Buffer video playback halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
+                            logging.WARNING,
+                        )
+                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                        if woke_up:
+                            self._last_login_verification_failed = False
+                            cycle_long_vids_watched = 0
+                            suggested_miss_count = 0
+                            consecutive_target_watched = 0
+                            channel_buffer_counts.clear()
+                            continue
+                        else:
+                            break
                     if buffered:
                         consecutive_target_watched = 0
                         channel_buffer_counts.clear()
@@ -6290,6 +6307,23 @@ class WatchingWorker:
                     )
                     self._run_shorts_cycle(session_watched_keys=session_watched_keys)
 
+                    if getattr(self, "_last_login_verification_failed", False):
+                        emit(
+                            self.log_queue,
+                            "[Manual Action Required] Shorts cycle halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
+                            logging.WARNING,
+                        )
+                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                        if woke_up:
+                            self._last_login_verification_failed = False
+                            cycle_long_vids_watched = 0
+                            suggested_miss_count = 0
+                            consecutive_target_watched = 0
+                            channel_buffer_counts.clear()
+                            continue
+                        else:
+                            break
+
                     # Cycle completed! Reset counter and pick new random target of 3 to 5 long videos
                     cycle_long_vids_watched = 0
                     target_long_vids_cycle = random.randint(3, 5)
@@ -6386,6 +6420,22 @@ class WatchingWorker:
                             logging.INFO,
                         )
                         self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+                        if getattr(self, "_last_login_verification_failed", False):
+                            emit(
+                                self.log_queue,
+                                "[Manual Action Required] Shorts cycle halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
+                                logging.WARNING,
+                            )
+                            woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                            if woke_up:
+                                self._last_login_verification_failed = False
+                                cycle_long_vids_watched = 0
+                                suggested_miss_count = 0
+                                consecutive_target_watched = 0
+                                channel_buffer_counts.clear()
+                                continue
+                            else:
+                                break
                         cycle_long_vids_watched = 0
                         target_long_vids_cycle = random.randint(3, 5)
                         suggested_miss_count = 0
@@ -6753,6 +6803,7 @@ class WatchingWorker:
             content_title=content_title,
         )
         if not ok and not self.stop_event.is_set():
+            self._last_login_verification_failed = True
             self._report_status(f"Manual action needed on this PC for {account.email}.", "error")
         return ok
 

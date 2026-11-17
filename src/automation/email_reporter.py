@@ -624,6 +624,7 @@ class EmailReporter:
     last_message_id: Optional[str] = None
     _last_login_challenge_unresolved: bool = False
     _recent_alert_times: Dict[tuple, float] = {}
+    _recent_alert_attempt_times: Dict[tuple, float] = {}
 
     @classmethod
     def reset_session_thread(cls) -> None:
@@ -632,6 +633,7 @@ class EmailReporter:
         cls.last_thread_url = None
         cls._last_login_challenge_unresolved = False
         cls._recent_alert_times.clear()
+        cls._recent_alert_attempt_times.clear()
 
     @classmethod
     def send_via_smtp(
@@ -852,7 +854,8 @@ class EmailReporter:
                             account,
                             log_queue=log_queue,
                             config_mgr=config_mgr,
-                            wait_for_challenge_resolution=wait_for_challenge_resolution,
+                            alert_callback=lambda *a, **k: None,
+                            wait_for_challenge_resolution=False if (getattr(driver, "_is_headless", False) or getattr(driver, "_is_reporting", False) or not wait_for_challenge_resolution) else wait_for_challenge_resolution,
                         )
                         if login_ok:
                             if log_queue:
@@ -1330,6 +1333,8 @@ class EmailReporter:
                                 account,
                                 log_queue=log_queue,
                                 config_mgr=config_mgr,
+                                alert_callback=lambda *a, **k: None,
+                                wait_for_challenge_resolution=False if (getattr(driver, "_is_headless", False) or getattr(driver, "_is_reporting", False)) else True,
                             )
                             if not login_ok:
                                 cls._last_login_challenge_unresolved = True
@@ -1890,14 +1895,24 @@ class EmailReporter:
         os_platform = f"{platform.system()} {platform.release()}"
         effective_system_name = system_name or pc_hostname
 
-        # Deduplication / throttling: prevent flooding if identical alert was sent recently
+        # Deduplication / throttling: prevent flooding if identical alert was sent recently or attempted recently
         alert_key = (str(email_addr).lower(), str(alert_type).lower())
         now_ts = time.time()
         last_sent = cls._recent_alert_times.get(alert_key, 0.0)
+        last_attempt = cls._recent_alert_attempt_times.get(alert_key, 0.0)
+
         if not force and (now_ts - last_sent < 120.0):
             if log_queue:
                 emit(log_queue, f"Alert email throttled ({alert_type} for {email_addr} sent recently).", logging.DEBUG)
             return True
+
+        # Throttle repeated failed attempts within 180 seconds to avoid launching headless Chrome in an infinite loop
+        if not force and (now_ts - last_attempt < 180.0):
+            if log_queue:
+                emit(log_queue, f"Alert email dispatch throttled ({alert_type} for {email_addr} attempted {int(now_ts - last_attempt)}s ago; cooling down).", logging.DEBUG)
+            return False
+
+        cls._recent_alert_attempt_times[alert_key] = now_ts
 
         if not custom_subject:
             start_dt = start_time or alert_dt
@@ -2061,15 +2076,41 @@ class EmailReporter:
                     emit(log_queue, f"Headless alert email delivery error: {_clean_error_msg(exc)}", logging.WARNING)
 
         # 4. Fallback: Active browser session if already available and not dedicated reporting driver
-        if driver is not None and not getattr(driver, "_is_reporting", False):
-            from .driver import is_driver_alive
-            if is_driver_alive(driver):
-                if target_thread_url:
-                    reply_ok = cls._deliver_via_gmail_thread_reply(
+        # NEVER use the active watching browser if this alert is about a login issue, manual challenge,
+        # or if the active browser is currently at accounts.google.com/challenge screen! Navigating the active
+        # browser away disrupts the user's manual CAPTCHA resolution and creates an infinite loop.
+        is_login_or_challenge_alert = any(
+            k in alert_type.lower()
+            for k in ("challenge", "captcha", "login", "sign-in", "signed in", "signed out", "wrong account", "timed out", "unresolved")
+        )
+        if driver is not None and not getattr(driver, "_is_reporting", False) and not is_login_or_challenge_alert:
+            current_u = (getattr(driver, "current_url", "") or "").lower()
+            if not any(k in current_u for k in ("accounts.google.com", "sorry/index", "challenge", "captcha", "2step")):
+                from .driver import is_driver_alive
+                if is_driver_alive(driver):
+                    if target_thread_url:
+                        reply_ok = cls._deliver_via_gmail_thread_reply(
+                            driver=driver,
+                            plain_text=plain_text,
+                            thread_url=target_thread_url,
+                            subject=subject,
+                            recipient_email=recipient,
+                            bcc_email=bcc_email,
+                            log_queue=log_queue,
+                            email_description=f"alert ({alert_type})",
+                            thread_info=thread_info,
+                            account=account,
+                            config_mgr=config_mgr,
+                        )
+                        if reply_ok:
+                            cls._recent_alert_times[alert_key] = now_ts
+                            if log_queue:
+                                emit(log_queue, f"Dispatched alert notification to '{recipient}' under session thread ({alert_type}).")
+                            return True
+                    comp_ok = cls._deliver_via_gmail_compose(
                         driver=driver,
-                        plain_text=plain_text,
-                        thread_url=target_thread_url,
                         subject=subject,
+                        plain_text=plain_text,
                         recipient_email=recipient,
                         bcc_email=bcc_email,
                         log_queue=log_queue,
@@ -2078,28 +2119,14 @@ class EmailReporter:
                         account=account,
                         config_mgr=config_mgr,
                     )
-                    if reply_ok:
+                    if comp_ok:
                         cls._recent_alert_times[alert_key] = now_ts
                         if log_queue:
                             emit(log_queue, f"Dispatched alert notification to '{recipient}' via active browser ({alert_type}).")
                         return True
-                comp_ok = cls._deliver_via_gmail_compose(
-                    driver=driver,
-                    subject=subject,
-                    plain_text=plain_text,
-                    recipient_email=recipient,
-                    bcc_email=bcc_email,
-                    log_queue=log_queue,
-                    email_description=f"alert ({alert_type})",
-                    thread_info=thread_info,
-                    account=account,
-                    config_mgr=config_mgr,
-                )
-                if comp_ok:
-                    cls._recent_alert_times[alert_key] = now_ts
-                    if log_queue:
-                        emit(log_queue, f"Dispatched alert notification to '{recipient}' via active browser ({alert_type}).")
-                    return True
+        elif driver is not None and not getattr(driver, "_is_reporting", False) and is_login_or_challenge_alert:
+            if log_queue:
+                emit(log_queue, f"Skipping active browser fallback for '{alert_type}' to keep visible challenge on screen for user resolution.", logging.DEBUG)
 
         # 5. Final Fallback: SMTP if creds available
         if has_smtp:

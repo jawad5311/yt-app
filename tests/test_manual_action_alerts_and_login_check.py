@@ -401,3 +401,104 @@ class TestWatchingWorkerLoginVerification:
         assert res.completed is False
         assert res.reason == "login_verification_failed"
         assert res.interrupted is True
+
+    def test_check_account_login_before_play_flags_failure(self, tmp_path):
+        from src.automation.watching_worker import WatchingWorker
+
+        cfg = ConfigManager(tmp_path / "settings.json")
+        worker = WatchingWorker.__new__(WatchingWorker)
+        worker.config_mgr = cfg
+        worker.account = Account(email="test@gmail.com", password="pwd")
+        worker.stop_event = threading.Event()
+        worker.log_queue = queue.Queue()
+        worker.driver = MagicMock()
+        worker._last_login_verification_failed = False
+        worker._report_status = MagicMock()
+
+        with patch("src.automation.watching_worker.check_account_logged_in", return_value=False):
+            ok = worker._check_account_login_before_play("video", "Test Title")
+
+        assert ok is False
+        assert worker._last_login_verification_failed is True
+        worker._report_status.assert_called_once()
+
+
+class TestLoginChallengeLoopPrevention:
+    def test_failed_alert_attempt_throttled(self, tmp_path):
+        """Verify that when alert delivery fails, immediate retries are throttled to prevent browser thrashing."""
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "EmailReportingEnabled": True,
+            "ReportEmailMethod": "Auto",
+            "ReportRecipientEmail": "admin@example.com",
+            "SmtpPassword": "",  # no SMTP
+        })
+        account = Account(email="test.user@gmail.com", password="pwd")
+
+        # Mock headless browser delivery failing
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=False) as mock_headless:
+            # First attempt: should try headless delivery and fail
+            res1 = EmailReporter.send_alert_notification(
+                account=account,
+                alert_type="Manual Action Required - Google Challenge / CAPTCHA",
+                message_details="Google challenge on PC",
+                config_mgr=cfg,
+            )
+            assert res1 is False
+            assert mock_headless.call_count == 1
+
+            # Second attempt immediately after: should be throttled without launching headless browser
+            res2 = EmailReporter.send_alert_notification(
+                account=account,
+                alert_type="Manual Action Required - Google Challenge / CAPTCHA",
+                message_details="Google challenge on PC",
+                config_mgr=cfg,
+            )
+            assert res2 is False
+            assert mock_headless.call_count == 1  # Not called again!
+
+    def test_active_driver_fallback_skipped_for_login_challenges(self, tmp_path):
+        """Active driver must not be navigated to Gmail compose when an alert is about a login challenge."""
+        cfg = ConfigManager(tmp_path / "settings.json")
+        cfg.update_settings({
+            "EmailReportingEnabled": True,
+            "ReportEmailMethod": "Auto",
+            "ReportRecipientEmail": "admin@example.com",
+            "SmtpPassword": "",
+        })
+        account = Account(email="active.user@gmail.com", password="pwd")
+        active_driver = MagicMock()
+        active_driver._is_reporting = False
+        active_driver._is_headless = False
+        active_driver.current_url = "https://accounts.google.com/signin/challenge/pwd"
+
+        with patch.object(EmailReporter, "send_via_headless_browser_gmail", return_value=False), \
+             patch.object(EmailReporter, "_deliver_via_gmail_compose") as mock_compose:
+            ok = EmailReporter.send_alert_notification(
+                account=account,
+                alert_type="Manual Action Required - Google Challenge / CAPTCHA",
+                message_details="Google CAPTCHA",
+                config_mgr=cfg,
+                driver=active_driver,
+            )
+            assert ok is False
+            mock_compose.assert_not_called()
+
+    def test_account_chooser_fallback_to_use_another_account(self):
+        """When account tile was already clicked multiple times without advancing, click 'Use another account'."""
+        from src.automation.login import _handle_account_chooser
+
+        driver = MagicMock()
+        driver.current_url = "https://accounts.google.com/AccountChooser"
+        driver.page_source = "<html><body>Choose an account</body></html>"
+
+        use_another_btn = MagicMock()
+        use_another_btn.is_displayed.return_value = True
+        driver.find_elements.return_value = [use_another_btn]
+
+        account = Account(email="stuck.user@gmail.com", password="pwd")
+        res = _handle_account_chooser(driver, account, attempt_count=2)
+
+        assert res is True
+        use_another_btn.click.assert_called_once()
+

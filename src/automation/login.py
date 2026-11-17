@@ -209,6 +209,7 @@ def _handle_account_chooser(
     driver: Any,
     account: Account,
     log_queue: Optional[queue.Queue] = None,
+    attempt_count: int = 0,
 ) -> bool:
     """If Google displays the 'Choose an account' screen, select matching tile or 'Use another account'."""
     try:
@@ -219,6 +220,30 @@ def _handle_account_chooser(
 
         emit(log_queue, f"Account chooser screen detected for {account.email}.")
         account_email_lower = account.email.lower()
+
+        # If previous attempts to click the saved account tile did not advance, try 'Use another account'
+        if attempt_count >= 2:
+            emit(
+                log_queue,
+                f"Saved account {account.email} tile did not advance after multiple clicks. Attempting 'Use another account'...",
+                logging.WARNING,
+            )
+            use_another = driver.find_elements(
+                By.XPATH,
+                "//*[contains(text(), 'Use another account') or contains(text(), 'Ein weiteres') or contains(., 'Use another account')] | //div[@id='identifierLink']",
+            )
+            for btn in use_another:
+                try:
+                    if btn.is_displayed():
+                        try:
+                            btn.click()
+                        except Exception:
+                            driver.execute_script("arguments[0].click();", btn)
+                        human_like_delay(2.0, 3.0)
+                        return True
+                except Exception:
+                    continue
+            return False
 
         account_xpath = (
             f"//*[@data-identifier='{account.email}'] | "
@@ -252,7 +277,23 @@ def _handle_account_chooser(
             try:
                 tile.click()
             except Exception:
-                driver.execute_script("arguments[0].click();", tile)
+                try:
+                    driver.execute_script("arguments[0].click();", tile)
+                except Exception:
+                    pass
+            try:
+                driver.execute_script(
+                    """
+                    var el = arguments[0];
+                    try {
+                        el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));
+                        el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));
+                    } catch(e) {}
+                    """,
+                    tile,
+                )
+            except Exception:
+                pass
             human_like_delay(2.0, 3.5)
             return True
 
@@ -493,6 +534,7 @@ def _perform_automated_login_steps(
     """Execute sequential automated sign-in steps (Account Chooser -> Confirm Identifier -> Email -> Password -> Prompts)."""
     max_steps = 6
     password_entered = False
+    account_chooser_attempts = 0
 
     for _ in range(max_steps):
         if stop_event is not None and stop_event.is_set():
@@ -530,10 +572,14 @@ def _perform_automated_login_steps(
 
         # 1. Account chooser
         if "accountchooser" in current_url or "choose an account" in page_source:
-            if _handle_account_chooser(driver, account, log_queue):
+            if _handle_account_chooser(driver, account, log_queue, attempt_count=account_chooser_attempts):
+                account_chooser_attempts += 1
                 action_taken = True
                 human_like_delay(2.0, 3.5)
                 continue
+            elif account_chooser_attempts >= 2:
+                # Could not advance even after trying 'Use another account'
+                break
 
         # 2. Confirm identifier screen
         if "confirmidentifier" in current_url or ("accounts.google.com" in current_url and "identifiernext" in page_source and "identifierid" not in page_source):
