@@ -874,23 +874,23 @@ def test_unknown_channel_short_scrolled_immediately_within_1_to_2_seconds():
 
     worker.scroll_to_next_short = MagicMock(side_effect=_mock_scroll)
 
-    with patch("src.automation.watching_worker.random.uniform", return_value=1.4) as mock_uniform, \
+    with patch("src.automation.watching_worker.random.uniform", return_value=0.55) as mock_uniform, \
          patch("src.automation.watching_worker.time.sleep") as mock_sleep, \
          patch("random.randint", return_value=5):
 
         worker._run_shorts_reel_loop(session_watched_keys=set())
 
-        # Verify it specifically sampled within 1 to 2 seconds
-        mock_uniform.assert_any_call(1.0, 2.0)
+        # Verify it specifically sampled within 1s (0.4 to 0.8)
+        mock_uniform.assert_any_call(0.4, 0.8)
         # Verify it called scroll_to_next_short
         assert worker.scroll_to_next_short.called
 
-        # Verify log output reflects immediate scrolling within 1 to 2 seconds
+        # Verify log output reflects immediate scrolling within 1s
         logged_messages = []
         while not worker.log_queue.empty():
             logged_messages.append(worker.log_queue.get_nowait())
         log_texts = [msg[1] if isinstance(msg, tuple) else str(msg) for msg in logged_messages]
-        assert any("Short from unknown channel 'Unknown Channel' found. Scrolling immediately within 1.4s" in t for t in log_texts)
+        assert any("Short is an ad or from unknown channel/handle 'Unknown Channel'. Scrolling immediately within 1s" in t for t in log_texts)
 
 
 def test_same_short_not_double_counted_when_scroll_delayed():
@@ -965,9 +965,8 @@ def test_scroll_to_next_short_does_not_rely_on_offset_parent():
 
     assert res is True
     assert len(executed_scripts) >= 1
-    script = executed_scripts[0]
-    assert "offsetParent" not in script
-    assert "getBoundingClientRect" in script
+    assert all("offsetParent" not in s for s in executed_scripts)
+    assert any("getBoundingClientRect" in s for s in executed_scripts)
 
 
 def test_match_home_short_matches_handle_against_display_name():

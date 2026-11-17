@@ -260,6 +260,9 @@ class DashboardView(ScrollableFrame):
         self.stop_row = self.btn_grid
         self.is_running = False
         self.is_paused = False
+        self._stop_countdown_active: bool = False
+        self._stop_countdown_remaining: int = 0
+        self._stop_countdown_timer_id = None
 
         def _on_primary_action():
             is_running = getattr(self, "is_running", False) or (
@@ -282,10 +285,27 @@ class DashboardView(ScrollableFrame):
                 hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True
             ):
                 return
-            flash_button_feedback(self.stop_btn, "Stopped", duration_ms=3000, original_text="⏹ Stop")
-            cmd = getattr(self.app_controller, "stop_automation", None)
-            if callable(cmd):
-                cmd()
+
+            # If countdown is active, this second click confirms stopping the session
+            if getattr(self, "_stop_countdown_active", False):
+                self._cancel_stop_countdown()
+                self._perform_stop_automation()
+                return
+
+            # First click: check if a long-form video from a targeted channel is currently playing
+            is_target_long = False
+            check_fn = getattr(self.app_controller, "is_playing_target_long_video", None)
+            if callable(check_fn):
+                try:
+                    is_target_long = check_fn()
+                except Exception:
+                    is_target_long = False
+
+            if is_target_long:
+                self._start_stop_countdown(seconds=5)
+            else:
+                self._cancel_stop_countdown()
+                self._perform_stop_automation()
 
         self.start_watching_btn = Button(
             self.btn_grid,
@@ -560,6 +580,7 @@ class DashboardView(ScrollableFrame):
             raise ValueError("Browsing target limit must be a valid positive integer (>= 1) or select Unlimited.")
 
     def set_running_state(self, is_running: bool, mode: str = "watching"):
+        self._cancel_stop_countdown()
         self.is_running = bool(is_running)
         if is_running:
             self.is_paused = False
@@ -716,3 +737,66 @@ class DashboardView(ScrollableFrame):
                     self._status_card_footer.configure(text="Active watch cycle")
                 except Exception:
                     pass
+
+    @property
+    def stop_countdown_active(self) -> bool:
+        """True if the 5-second stop confirmation countdown is currently active."""
+        return getattr(self, "_stop_countdown_active", False)
+
+    def _perform_stop_automation(self) -> None:
+        """Trigger session stop, feedback, and report delivery."""
+        flash_button_feedback(self.stop_btn, "Stopped", duration_ms=3000, original_text="⏹ Stop")
+        cmd = getattr(self.app_controller, "stop_automation", None)
+        if callable(cmd):
+            cmd()
+
+    def _start_stop_countdown(self, seconds: int = 5) -> None:
+        """Start the 5-second countdown on the stop button when stopping during target long video."""
+        self._cancel_stop_countdown()
+        self._stop_countdown_active = True
+        self._stop_countdown_remaining = seconds
+        self._update_stop_btn_countdown_text()
+        self._schedule_stop_countdown_tick()
+
+    def _update_stop_btn_countdown_text(self) -> None:
+        if hasattr(self, "stop_btn"):
+            sec = getattr(self, "_stop_countdown_remaining", 5)
+            self.stop_btn.configure(text=f"Click again to stop ({sec}s)")
+
+    def _schedule_stop_countdown_tick(self) -> None:
+        if not getattr(self, "_stop_countdown_active", False):
+            return
+        try:
+            self._stop_countdown_timer_id = self.after(1000, self._stop_countdown_tick)
+        except Exception:
+            self._stop_countdown_timer_id = None
+
+    def _stop_countdown_tick(self) -> None:
+        self._stop_countdown_timer_id = None
+        if not getattr(self, "_stop_countdown_active", False):
+            return
+        self._stop_countdown_remaining -= 1
+        if self._stop_countdown_remaining > 0:
+            self._update_stop_btn_countdown_text()
+            self._schedule_stop_countdown_tick()
+        else:
+            # Countdown window expired without a second click: cancel and restore normal Stop button
+            self._cancel_stop_countdown()
+            if hasattr(self, "stop_btn"):
+                self.stop_btn.configure(text="⏹ Stop")
+
+    def _cancel_stop_countdown(self) -> None:
+        """Cancel any active stop confirmation countdown and reset state."""
+        timer_id = getattr(self, "_stop_countdown_timer_id", None)
+        if timer_id:
+            try:
+                self.after_cancel(timer_id)
+            except Exception:
+                pass
+            self._stop_countdown_timer_id = None
+        self._stop_countdown_active = False
+        self._stop_countdown_remaining = 0
+
+    def destroy(self) -> None:
+        self._cancel_stop_countdown()
+        super().destroy()

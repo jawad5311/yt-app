@@ -7,17 +7,19 @@ from src.automation.watching_worker import WatchingWorker
 
 
 def test_is_unknown_channel_short():
-    # Unknown cases
+    # Unknown cases (no valid channel handle)
     assert WatchingWorker._is_unknown_channel_short(None, "Valid Title") is True
     assert WatchingWorker._is_unknown_channel_short("", "Valid Title") is True
     assert WatchingWorker._is_unknown_channel_short("Unknown", "Valid Title") is True
     assert WatchingWorker._is_unknown_channel_short("Unknown Channel", "Valid Title") is True
     assert WatchingWorker._is_unknown_channel_short("none", "Valid Title") is True
-    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", None) is True
-    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "") is True
-    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "Short") is True
-    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "Untargeted Short") is True
-    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "unknown") is True
+
+    # Channels with a channel handle are NOT ads, regardless of generic titles
+    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", None) is False
+    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "") is False
+    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "Short") is False
+    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "Untargeted Short") is False
+    assert WatchingWorker._is_unknown_channel_short("@ValidChannel", "unknown") is False
 
     # Actual known channel and title
     assert WatchingWorker._is_unknown_channel_short("@BOLNewsofficial", "Breaking News Pakistan") is False

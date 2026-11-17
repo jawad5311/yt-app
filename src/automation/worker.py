@@ -78,6 +78,20 @@ class AutomationWorker:
         self.reporting_driver: Optional[Any] = None
         self.reporting_thread: Optional[threading.Thread] = None
         self.has_started_automation = False
+        self.current_playback: Optional[Dict[str, Any]] = None
+
+    def is_playing_target_long_video(self) -> bool:
+        """Return True only if a long-form video from a targeted channel is currently playing."""
+        if self.stop_event.is_set():
+            return False
+        info = getattr(self, "current_playback", None)
+        if not info or not isinstance(info, dict):
+            return False
+        if not info.get("is_playing", False):
+            return False
+        if info.get("is_short", False):
+            return False
+        return bool(info.get("is_target_channel", False))
 
     # ------------------------------------------------------------------ events
 
@@ -366,36 +380,67 @@ class AutomationWorker:
                             outcome.error = "Manual action required on this PC"
                             self._report_status(f"Manual action required on this PC for {self.account.email}.", "error")
                             break
-                        result = watch_short(
-                            self.driver,
-                            stop_event=self.stop_event,
-                            log_queue=self.log_queue,
-                            pause_event=self.pause_event,
-                            should_stop_callback=_is_task_channel_disabled,
-                            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
-                            on_view_counted=_on_short_view_counted,
-                        )
+                        self.current_playback = {
+                            "is_playing": True,
+                            "is_short": True,
+                            "is_target_channel": True,
+                            "channel": ch_name,
+                            "title": task.title or "",
+                            "url": task.url or "",
+                        }
+                        try:
+                            result = watch_short(
+                                self.driver,
+                                stop_event=self.stop_event,
+                                log_queue=self.log_queue,
+                                pause_event=self.pause_event,
+                                should_stop_callback=_is_task_channel_disabled,
+                                on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                                on_view_counted=_on_short_view_counted,
+                            )
+                        finally:
+                            self.current_playback = None
                         outcome.runs = 0
                     else:
                         if not self._check_account_login_before_play(content_type="video", content_title=task.title or ""):
                             outcome.error = "Manual action required on this PC"
                             self._report_status(f"Manual action required on this PC for {self.account.email}.", "error")
                             break
-                        result = watch_video(
-                            self.driver,
-                            task.parse_duration_seconds(),
-                            log_queue=self.log_queue,
-                            stop_event=self.stop_event,
-                            full_timeout_seconds=self._full_video_timeout_seconds(),
-                            skip_ads=self.skip_ads,
-                            max_ad_seconds=self.max_ad_seconds,
-                            end_buffer_seconds=self._end_buffer_seconds(),
-                            enable_interactivity=enable_interactivity,
-                            interactivity_config=interactivity_cfg,
-                            pause_event=self.pause_event,
-                            should_stop_callback=_is_task_channel_disabled,
-                            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
-                        )
+                        is_target = True
+                        if ch_name and self.config_mgr:
+                            try:
+                                stored_chs = self.config_mgr.get_channels() or []
+                                target_names = {c.get("name", "").strip().lower() for c in stored_chs if c.get("enabled", True) and not c.get("archived", False)}
+                                if target_names:
+                                    is_target = ch_name.strip().lower() in target_names
+                            except Exception:
+                                pass
+                        self.current_playback = {
+                            "is_playing": True,
+                            "is_short": False,
+                            "is_target_channel": is_target,
+                            "channel": ch_name,
+                            "title": task.title or "",
+                            "url": task.url or "",
+                        }
+                        try:
+                            result = watch_video(
+                                self.driver,
+                                task.parse_duration_seconds(),
+                                log_queue=self.log_queue,
+                                stop_event=self.stop_event,
+                                full_timeout_seconds=self._full_video_timeout_seconds(),
+                                skip_ads=self.skip_ads,
+                                max_ad_seconds=self.max_ad_seconds,
+                                end_buffer_seconds=self._end_buffer_seconds(),
+                                enable_interactivity=enable_interactivity,
+                                interactivity_config=interactivity_cfg,
+                                pause_event=self.pause_event,
+                                should_stop_callback=_is_task_channel_disabled,
+                                on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                            )
+                        finally:
+                            self.current_playback = None
                     self.channel_tracker.set_active_channel(None)
                     outcome.watched_seconds += max(0.0, result.watched_seconds)
                     outcome.ad_seconds += max(0.0, result.ad_seconds)
@@ -1032,6 +1077,7 @@ class AutomationWorker:
     def stop(self) -> None:
         """Stop worker execution."""
         self.stop_event.set()
+        self.current_playback = None
         if self.dispatcher is not None:
             self.dispatcher.wake_all()
         if hasattr(self, "channel_tracker"):

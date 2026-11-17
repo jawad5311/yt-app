@@ -1215,6 +1215,16 @@ class YTBotApp(tk.Tk):
         else:
             self._update_close_button_state()
 
+    def is_playing_target_long_video(self) -> bool:
+        """Return True if any active worker is currently playing a long-form video from a targeted channel."""
+        if not getattr(self, "is_running", False):
+            return False
+        for worker in list(self.__dict__.get("active_workers", [])):
+            check_fn = getattr(worker, "is_playing_target_long_video", None)
+            if callable(check_fn) and check_fn():
+                return True
+        return False
+
     def stop_automation(self):
         if not self.is_running:
             self._update_close_button_state()
@@ -1520,7 +1530,7 @@ class YTBotApp(tk.Tk):
         """Dynamically enable or gray out the title bar close (X) button based on active task status."""
         is_busy = self.is_any_task_running()
         should_enable = not is_busy
-        if getattr(self, "_close_button_enabled", None) is not should_enable:
+        if self.__dict__.get("_close_button_enabled", None) is not should_enable:
             self._close_button_enabled = should_enable
             self._set_native_close_button_enabled(should_enable)
 

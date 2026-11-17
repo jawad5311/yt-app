@@ -1160,6 +1160,20 @@ class WatchingWorker:
         )
         self._logged_night_bypass_window_id: Optional[str] = None
         self._last_login_verification_failed: bool = False
+        self.current_playback: Optional[Dict[str, Any]] = None
+
+    def is_playing_target_long_video(self) -> bool:
+        """Return True only if a long-form video from a targeted channel is currently playing."""
+        if self.stop_event.is_set():
+            return False
+        info = getattr(self, "current_playback", None)
+        if not info or not isinstance(info, dict):
+            return False
+        if not info.get("is_playing", False):
+            return False
+        if info.get("is_short", False):
+            return False
+        return bool(info.get("is_target_channel", False))
 
     def check_pause(self) -> None:
         """Pause worker execution if pause_event is set until resumed or stopped."""
@@ -2606,19 +2620,30 @@ class WatchingWorker:
         # Disable all interactivity: no comments, no likes, no subscribe
         # Active channel is None so channel tracker minutes are NOT incremented
         self.channel_tracker.set_active_channel(None)
-        watch_res = watch_video(
-            self.driver,
-            duration_seconds=duration_seconds,
-            stop_event=self.stop_event,
-            log_queue=self.log_queue,
-            full_timeout_seconds=self._full_video_timeout_seconds(),
-            skip_ads=self.skip_ads,
-            max_ad_seconds=self.max_ad_seconds,
-            end_buffer_seconds=self._end_buffer_seconds(),
-            enable_interactivity=False,
-            pause_event=self.pause_event,
-            ensure_start_at_beginning=False,
-        )
+        self.current_playback = {
+            "is_playing": True,
+            "is_short": False,
+            "is_target_channel": False,
+            "channel": card_info.get("channel_name", "") if card_info else "",
+            "title": title,
+            "url": full_url,
+        }
+        try:
+            watch_res = watch_video(
+                self.driver,
+                duration_seconds=duration_seconds,
+                stop_event=self.stop_event,
+                log_queue=self.log_queue,
+                full_timeout_seconds=self._full_video_timeout_seconds(),
+                skip_ads=self.skip_ads,
+                max_ad_seconds=self.max_ad_seconds,
+                end_buffer_seconds=self._end_buffer_seconds(),
+                enable_interactivity=False,
+                pause_event=self.pause_event,
+                ensure_start_at_beginning=False,
+            )
+        finally:
+            self.current_playback = None
 
         if target_rec_id:
             session_watched_keys.add(target_rec_id)
@@ -2828,21 +2853,42 @@ class WatchingWorker:
 
         target_watch_duration = registered_task.parse_duration_seconds()
         self.channel_tracker.set_active_channel(channel_display)
-        watch_res = watch_video(
-            self.driver,
-            duration_seconds=target_watch_duration,
-            stop_event=self.stop_event,
-            log_queue=self.log_queue,
-            full_timeout_seconds=self._full_video_timeout_seconds(),
-            skip_ads=self.skip_ads,
-            max_ad_seconds=self.max_ad_seconds,
-            end_buffer_seconds=self._end_buffer_seconds(),
-            enable_interactivity=enable_interactivity,
-            interactivity_config=interactivity_cfg,
-            pause_event=self.pause_event,
-            should_stop_callback=_should_stop,
-            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(channel_display, d),
-        )
+
+        target_names = {c.name.strip().lower() for c in self.get_target_channels() if c.name}
+        is_target_chan = not is_random
+        if is_target_chan and channel_display and target_names:
+            clean_ch = channel_display.strip().lower()
+            if clean_ch not in target_names:
+                norm_disp = normalize_channel_text(channel_display)
+                matched_c = match_channel(channel_display, card_info.get("channel_url", "") if card_info else "", self.get_target_channels())
+                is_target_chan = (matched_c is not None) or any(normalize_channel_text(tn) == norm_disp for tn in target_names)
+
+        self.current_playback = {
+            "is_playing": True,
+            "is_short": False,
+            "is_target_channel": is_target_chan,
+            "channel": channel_display,
+            "title": title,
+            "url": full_url,
+        }
+        try:
+            watch_res = watch_video(
+                self.driver,
+                duration_seconds=target_watch_duration,
+                stop_event=self.stop_event,
+                log_queue=self.log_queue,
+                full_timeout_seconds=self._full_video_timeout_seconds(),
+                skip_ads=self.skip_ads,
+                max_ad_seconds=self.max_ad_seconds,
+                end_buffer_seconds=self._end_buffer_seconds(),
+                enable_interactivity=enable_interactivity,
+                interactivity_config=interactivity_cfg,
+                pause_event=self.pause_event,
+                should_stop_callback=_should_stop,
+                on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(channel_display, d),
+            )
+        finally:
+            self.current_playback = None
         self.channel_tracker.set_active_channel(None)
 
         if target_vid_id:
@@ -3549,17 +3595,28 @@ class WatchingWorker:
 
         if not self._check_account_login_before_play(content_type="short", content_title=title):
             return False
-        watch_res = watch_short(
-            self.driver,
-            target_loops=target_loops,
-            stop_event=self.stop_event,
-            log_queue=self.log_queue,
-            pause_event=self.pause_event,
-            should_stop_callback=_is_short_channel_disabled,
-            on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
-            like_short=True,
-            on_view_counted=_on_short_view_counted,
-        )
+        self.current_playback = {
+            "is_playing": True,
+            "is_short": True,
+            "is_target_channel": True,
+            "channel": ch_name,
+            "title": title,
+            "url": full_url,
+        }
+        try:
+            watch_res = watch_short(
+                self.driver,
+                target_loops=target_loops,
+                stop_event=self.stop_event,
+                log_queue=self.log_queue,
+                pause_event=self.pause_event,
+                should_stop_callback=_is_short_channel_disabled,
+                on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_name, d),
+                like_short=True,
+                on_view_counted=_on_short_view_counted,
+            )
+        finally:
+            self.current_playback = None
         self.channel_tracker.set_active_channel(None)
 
         if vid_id:
@@ -3609,10 +3666,60 @@ class WatchingWorker:
 
 
     @staticmethod
+    def has_channel_handle(
+        ch_handle: Optional[str] = None,
+        ch_url: Optional[str] = None,
+        ch_name: Optional[str] = None,
+        short_info: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Check if a Short contains a valid channel handle.
+
+        A channel is considered an ad when it has no channel handle.
+        If the channel contains a channel handle, then it is not an ad.
+        """
+        handle = (ch_handle or "").strip()
+        if not handle and short_info and isinstance(short_info, dict):
+            handle = (short_info.get("channel_handle") or "").strip()
+
+        # If handle is not set, check channel name for @handle
+        if not handle:
+            name = (ch_name or "").strip()
+            if not name and short_info and isinstance(short_info, dict):
+                name = (short_info.get("channel_name") or "").strip()
+            if name.startswith("@"):
+                handle = name
+
+        # If handle is still not set, check channel url for /@handle
+        if not handle:
+            url = (ch_url or "").strip()
+            if not url and short_info and isinstance(short_info, dict):
+                url = (short_info.get("channel_url") or "").strip()
+            if url:
+                id_type, id_val = parse_channel_identity(url)
+                if id_type == "handle" and id_val:
+                    handle = id_val
+
+        clean = handle.lower().strip()
+        if not clean:
+            return False
+        if clean in ("unknown", "unknown channel", "@unknown", "none", "@none", "ad", "@ad", "sponsored", "@sponsored"):
+            return False
+        return True
+
+    @staticmethod
     def is_short_ad(info: Optional[Dict[str, Any]]) -> bool:
-        """Check if a Short info dictionary represents an advertisement or sponsored reel."""
+        """Check if a Short info dictionary represents an advertisement or sponsored reel.
+
+        A channel is considered an ad when it has no channel handle.
+        If the channel contains a channel handle, then it is not an ad.
+        """
         if not info or not isinstance(info, dict):
             return False
+
+        # If the channel contains a channel handle, then it is not an ad
+        if WatchingWorker.has_channel_handle(short_info=info):
+            return False
+
         if info.get("is_ad"):
             return True
         href = (info.get("url") or info.get("href") or "").lower()
@@ -3627,40 +3734,52 @@ class WatchingWorker:
         ch_handle = (info.get("channel_handle") or "").strip().lower()
         if ch_handle.startswith("sponsored") or ch_handle.startswith("ad") or ch_handle in ("@sponsored", "@ad"):
             return True
-        return False
+
+        if not info.get("url") and not info.get("title") and not info.get("channel_name") and not info.get("channel_handle"):
+            return False
+        if info.get("is_ad") is False and not info.get("url") and not info.get("title") and not info.get("channel_name"):
+            return False
+
+        # A channel is considered an ad when it has no channel handle
+        return True
 
     @staticmethod
     def _is_unknown_channel_short(
-        ch_name: Optional[str],
+        ch_name: Optional[str] = None,
         title: Optional[str] = None,
         ch_handle: Optional[str] = None,
         is_ad: bool = False,
         short_info: Optional[Dict[str, Any]] = None,
+        ch_url: Optional[str] = None,
     ) -> bool:
-        """Return True if the Short is an ad, channel handle is unknown/unresolved, or no channel handle is found."""
-        if is_ad:
-            return True
-        if short_info and isinstance(short_info, dict):
-            if short_info.get("is_ad") or WatchingWorker.is_short_ad(short_info):
-                return True
+        """Return True if the Short is an ad or has no channel handle.
 
-        clean_ch = (ch_name or "").strip().lower()
-        clean_handle = (ch_handle or "").strip().lower()
-        clean_title = (title or "").strip().lower()
-
-        # If channel name indicates unknown
-        if not clean_ch or clean_ch in ("unknown", "unknown channel", "none"):
+        A channel is considered an ad when it has no channel handle.
+        If the channel contains a channel handle, then it is not an ad.
+        """
+        # Explicit ad flag check
+        if is_ad or (short_info and isinstance(short_info, dict) and short_info.get("is_ad")):
             return True
 
-        # If channel handle is explicitly provided
+        # If the channel contains a channel handle, then it is not an ad
+        if WatchingWorker.has_channel_handle(ch_handle=ch_handle, ch_url=ch_url, ch_name=ch_name, short_info=short_info):
+            return False
+
+        # If a channel handle was explicitly provided/checked and was empty or invalid, it is an ad
         if ch_handle is not None:
-            if not clean_handle or clean_handle in ("unknown", "unknown channel", "@unknown", "none", "@none"):
-                return True
-
-        if not clean_title or clean_title in ("short", "untargeted short", "unknown"):
             return True
 
-        return False
+        # Fallback for non-empty creator name (e.g. 'BBC News') if no handle was passed
+        clean_ch = (ch_name or "").strip().lower()
+        if not clean_ch and short_info and isinstance(short_info, dict):
+            clean_ch = (short_info.get("channel_name") or "").strip().lower()
+        if clean_ch and clean_ch not in ("unknown", "unknown channel", "none", "ad", "sponsored"):
+            clean_title = (title or "").strip().lower()
+            if not is_ad and clean_title not in ("ad", "sponsored"):
+                return False
+
+        # Otherwise, when it has no channel handle, it is considered an ad
+        return True
 
     def get_active_short_info(self) -> Dict[str, Any]:
         """Extract metadata of the currently active Short in the reel."""
@@ -3769,6 +3888,19 @@ class WatchingWorker:
             self.driver.execute_script(r"""
                 return (function() {
                     var active = document.querySelector('ytd-reel-video-renderer[is-active]');
+                    if (!active) {
+                        var renderers = document.querySelectorAll('ytd-reel-video-renderer');
+                        var vCenter = window.innerHeight / 2;
+                        for (var i = 0; i < renderers.length; i++) {
+                            try {
+                                var rect = renderers[i].getBoundingClientRect();
+                                if (rect.top <= vCenter && rect.bottom >= vCenter) {
+                                    active = renderers[i];
+                                    break;
+                                }
+                            } catch(e) {}
+                        }
+                    }
                     if (active && active.nextElementSibling) {
                         try {
                             active.nextElementSibling.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -4058,17 +4190,20 @@ class WatchingWorker:
                         if id_t == "handle" and id_v:
                             first_handle = id_v
 
-                clean_first_ch = (first_ch or "").strip().lower()
-                clean_first_handle = (first_handle or "").strip().lower()
-
-                first_is_ad_or_unknown = (
-                    first_is_ad
-                    or not clean_first_handle
-                    or clean_first_handle in ("unknown", "unknown channel", "@unknown", "none", "@none")
-                    or not clean_first_ch
-                    or clean_first_ch in ("unknown", "unknown channel", "none")
-                    or self._is_unknown_channel_short(first_ch, r_title, ch_handle=first_handle, is_ad=first_is_ad, short_info=first_info)
+                has_first_handle = self.has_channel_handle(
+                    ch_handle=first_handle,
+                    ch_url=first_info.get("channel_url", "") if first_info else "",
+                    ch_name=first_ch,
+                    short_info=first_info,
                 )
+                if has_first_handle:
+                    first_is_ad = False
+                    first_is_ad_or_unknown = False
+                    if not first_ch and first_handle:
+                        first_ch = first_handle
+                else:
+                    first_is_ad = True
+                    first_is_ad_or_unknown = True
 
                 first_label = first_handle or first_ch or "Unknown Channel"
 
@@ -4325,7 +4460,6 @@ class WatchingWorker:
             ch_name = short_info.get("channel_name", "")
             ch_handle = short_info.get("channel_handle", "")
             ch_url = short_info.get("channel_url", "")
-            is_ad_short = bool(short_info.get("is_ad", False)) or self.is_short_ad(short_info)
             title = short_info.get("title", "") or "Short"
             vid_id = short_info.get("video_id") or extract_video_id(short_info.get("url", ""))
             full_url = short_info.get("url") or (f"https://www.youtube.com/shorts/{vid_id}" if vid_id else "")
@@ -4336,18 +4470,6 @@ class WatchingWorker:
                 id_type, id_val = parse_channel_identity(ch_url)
                 if id_type == "handle" and id_val:
                     ch_handle = id_val
-
-            clean_ch = (ch_name or "").strip().lower()
-            clean_handle = (ch_handle or "").strip().lower()
-
-            is_ad_or_unknown = (
-                is_ad_short
-                or not clean_handle
-                or clean_handle in ("unknown", "unknown channel", "@unknown", "none", "@none")
-                or not clean_ch
-                or clean_ch in ("unknown", "unknown channel", "none")
-                or self._is_unknown_channel_short(ch_name, title, ch_handle=ch_handle, is_ad=is_ad_short, short_info=short_info)
-            )
 
             if not short_info.get("found") and not vid_id and not ch_name:
                 human_like_delay(0.5, 1.0)
@@ -4416,10 +4538,20 @@ class WatchingWorker:
                         matched_task = t
                         break
 
-            if is_ad_short:
-                is_target = False
+            is_target = bool(matched_channel or matched_task)
+            if is_target:
+                is_ad_short = False
+                is_ad_or_unknown = False
             else:
-                is_target = bool(matched_channel or matched_task)
+                has_handle = self.has_channel_handle(ch_handle=ch_handle, ch_url=ch_url, ch_name=ch_name, short_info=short_info)
+                if has_handle:
+                    is_ad_short = False
+                    is_ad_or_unknown = False
+                    if not ch_name and ch_handle:
+                        ch_name = ch_handle
+                else:
+                    is_ad_short = True
+                    is_ad_or_unknown = True
 
             if is_target:
                 ch_display = (matched_channel.name if matched_channel else (matched_task.channel if matched_task else ch_name)) or "Target Channel"
@@ -4521,17 +4653,28 @@ class WatchingWorker:
                     emit(self.log_queue, f"Shorts reel playback aborted due to unresolved manual verification / login issue.", logging.WARNING)
                     exit_reason = "login_verification_failed"
                     break
-                watch_res = watch_short(
-                    self.driver,
-                    target_loops=target_loops,
-                    stop_event=self.stop_event,
-                    log_queue=self.log_queue,
-                    pause_event=self.pause_event,
-                    should_stop_callback=_is_short_channel_disabled,
-                    on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_display, d),
-                    like_short=True,
-                    on_view_counted=_on_short_view_counted,
-                )
+                self.current_playback = {
+                    "is_playing": True,
+                    "is_short": True,
+                    "is_target_channel": is_target,
+                    "channel": ch_display,
+                    "title": title,
+                    "url": full_url,
+                }
+                try:
+                    watch_res = watch_short(
+                        self.driver,
+                        target_loops=target_loops,
+                        stop_event=self.stop_event,
+                        log_queue=self.log_queue,
+                        pause_event=self.pause_event,
+                        should_stop_callback=_is_short_channel_disabled,
+                        on_watch_tick=lambda d: self.channel_tracker.add_watch_delta(ch_display, d),
+                        like_short=True,
+                        on_view_counted=_on_short_view_counted,
+                    )
+                finally:
+                    self.current_playback = None
                 self.channel_tracker.set_active_channel(None)
 
                 if vid_id:
@@ -6767,5 +6910,6 @@ class WatchingWorker:
     def stop(self) -> None:
         """Stop the continuous watching loop and all running tasks."""
         self.stop_event.set()
+        self.current_playback = None
         if hasattr(self, "channel_tracker"):
             self.channel_tracker.on_stop()
