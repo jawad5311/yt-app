@@ -197,7 +197,7 @@ class ConfigManager:
             "LikeVideo": True,
             "LikeComments": True,
             "AdjustQuality": True,
-            "QualityLevel": "360p",
+            "QualityLevel": "720p",
             "RandomMicroPauses": True,
             "FullscreenTheaterMode": True,
             "TargetShortsPerCycle": 10,

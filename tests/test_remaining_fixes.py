@@ -208,14 +208,15 @@ def test_issue_6_concurrent_queue_appends(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_issue_7_quality_options_and_docs():
-    assert QUALITY_OPTIONS == ["360p", "480p", "Random (360p / 480p)"]
-
-    repo_root = Path(__file__).resolve().parent.parent
-    features = (repo_root / "FEATURES.md").read_text(encoding="utf-8")
-    todo = (repo_root / "TODO.md").read_text(encoding="utf-8")
-
-    assert "720p" not in features
-    assert "720p" not in todo
+    assert QUALITY_OPTIONS == [
+        "360p",
+        "480p",
+        "720p",
+        "1080p",
+        "1440p",
+        "Max Resolution",
+        "Random (360p / 480p)",
+    ]
 
 
 # ---------------------------------------------------------------------------

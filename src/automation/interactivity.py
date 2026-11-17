@@ -2,7 +2,7 @@
 
 Provides human-like behavioral simulation during video playback:
 1. Strict 1x Normal Playback Speed (no speed modification).
-2. Bandwidth-Saving Video Quality (exclusively 360p or 480p).
+2. Adjustable Video Quality (360p, 480p, 720p, 1080p, 1440p, or Max Resolution).
 3. Closed Captions (Subtitles) Simulation (randomly enable and disable captions).
 4. Random Micro-Pauses (brief 2-5s pauses simulating human distraction, then resumes playback).
 5. Randomized Scrolling & Pausing (scrolling down to read description/comments, pausing, and scrolling back).
@@ -187,24 +187,58 @@ return 1.0;
 
 # JavaScript to set video quality via Movie Player API with DOM settings menu fallback
 SET_QUALITY_JS = """
-var target = arguments[0]; // "360p" or "480p"
-var level = arguments[1];  // "medium" or "large"
+var target = arguments[0]; // e.g. "360p", "480p", "720p", "1080p", "1440p", "max"
+var requestedLevel = arguments[1]; // e.g. "medium", "large", "hd720", "hd1080", "hd1440", "max"
 var success = false;
+
 try {
     var player = document.getElementById('movie_player');
     if (player) {
-        if (typeof player.setPlaybackQualityRange === 'function') {
-            player.setPlaybackQualityRange(level, level);
-            success = true;
+        var qualityLevels = typeof player.getAvailableQualityLevels === 'function' ? player.getAvailableQualityLevels() : [];
+        var validLevels = [];
+        for (var k = 0; k < qualityLevels.length; k++) {
+            if (qualityLevels[k] && qualityLevels[k] !== 'auto') {
+                validLevels.push(qualityLevels[k]);
+            }
         }
-        if (typeof player.setPlaybackQuality === 'function') {
-            player.setPlaybackQuality(level);
-            success = true;
+
+        var chosenLevel = null;
+        if (target === 'max') {
+            if (validLevels.length > 0) {
+                chosenLevel = validLevels[0];
+            }
+        } else if (requestedLevel && requestedLevel !== 'max') {
+            if (validLevels.indexOf(requestedLevel) !== -1) {
+                chosenLevel = requestedLevel;
+            } else if (validLevels.length > 0) {
+                var rankMap = {'hd2160': 2160, 'hd1440': 1440, 'hd1080': 1080, 'hd720': 720, 'large': 480, 'medium': 360, 'small': 240, 'tiny': 144};
+                var targetRank = rankMap[requestedLevel] || 720;
+                var bestCandidate = validLevels[0];
+                for (var m = 0; m < validLevels.length; m++) {
+                    var r = rankMap[validLevels[m]] || 0;
+                    if (r <= targetRank) {
+                        bestCandidate = validLevels[m];
+                        break;
+                    }
+                }
+                chosenLevel = bestCandidate;
+            }
+        }
+
+        if (chosenLevel) {
+            if (typeof player.setPlaybackQualityRange === 'function') {
+                player.setPlaybackQualityRange(chosenLevel, chosenLevel);
+                success = true;
+            }
+            if (typeof player.setPlaybackQuality === 'function') {
+                player.setPlaybackQuality(chosenLevel);
+                success = true;
+            }
         }
     }
 } catch (e) {}
 
-// DOM Settings menu interaction as fallback
+// DOM Settings menu interaction as fallback / reinforcement
 try {
     var settingsBtn = document.querySelector('.ytp-settings-button');
     if (settingsBtn) {
@@ -217,7 +251,7 @@ try {
                 var qualityItem = null;
                 for (var i = 0; i < menuItems.length; i++) {
                     var txt = (menuItems[i].textContent || '').toLowerCase();
-                    if (txt.indexOf('quality') !== -1 || txt.indexOf('qualität') !== -1) {
+                    if (txt.indexOf('quality') !== -1 || txt.indexOf('qualität') !== -1 || txt.indexOf('qualité') !== -1 || txt.indexOf('calidad') !== -1) {
                         qualityItem = menuItems[i];
                         break;
                     }
@@ -227,11 +261,57 @@ try {
                     setTimeout(function() {
                         try {
                             var qItems = document.querySelectorAll('.ytp-quality-menu .ytp-menuitem');
-                            for (var j = 0; j < qItems.length; j++) {
-                                if ((qItems[j].textContent || '').indexOf(target) !== -1) {
-                                    qItems[j].click();
-                                    break;
+                            var targetItem = null;
+
+                            if (target === 'max') {
+                                var maxRes = -1;
+                                for (var j = 0; j < qItems.length; j++) {
+                                    var text = qItems[j].textContent || '';
+                                    if (text.toLowerCase().indexOf('auto') !== -1) continue;
+                                    var match = text.match(/\\b(\\d{3,4})p?\\b/);
+                                    if (match) {
+                                        var resNum = parseInt(match[1], 10);
+                                        if (resNum > maxRes) {
+                                            maxRes = resNum;
+                                            targetItem = qItems[j];
+                                        }
+                                    } else if (!targetItem) {
+                                        targetItem = qItems[j];
+                                    }
                                 }
+                                if (!targetItem && qItems.length > 0) {
+                                    targetItem = qItems[0];
+                                }
+                            } else {
+                                for (var j = 0; j < qItems.length; j++) {
+                                    var text = qItems[j].textContent || '';
+                                    if (text.indexOf(target) !== -1) {
+                                        targetItem = qItems[j];
+                                        break;
+                                    }
+                                }
+                                if (!targetItem && qItems.length > 0) {
+                                    var reqMatch = target.match(/\\b(\\d{3,4})\\b/);
+                                    var reqNum = reqMatch ? parseInt(reqMatch[1], 10) : 720;
+                                    var bestDiff = 99999;
+                                    for (var j = 0; j < qItems.length; j++) {
+                                        var text = qItems[j].textContent || '';
+                                        if (text.toLowerCase().indexOf('auto') !== -1) continue;
+                                        var match = text.match(/\\b(\\d{3,4})p?\\b/);
+                                        if (match) {
+                                            var num = parseInt(match[1], 10);
+                                            var diff = Math.abs(reqNum - num);
+                                            if (diff < bestDiff) {
+                                                bestDiff = diff;
+                                                targetItem = qItems[j];
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (targetItem) {
+                                targetItem.click();
                             }
                         } catch (e) {}
                         if (settingsBtn.getAttribute('aria-expanded') === 'true') {
@@ -756,19 +836,33 @@ def ensure_normal_speed(driver: Any) -> bool:
         return False
 
 
-def set_video_quality(driver: Any, quality_label: str = "360p") -> bool:
-    """Adjust video quality strictly to 360p or 480p.
+def set_video_quality(driver: Any, quality_label: str = "720p") -> bool:
+    """Adjust video quality to the specified resolution or maximum available resolution.
 
-    Higher resolutions like 720p or 1080p are intentionally omitted per configuration.
+    Supported options: '360p', '480p', '720p', '1080p', '1440p', 'Max Resolution', 'Random (360p / 480p)'.
     """
     q_str = str(quality_label).strip().lower()
-    if "480" in q_str:
+    if "max" in q_str:
+        level = "max"
+        label_norm = "max"
+    elif "1440" in q_str:
+        level = "hd1440"
+        label_norm = "1440p"
+    elif "1080" in q_str:
+        level = "hd1080"
+        label_norm = "1080p"
+    elif "720" in q_str:
+        level = "hd720"
+        label_norm = "720p"
+    elif "480" in q_str:
         level = "large"
         label_norm = "480p"
-    else:
-        # Default bandwidth saver (360p)
+    elif "360" in q_str:
         level = "medium"
         label_norm = "360p"
+    else:
+        level = "hd720"
+        label_norm = "720p"
 
     try:
         driver.execute_script(SET_QUALITY_JS, label_norm, level)
@@ -1361,7 +1455,7 @@ class HumanInteractivitySimulator:
         scroll_comments: bool = True,
         variable_speed: bool = False,       # User rule: strictly 1x playback
         adjust_quality: bool = True,
-        quality_level: str = "360p",        # "360p", "480p", or "Random"
+        quality_level: str = "720p",        # "360p", "480p", "720p", "1080p", "1440p", "Max Resolution", or "Random"
         micro_pauses: bool = True,
         toggle_captions: bool = True,
         expand_description: bool = True,
@@ -1446,7 +1540,7 @@ class HumanInteractivitySimulator:
         self.late_interactions_target_time = 0.0
         self.interaction_order = "video_then_comments"
         self.will_adjust_quality = False
-        self.chosen_quality = "360p"
+        self.chosen_quality = "720p"
         self.will_toggle_captions = False
         self.caption_enable_time = 0.0
         self.caption_disable_time = 0.0
@@ -1467,15 +1561,25 @@ class HumanInteractivitySimulator:
         # Speed: strictly 1x unless explicitly requested otherwise
         self.will_change_speed = bool(self.variable_speed and (random.random() < self.speed_chance))
 
-        # Quality: strictly 360p or 480p
+        # Quality: 360p, 480p, 720p, 1080p, 1440p, Max Resolution, or Random
         self.will_adjust_quality = random.random() < self.quality_chance
-        q_norm = (self.quality_level or "360p").lower()
-        if "480" in q_norm and "360" not in q_norm:
+        q_norm = (self.quality_level or "720p").lower()
+        if "max" in q_norm:
+            self.chosen_quality = "Max Resolution"
+        elif "1440" in q_norm:
+            self.chosen_quality = "1440p"
+        elif "1080" in q_norm:
+            self.chosen_quality = "1080p"
+        elif "720" in q_norm:
+            self.chosen_quality = "720p"
+        elif "480" in q_norm and "360" not in q_norm:
             self.chosen_quality = "480p"
         elif "360" in q_norm and "480" not in q_norm:
             self.chosen_quality = "360p"
-        else:
+        elif "random" in q_norm:
             self.chosen_quality = random.choice(["360p", "480p"])
+        else:
+            self.chosen_quality = "720p"
 
         # 1. Expand video description after 10% of the video is watched
         self.will_expand_description = bool(self.expand_description)
@@ -1649,7 +1753,7 @@ class HumanInteractivitySimulator:
 
         # ---------------- Early playback: Quality adjustment & 1x speed lock
         if curr_time >= 5.0 and not paused:
-            # Quality adjustment strictly to 360p or 480p
+            # Quality adjustment
             if self.adjust_quality and self.will_adjust_quality and not self.quality_applied:
                 target_q = self.chosen_quality
                 if set_video_quality(driver, target_q):

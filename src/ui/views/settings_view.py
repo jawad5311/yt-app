@@ -40,7 +40,15 @@ WATCHTIME_OPTIONS: List[str] = [
     "20 minutes",
     "30 minutes",
 ]
-QUALITY_OPTIONS: List[str] = ["360p", "480p", "Random (360p / 480p)"]
+QUALITY_OPTIONS: List[str] = [
+    "360p",
+    "480p",
+    "720p",
+    "1080p",
+    "1440p",
+    "Max Resolution",
+    "Random (360p / 480p)",
+]
 EMAIL_METHOD_OPTIONS: List[str] = [
     "Headless Browser Gmail (Recommended)",
     "Active Browser Gmail",
@@ -132,6 +140,7 @@ class SettingsView(Frame):
 
         tab_general = self.tabview.add("General")
         tab_playback = self.tabview.add("Playback")
+        tab_sleep = self.tabview.add("Sleep & Scheduling")
         tab_video = self.tabview.add("Video")
         tab_shorts = self.tabview.add("Shorts")
         tab_ads = self.tabview.add("Ads")
@@ -143,6 +152,9 @@ class SettingsView(Frame):
         # Compatibility aliases for code checking old tab names
         self.tabview._tab_dict["Playback & Video"] = tab_playback
         self.tabview._tab_dict["Playback & Queue"] = tab_playback
+        self.tabview._tab_dict["Sleep Mode & Scheduling"] = tab_sleep
+        self.tabview._tab_dict["Sleep"] = tab_sleep
+        self.tabview._tab_dict["Scheduling"] = tab_sleep
 
         # ---------------------------------------------------------
         # Tab 1: General
@@ -306,24 +318,27 @@ class SettingsView(Frame):
         self.stop_buffer_entry.pack(anchor="w", padx=15, pady=(0, 15))
 
         # ---------------------------------------------------------
-        # Sleep Settings: Short Sleep / Nap & Long Sleep / Night
+        # Tab 3: Sleep & Scheduling
         # ---------------------------------------------------------
-        Label(scroll_playback, text="Sleep Modes & Scheduling", font=Font(weight="bold", size=14)).pack(
+        scroll_sleep = SmoothScrollableFrame(tab_sleep)
+        scroll_sleep.pack(fill="both", expand=True, padx=5, pady=5)
+
+        Label(scroll_sleep, text="Sleep Modes & Scheduling", font=Font(weight="bold", size=14)).pack(
             anchor="w", padx=15, pady=(15, 2)
         )
         Label(
-            scroll_playback,
+            scroll_sleep,
             text="Configure automated sleep cycles: Short Sleep (Nap) when targeted videos/shorts are missing, and Long Sleep (Night) based on local system time.",
             font=Font(size=12),
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 10))
 
         # 1. Short Sleep or Nap
-        Label(scroll_playback, text="1. Short Sleep / Nap (When No Target Found):", font=Font(weight="bold")).pack(
+        Label(scroll_sleep, text="1. Short Sleep / Nap (When No Target Found):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(4, 2)
         )
         Label(
-            scroll_playback,
+            scroll_sleep,
             text="When browsing and shorts search finds no video from targeted channels, the app goes into nap mode, closes YouTube, sends the session notification email, and wakes up after this duration to search for new videos.",
             font=Font(size=12),
             style="Muted.TLabel",
@@ -351,7 +366,7 @@ class SettingsView(Frame):
                 initial_sleep_opt = "2 Hours"
 
         self.short_sleep_menu = OptionMenu(
-            scroll_playback,
+            scroll_sleep,
             values=SHORT_SLEEP_OPTIONS,
             width=220,
         )
@@ -360,11 +375,11 @@ class SettingsView(Frame):
         self.no_target_sleep_menu = self.short_sleep_menu  # Backward compatibility alias
 
         # 2. Long Sleep or Night
-        Label(scroll_playback, text="2. Long Sleep / Night Mode (Human System Time Schedule):", font=Font(weight="bold")).pack(
+        Label(scroll_sleep, text="2. Long Sleep / Night Mode (Human System Time Schedule):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(6, 2)
         )
         Label(
-            scroll_playback,
+            scroll_sleep,
             text="Simulates human sleeping habits. Reads local system time to determine nighttime. The app will randomly choose a sleep window during your configured night timeframe and enter Long Sleep.",
             font=Font(size=12),
             style="Muted.TLabel",
@@ -372,7 +387,7 @@ class SettingsView(Frame):
 
         initial_night_enabled = bool(self.config_mgr.get_setting("NightSleepEnabled", False)) if self.config_mgr else False
         self.night_sleep_switch = Switch(
-            scroll_playback,
+            scroll_sleep,
             text="Enable Long Sleep / Night Mode",
         )
         if initial_night_enabled:
@@ -382,11 +397,11 @@ class SettingsView(Frame):
         self.night_sleep_switch.pack(anchor="w", padx=15, pady=(0, 8))
 
         # Night Window Start Time
-        Label(scroll_playback, text="Night Window Start Time (System Time):", font=Font(size=12, weight="bold")).pack(
+        Label(scroll_sleep, text="Night Window Start Time (System Time):", font=Font(size=12, weight="bold")).pack(
             anchor="w", padx=25, pady=(3, 2)
         )
         Label(
-            scroll_playback,
+            scroll_sleep,
             text="The time of day when your system enters nighttime (e.g. 22:00 / 10:00 PM). Sessions started during nighttime bypass initial long sleep to browse and nap until the next cycle.",
             font=Font(size=11),
             style="Muted.TLabel",
@@ -396,7 +411,7 @@ class SettingsView(Frame):
         if init_start not in NIGHT_START_TIME_OPTIONS:
             init_start = "22:00 (10:00 PM)"
         self.night_start_menu = OptionMenu(
-            scroll_playback,
+            scroll_sleep,
             values=NIGHT_START_TIME_OPTIONS,
             width=220,
         )
@@ -404,11 +419,11 @@ class SettingsView(Frame):
         self.night_start_menu.pack(anchor="w", padx=25, pady=(0, 10))
 
         # Night Window Time Frame (Duration)
-        Label(scroll_playback, text="Night Window Time Frame (Total Duration):", font=Font(size=12, weight="bold")).pack(
+        Label(scroll_sleep, text="Night Window Time Frame (Total Duration):", font=Font(size=12, weight="bold")).pack(
             anchor="w", padx=25, pady=(3, 2)
         )
         Label(
-            scroll_playback,
+            scroll_sleep,
             text="Total duration of the night window (e.g., 12 Hours means nighttime spans from 22:00 to 10:00).",
             font=Font(size=11),
             style="Muted.TLabel",
@@ -418,7 +433,7 @@ class SettingsView(Frame):
         if init_window not in NIGHT_WINDOW_OPTIONS:
             init_window = "12 Hours"
         self.night_window_menu = OptionMenu(
-            scroll_playback,
+            scroll_sleep,
             values=NIGHT_WINDOW_OPTIONS,
             width=220,
         )
@@ -426,11 +441,11 @@ class SettingsView(Frame):
         self.night_window_menu.pack(anchor="w", padx=25, pady=(0, 10))
 
         # Night Sleep Duration
-        Label(scroll_playback, text="Night Sleep Duration (Randomized Within Window):", font=Font(size=12, weight="bold")).pack(
+        Label(scroll_sleep, text="Night Sleep Duration (Randomized Within Window):", font=Font(size=12, weight="bold")).pack(
             anchor="w", padx=25, pady=(3, 2)
         )
         Label(
-            scroll_playback,
+            scroll_sleep,
             text="Duration to sleep (e.g., 8 Hours or 7 - 8 Hours). The app randomly chooses the sleep window during the nighttime timeframe.",
             font=Font(size=11),
             style="Muted.TLabel",
@@ -440,7 +455,7 @@ class SettingsView(Frame):
         if init_dur not in NIGHT_DURATION_OPTIONS:
             init_dur = "8 Hours"
         self.night_duration_menu = OptionMenu(
-            scroll_playback,
+            scroll_sleep,
             values=NIGHT_DURATION_OPTIONS,
             width=220,
         )
@@ -448,7 +463,7 @@ class SettingsView(Frame):
         self.night_duration_menu.pack(anchor="w", padx=25, pady=(0, 15))
 
         # ---------------------------------------------------------
-        # Tab 3: Video
+        # Tab 4: Video
         # ---------------------------------------------------------
         scroll_video = SmoothScrollableFrame(tab_video)
         scroll_video.pack(fill="both", expand=True, padx=5, pady=5)
@@ -689,9 +704,25 @@ class SettingsView(Frame):
         Label(scroll_interactivity, text="Target Quality Level:", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
-        quality = self.config_mgr.get_setting("QualityLevel", "360p") if self.config_mgr else "360p"
-        self.quality_menu = OptionMenu(scroll_interactivity, values=QUALITY_OPTIONS, width=150)
-        self.quality_menu.set(quality if quality in QUALITY_OPTIONS else "360p")
+        quality = str(self.config_mgr.get_setting("QualityLevel", "720p") if self.config_mgr else "720p").strip()
+        if quality in ("720", "720p"):
+            quality_opt = "720p"
+        elif quality in ("1080", "1080p"):
+            quality_opt = "1080p"
+        elif quality in ("1440", "1440p"):
+            quality_opt = "1440p"
+        elif quality.lower() in ("max", "max resolution", "maximum", "max_resolution"):
+            quality_opt = "Max Resolution"
+        elif quality in ("480", "480p"):
+            quality_opt = "480p"
+        elif quality in ("360", "360p"):
+            quality_opt = "360p"
+        elif quality in QUALITY_OPTIONS:
+            quality_opt = quality
+        else:
+            quality_opt = "720p"
+        self.quality_menu = OptionMenu(scroll_interactivity, values=QUALITY_OPTIONS, width=180)
+        self.quality_menu.set(quality_opt)
         self.quality_menu.pack(anchor="w", padx=15, pady=(0, 15))
 
         self.micro_pause_switch = Switch(
@@ -1299,7 +1330,20 @@ class SettingsView(Frame):
         validated["ToggleCaptions"] = bool(self.caption_switch.get())
         validated["AdjustQuality"] = bool(self.quality_switch.get())
 
-        selected_quality = self.quality_menu.get()
+        selected_quality = self.quality_menu.get().strip()
+        if selected_quality in ("720", "720p"):
+            selected_quality = "720p"
+        elif selected_quality in ("1080", "1080p"):
+            selected_quality = "1080p"
+        elif selected_quality in ("1440", "1440p"):
+            selected_quality = "1440p"
+        elif selected_quality.lower() in ("max", "max resolution", "maximum", "max_resolution"):
+            selected_quality = "Max Resolution"
+        elif selected_quality in ("480", "480p"):
+            selected_quality = "480p"
+        elif selected_quality in ("360", "360p"):
+            selected_quality = "360p"
+
         if selected_quality not in QUALITY_OPTIONS:
             self._notify_result(False, f"Target Quality must be one of: {', '.join(QUALITY_OPTIONS)}.")
             return

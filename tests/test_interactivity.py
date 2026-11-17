@@ -56,10 +56,16 @@ def test_set_video_quality_strictly_360_or_480():
     assert "480p" in args
     assert "large" in args
 
-    # Non-standard or higher resolution defaults safely to 360p
+    # Supported resolutions: 720p sets hd720
     assert set_video_quality(driver, "720p") is True
     args = driver.execute_script.call_args[0]
-    assert "360p" in args
+    assert "720p" in args
+    assert "hd720" in args
+
+    # Non-standard resolution defaults safely to 720p
+    assert set_video_quality(driver, "unknown_res") is True
+    args = driver.execute_script.call_args[0]
+    assert "720p" in args
 
     # Exception safety
     driver.execute_script.side_effect = Exception("failed to set quality")

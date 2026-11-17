@@ -141,7 +141,7 @@ class AutomationWorker:
             "like_comments": self.config_mgr.get_bool("LikeComments", True),
             "like_video": self.config_mgr.get_bool("LikeVideo", True),
             "adjust_quality": self.config_mgr.get_bool("AdjustQuality", True),
-            "quality_level": self.config_mgr.get_setting("QualityLevel", "360p"),
+            "quality_level": self.config_mgr.get_setting("QualityLevel", "720p"),
             "micro_pauses": self.config_mgr.get_bool("RandomMicroPauses", True),
             "fullscreen_theater_mode": self.config_mgr.get_bool("FullscreenTheaterMode", True),
         }

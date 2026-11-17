@@ -218,7 +218,7 @@ def test_nan_infinity_malformed_numbers_and_invalid_option_values_rejected(tmp_p
     view.threads_entry.get.return_value = "2"
 
     # Invalid options
-    view.quality_menu.get.return_value = "1080p"
+    view.quality_menu.get.return_value = "9999p"
     with patch("src.ui.views.settings_view.messagebox") as mock_mb:
         view.save_settings()
         assert mock_mb.showerror.called

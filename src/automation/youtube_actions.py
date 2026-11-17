@@ -823,7 +823,7 @@ def watch_video(
         scroll_comments=cfg.get("scroll_comments", True),
         variable_speed=cfg.get("variable_speed", False),
         adjust_quality=cfg.get("adjust_quality", True),
-        quality_level=cfg.get("quality_level", "360p"),
+        quality_level=cfg.get("quality_level", "720p"),
         micro_pauses=cfg.get("micro_pauses", True),
         toggle_captions=cfg.get("toggle_captions", True),
         expand_description=cfg.get("expand_description", True),

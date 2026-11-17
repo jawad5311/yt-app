@@ -24,11 +24,12 @@ class TestSettingsPlaybackVideoSeparation:
             pass
 
     def test_settings_tabs_exact_order(self, settings_view):
-        """Verify the exact tab order: General, Playback, Video, Shorts, Ads, Interactivity, Email & Reports, RDP/VPS, Warm Up."""
+        """Verify the exact tab order: General, Playback, Sleep & Scheduling, Video, Shorts, Ads, Interactivity, Email & Reports, RDP/VPS, Warm Up."""
         tab_names = list(settings_view.tabview._segmented_button._buttons_dict.keys())
         expected_order = [
             "General",
             "Playback",
+            "Sleep & Scheduling",
             "Video",
             "Shorts",
             "Ads",
@@ -40,10 +41,12 @@ class TestSettingsPlaybackVideoSeparation:
         assert tab_names == expected_order, f"Expected {expected_order}, got {tab_names}"
 
     def test_tabview_backward_compatibility_aliases(self, settings_view):
-        """Verify backward compatibility aliases 'Playback & Video' and 'Playback & Queue' exist in tab dict."""
+        """Verify backward compatibility aliases 'Playback & Video', 'Playback & Queue', 'Sleep Mode & Scheduling' exist in tab dict."""
         assert "Playback & Video" in settings_view.tabview._tab_dict
         assert "Playback & Queue" in settings_view.tabview._tab_dict
         assert "Playback" in settings_view.tabview._tab_dict
+        assert "Sleep & Scheduling" in settings_view.tabview._tab_dict
+        assert "Sleep Mode & Scheduling" in settings_view.tabview._tab_dict
         assert "Video" in settings_view.tabview._tab_dict
 
     def test_playback_tab_widgets_presence(self, settings_view):
@@ -52,12 +55,22 @@ class TestSettingsPlaybackVideoSeparation:
         assert hasattr(settings_view, "browsing_unlimited_switch")
         assert hasattr(settings_view, "full_timeout_entry")
         assert hasattr(settings_view, "stop_buffer_entry")
-        assert hasattr(settings_view, "no_target_sleep_menu")
 
         # Verify default / loaded values
         assert settings_view.duration_menu.get() in WATCHTIME_OPTIONS
         assert settings_view.full_timeout_entry.get() == "0"
         assert settings_view.stop_buffer_entry.get() == "10"
+
+    def test_sleep_scheduling_tab_widgets_presence(self, settings_view):
+        """Verify widgets belonging to Sleep & Scheduling are instantiated and properly configured."""
+        assert hasattr(settings_view, "short_sleep_menu")
+        assert hasattr(settings_view, "no_target_sleep_menu")
+        assert hasattr(settings_view, "night_sleep_switch")
+        assert hasattr(settings_view, "night_start_menu")
+        assert hasattr(settings_view, "night_window_menu")
+        assert hasattr(settings_view, "night_duration_menu")
+
+        assert settings_view.short_sleep_menu.get() == "2 Hours"
         assert settings_view.no_target_sleep_menu.get() == "2 Hours"
 
     def test_video_tab_widgets_presence(self, settings_view):
