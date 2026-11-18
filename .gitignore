@@ -30,6 +30,7 @@ ENV/
 # Chrome Runtime Profiles & Logs
 runtime/
 logs/*.log
+logs/sessions/
 !logs/.gitkeep
 
 # Provisioned browser extensions (downloaded on first use)

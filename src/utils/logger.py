@@ -1,10 +1,11 @@
+import atexit
 import logging
 import queue
 import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from .helpers import get_project_root
 
@@ -14,10 +15,119 @@ SECRET_PATTERNS = [
     re.compile(r"AIzaSy[A-Za-z0-9_\-]+"),
 ]
 
-MAX_SESSION_LOGS = 5
+# Keep only the single most recent session log file; old session logs are deleted on new session start.
+MAX_SESSION_LOGS = 1
+# Batch disk writes every 60 seconds (1 minute) to minimize CPU, disk I/O, and power consumption.
+SESSION_LOG_FLUSH_INTERVAL_SECONDS = 60.0
+# Safety cap to flush early if a burst produces thousands of log lines before the 1-minute mark.
+SESSION_LOG_MAX_BUFFER_RECORDS = 5000
+
 _CURRENT_SESSION_FILE: Optional[Path] = None
-_CURRENT_SESSION_HANDLER: Optional[logging.FileHandler] = None
+_CURRENT_SESSION_HANDLER: Optional["BatchedSessionFileHandler"] = None
 _SESSION_LOCK = threading.Lock()
+
+
+class BatchedSessionFileHandler(logging.Handler):
+    """Memory-buffered file handler that persists logs in timed batches.
+
+    Avoids per-line OS write/flush syscalls (which wake storage and consume extra CPU/power)
+    by buffering formatted log lines in RAM and writing them in a single append operation
+    every ``flush_interval`` seconds (default: 60s). Always flushes immediately on
+    ``flush()``, ``close()``, session stop, or when reading complete logs.
+    """
+
+    def __init__(
+        self,
+        filepath: Path,
+        flush_interval: float = SESSION_LOG_FLUSH_INTERVAL_SECONDS,
+        max_buffer_records: int = SESSION_LOG_MAX_BUFFER_RECORDS,
+        encoding: str = "utf-8",
+    ) -> None:
+        super().__init__()
+        self.filepath = Path(filepath)
+        self.baseFilename = str(self.filepath.resolve())
+        self.flush_interval = max(0.0, float(flush_interval))
+        self.max_buffer_records = max(1, int(max_buffer_records))
+        self.encoding = encoding
+
+        self._buffer: List[str] = []
+        self._buffer_lock = threading.Lock()
+        self._io_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._closed = False
+        self._flush_thread: Optional[threading.Thread] = None
+
+        # Create the session log file immediately at session start so it is visible on disk.
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)
+        self.filepath.touch(exist_ok=True)
+
+        if self.flush_interval > 0.0:
+            self._flush_thread = threading.Thread(
+                target=self._flush_loop,
+                name="session-log-flusher",
+                daemon=True,
+            )
+            self._flush_thread.start()
+
+    def _flush_loop(self) -> None:
+        """Sleep with zero CPU overhead until the flush interval elapses or stop is signaled."""
+        while not self._stop_event.wait(timeout=self.flush_interval):
+            try:
+                self.flush()
+            except Exception:
+                pass
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Format and append a log line to the in-memory batch buffer."""
+        if self._closed:
+            return
+        try:
+            msg = self.format(record)
+            should_flush = False
+            with self._buffer_lock:
+                if self._closed:
+                    return
+                self._buffer.append(msg)
+                if self.flush_interval <= 0.0 or len(self._buffer) >= self.max_buffer_records:
+                    should_flush = True
+            if should_flush:
+                self.flush()
+        except Exception:
+            self.handleError(record)
+
+    def flush(self) -> None:
+        """Flush all currently buffered log lines to disk in a single batched write."""
+        with self._io_lock:
+            with self._buffer_lock:
+                if not self._buffer:
+                    return
+                batch = self._buffer
+                self._buffer = []
+            try:
+                self.filepath.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.filepath, "a", encoding=self.encoding) as fh:
+                    fh.write("\n".join(batch) + "\n")
+                    fh.flush()
+            except Exception:
+                if not self._closed:
+                    with self._buffer_lock:
+                        self._buffer = batch + self._buffer
+
+    def close(self) -> None:
+        """Stop the background timer, flush all remaining buffered records, and mark closed."""
+        if self._closed:
+            super().close()
+            return
+        self._stop_event.set()
+        thread = self._flush_thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        try:
+            self.flush()
+        finally:
+            with self._buffer_lock:
+                self._closed = True
+            super().close()
 
 
 def redact_secrets(text: Any) -> str:
@@ -28,28 +138,48 @@ def redact_secrets(text: Any) -> str:
     return val
 
 
+def _detach_legacy_file_handlers(root_logger: logging.Logger, legacy_log_path: Path) -> None:
+    """Close and remove any FileHandler writing to the legacy unbounded automation.log."""
+    try:
+        resolved_target = str(legacy_log_path.resolve())
+    except Exception:
+        resolved_target = str(legacy_log_path)
+
+    for handler in root_logger.handlers[:]:
+        if isinstance(handler, logging.FileHandler):
+            try:
+                h_path = str(Path(handler.baseFilename).resolve())
+            except Exception:
+                h_path = str(getattr(handler, "baseFilename", ""))
+            if h_path == resolved_target or Path(h_path).name == "automation.log":
+                try:
+                    root_logger.removeHandler(handler)
+                    handler.flush()
+                    handler.close()
+                except Exception:
+                    pass
+
+
 def init_logging(log_dir: Optional[Path] = None) -> Path:
-    """Initialize logging handler to file logs/automation.log."""
+    """Initialize logging subsystem for single-session log persistence.
+
+    Does not attach a duplicate unbounded automation.log FileHandler, and preserves
+    the most recent session log file across app restarts until a new session starts.
+    """
     if log_dir is None:
         log_dir = get_project_root() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "automation.log"
+    sessions_dir = get_sessions_dir(log_dir)
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
-    # Avoid duplicate file handlers
-    for handler in root_logger.handlers[:]:
-        if isinstance(handler, logging.FileHandler) and handler.baseFilename == str(log_file):
-            return log_file
+    _detach_legacy_file_handlers(root_logger, log_dir / "automation.log")
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    )
-    root_logger.addHandler(file_handler)
-
-    return log_file
+    recent = get_most_recent_session_log_file(log_dir)
+    if recent is not None:
+        return recent
+    return sessions_dir / "session_latest.log"
 
 
 def get_sessions_dir(base_dir: Optional[Path] = None) -> Path:
@@ -62,10 +192,15 @@ def get_sessions_dir(base_dir: Optional[Path] = None) -> Path:
 
 
 def prune_old_session_files(session_dir: Path, max_files: int = MAX_SESSION_LOGS) -> None:
-    """Enforce max session files limit (FIFO rotation: oldest deleted when reaching max_files)."""
+    """Enforce max session files limit (FIFO rotation: oldest deleted when reaching max_files).
+
+    With the default ``max_files=1``, all prior session log files are deleted so that
+    creating the new session file leaves only one log file for the current session.
+    """
     try:
+        limit = max(1, int(max_files))
         files = sorted(session_dir.glob("session_*.log"), key=lambda p: (p.stat().st_mtime, p.name))
-        while len(files) >= max_files:
+        while files and len(files) >= limit:
             oldest = files.pop(0)
             try:
                 oldest.unlink(missing_ok=True)
@@ -75,23 +210,44 @@ def prune_old_session_files(session_dir: Path, max_files: int = MAX_SESSION_LOGS
         pass
 
 
-def start_session_logging(log_dir: Optional[Path] = None, max_sessions: int = MAX_SESSION_LOGS) -> Path:
-    """Start recording a new session log file with rotation keeping at most max_sessions files.
-    Every session starts with 'Start Browsing' and ends after 'Stop' is pressed.
+def start_session_logging(
+    log_dir: Optional[Path] = None,
+    max_sessions: int = MAX_SESSION_LOGS,
+    flush_interval: float = SESSION_LOG_FLUSH_INTERVAL_SECONDS,
+) -> Path:
+    """Start recording a new session log file.
+
+    By default (``max_sessions=1``), deletes all previous session log files (and any
+    legacy ``automation.log``) so only one log file exists containing the current run.
+    Updates are written in batches every ``flush_interval`` seconds (default 60s) and
+    immediately flushed on session stop or when reading logs.
     """
     global _CURRENT_SESSION_FILE, _CURRENT_SESSION_HANDLER
     with _SESSION_LOCK:
         root_logger = logging.getLogger()
 
-        # Detach previous session handler if still attached
+        # Detach and close previous session handler if still attached
         if _CURRENT_SESSION_HANDLER is not None:
+            prev_handler = _CURRENT_SESSION_HANDLER
+            _CURRENT_SESSION_HANDLER = None
             try:
-                _CURRENT_SESSION_HANDLER.flush()
-                _CURRENT_SESSION_HANDLER.close()
-                root_logger.removeHandler(_CURRENT_SESSION_HANDLER)
+                root_logger.removeHandler(prev_handler)
             except Exception:
                 pass
-            _CURRENT_SESSION_HANDLER = None
+            try:
+                prev_handler.close()
+            except Exception:
+                pass
+
+        # Ensure no legacy automation.log handler or stale file remains
+        base_dir = log_dir if log_dir is not None else (get_project_root() / "logs")
+        legacy_auto_log = base_dir / "automation.log"
+        _detach_legacy_file_handlers(root_logger, legacy_auto_log)
+        if max_sessions <= 1 and legacy_auto_log.exists():
+            try:
+                legacy_auto_log.unlink(missing_ok=True)
+            except Exception:
+                pass
 
         s_dir = get_sessions_dir(log_dir)
         prune_old_session_files(s_dir, max_files=max_sessions)
@@ -103,7 +259,11 @@ def start_session_logging(log_dir: Optional[Path] = None, max_sessions: int = MA
             session_file = s_dir / f"session_{timestamp_str}_{counter}.log"
             counter += 1
 
-        handler = logging.FileHandler(session_file, encoding="utf-8")
+        handler = BatchedSessionFileHandler(
+            session_file,
+            flush_interval=flush_interval,
+            encoding="utf-8",
+        )
         handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         )
@@ -115,19 +275,33 @@ def start_session_logging(log_dir: Optional[Path] = None, max_sessions: int = MA
         return session_file
 
 
+def flush_session_logs() -> None:
+    """Immediately flush any buffered log records for the active session to disk."""
+    with _SESSION_LOCK:
+        handler = _CURRENT_SESSION_HANDLER
+    if handler is not None:
+        try:
+            handler.flush()
+        except Exception:
+            pass
+
+
 def stop_session_logging() -> Optional[Path]:
-    """Stop the current session logging handler upon session stop/completion."""
+    """Stop the current session logging handler, flushing all buffered logs to disk."""
     global _CURRENT_SESSION_HANDLER
     with _SESSION_LOCK:
-        if _CURRENT_SESSION_HANDLER is not None:
+        handler = _CURRENT_SESSION_HANDLER
+        _CURRENT_SESSION_HANDLER = None
+        if handler is not None:
             root_logger = logging.getLogger()
             try:
-                _CURRENT_SESSION_HANDLER.flush()
-                _CURRENT_SESSION_HANDLER.close()
-                root_logger.removeHandler(_CURRENT_SESSION_HANDLER)
+                root_logger.removeHandler(handler)
             except Exception:
                 pass
-            _CURRENT_SESSION_HANDLER = None
+            try:
+                handler.close()
+            except Exception:
+                pass
         return _CURRENT_SESSION_FILE
 
 
@@ -182,12 +356,7 @@ def get_current_session_log_file(log_dir: Optional[Path] = None) -> Optional[Pat
 
 def read_current_session_logs(log_dir: Optional[Path] = None) -> str:
     """Read and return all logs of the current session (if running) or most recent session (if idle)."""
-    with _SESSION_LOCK:
-        if _CURRENT_SESSION_HANDLER is not None:
-            try:
-                _CURRENT_SESSION_HANDLER.flush()
-            except Exception:
-                pass
+    flush_session_logs()
 
     file_path = get_current_session_log_file(log_dir)
     if file_path and file_path.exists():
@@ -238,3 +407,6 @@ def emit(log_queue: Optional[queue.Queue], message: str, level: int = logging.IN
             log_queue.put_nowait(safe_msg)
         except queue.Full:
             pass
+
+
+atexit.register(stop_session_logging)

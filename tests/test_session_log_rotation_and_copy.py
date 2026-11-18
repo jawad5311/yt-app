@@ -1,23 +1,144 @@
-"""Tests for session log rotation (max 5 sessions), 1000-line UI limit, and 'Copy Complete Logs'."""
+"""Tests for single-session log retention, 1-minute batched disk writes, 1000-line UI limit, and 'Copy Complete Logs'."""
 
-import logging
 import queue
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from src.utils.logger import (
     MAX_SESSION_LOGS,
+    SESSION_LOG_FLUSH_INTERVAL_SECONDS,
+    BatchedSessionFileHandler,
     emit,
-    get_current_session_log_file,
+    flush_session_logs,
     get_sessions_dir,
+    init_logging,
     prune_old_session_files,
     read_current_session_logs,
     start_session_logging,
     stop_session_logging,
 )
+
+
+def test_default_keeps_only_one_recent_session_and_deletes_old_logs(tmp_path):
+    """Default MAX_SESSION_LOGS is 1: starting a new session deletes previous session logs and legacy automation.log."""
+    assert MAX_SESSION_LOGS == 1
+    assert SESSION_LOG_FLUSH_INTERVAL_SECONDS == 60.0
+
+    # Create a legacy automation.log that should be removed when a new session starts
+    legacy_log = tmp_path / "automation.log"
+    legacy_log.write_text("stale legacy log from earlier sessions\n", encoding="utf-8")
+
+    s_dir = get_sessions_dir(tmp_path)
+
+    # Session 1
+    s1 = start_session_logging(log_dir=tmp_path)
+    emit(None, "Session 1 log line")
+    stop_session_logging()
+
+    assert s1.exists()
+    assert not legacy_log.exists()
+    assert list(s_dir.glob("session_*.log")) == [s1]
+    assert "Session 1 log line" in s1.read_text(encoding="utf-8")
+
+    # Calling init_logging (simulating app restart) must preserve Session 1's log file until a new session starts
+    returned_path = init_logging(log_dir=tmp_path)
+    assert returned_path == s1
+    assert s1.exists()
+    assert not legacy_log.exists()
+
+    time.sleep(0.02)
+
+    # Session 2: must delete Session 1's log file so only Session 2's file exists
+    s2 = start_session_logging(log_dir=tmp_path)
+    emit(None, "Session 2 fresh log line")
+    stop_session_logging()
+
+    assert not s1.exists()
+    assert s2.exists()
+    remaining_files = list(s_dir.glob("session_*.log"))
+    assert remaining_files == [s2]
+    all_logs_under_dir = list(tmp_path.rglob("*.log"))
+    assert all_logs_under_dir == [s2]
+    s2_text = s2.read_text(encoding="utf-8")
+    assert "Session 2 fresh log line" in s2_text
+    assert "Session 1 log line" not in s2_text
+
+
+def test_batched_flushing_defers_disk_writes_until_interval_or_stop(tmp_path):
+    """Logs are buffered in memory between flushes and written in batches after the flush interval or on stop."""
+    # Use a long interval (60s) to confirm emit() does not immediately hit disk on every line
+    session_file = start_session_logging(log_dir=tmp_path, flush_interval=60.0)
+    try:
+        assert session_file.exists()
+        emit(None, "Buffered line 1")
+        emit(None, "Buffered line 2")
+
+        # File on disk should still be empty before the 60-second batch flush (saving CPU/disk I/O)
+        assert session_file.read_text(encoding="utf-8") == ""
+
+        # Explicit flush persists the batch immediately
+        flush_session_logs()
+        flushed_text = session_file.read_text(encoding="utf-8")
+        assert "Buffered line 1" in flushed_text
+        assert "Buffered line 2" in flushed_text
+
+        # Emit one more line and verify stop_session_logging() flushes it immediately
+        emit(None, "Final line before stop")
+        assert "Final line before stop" not in session_file.read_text(encoding="utf-8")
+    finally:
+        stop_session_logging()
+
+    final_text = session_file.read_text(encoding="utf-8")
+    assert "Final line before stop" in final_text
+
+
+def test_batched_flushing_writes_automatically_after_interval(tmp_path):
+    """Background timer automatically flushes buffered logs in a batch once flush_interval elapses."""
+    session_file = start_session_logging(log_dir=tmp_path, flush_interval=0.15)
+    try:
+        emit(None, "Timed batch line A")
+        emit(None, "Timed batch line B")
+        # Not written immediately on emit
+        assert session_file.read_text(encoding="utf-8") == ""
+
+        # Wait for the periodic batch flush timer to fire
+        deadline = time.monotonic() + 2.0
+        content = ""
+        while time.monotonic() < deadline:
+            content = session_file.read_text(encoding="utf-8")
+            if "Timed batch line B" in content:
+                break
+            time.sleep(0.05)
+
+        assert "Timed batch line A" in content
+        assert "Timed batch line B" in content
+    finally:
+        stop_session_logging()
+
+
+def test_batched_handler_buffer_cap_triggers_early_flush(tmp_path):
+    """If a burst reaches max_buffer_records before the timer fires, the handler flushes early."""
+    import logging
+
+    target = tmp_path / "sessions" / "session_cap_test.log"
+    handler = BatchedSessionFileHandler(target, flush_interval=60.0, max_buffer_records=3)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    try:
+        for idx in range(2):
+            rec = logging.LogRecord("test", logging.INFO, "", 0, f"burst {idx}", (), None)
+            handler.emit(rec)
+        # 2 records < cap of 3 -> still buffered
+        assert target.read_text(encoding="utf-8") == ""
+
+        rec3 = logging.LogRecord("test", logging.INFO, "", 0, "burst 2", (), None)
+        handler.emit(rec3)
+        # Reached cap of 3 -> flushed immediately
+        text = target.read_text(encoding="utf-8")
+        assert "burst 0" in text
+        assert "burst 1" in text
+        assert "burst 2" in text
+    finally:
+        handler.close()
 
 
 def test_session_logging_creates_file_and_records_logs(tmp_path):

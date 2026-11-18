@@ -1,6 +1,10 @@
 from .helpers import human_like_delay, sanitize_text, slow_type
 from .logger import (
+    MAX_SESSION_LOGS,
+    SESSION_LOG_FLUSH_INTERVAL_SECONDS,
+    BatchedSessionFileHandler,
     emit,
+    flush_session_logs,
     get_current_session_log_file,
     get_most_recent_session_log_file,
     init_logging,
@@ -12,8 +16,12 @@ from .logger import (
 )
 
 __all__ = [
+    "BatchedSessionFileHandler",
+    "MAX_SESSION_LOGS",
+    "SESSION_LOG_FLUSH_INTERVAL_SECONDS",
     "init_logging",
     "start_session_logging",
+    "flush_session_logs",
     "stop_session_logging",
     "is_session_logging_active",
     "get_current_session_log_file",

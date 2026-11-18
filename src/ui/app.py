@@ -24,6 +24,7 @@ from ..models.video_task import VideoTask
 from ..models.watch_stats import format_duration, resolve_video_key
 from ..utils.logger import (
     emit,
+    flush_session_logs,
     get_current_session_log_file,
     init_logging,
     read_current_session_logs,
@@ -783,7 +784,7 @@ class YTBotApp(tk.Tk):
         self._current_session_target_vids = 0
         self._current_session_target_shorts = 0
         self._update_close_button_state()
-        start_session_logging()
+        self.log_file = start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
         self.current_session_id = session_id
@@ -813,6 +814,7 @@ class YTBotApp(tk.Tk):
             self.session_manager_thread = None
             err_msg = f"Failed to start automation manager thread: {sanitize_error(exc, self.loaded_accounts)}"
             emit(self.log_queue, err_msg, logging.ERROR)
+            stop_session_logging()
             dashboard = self.views.get("dashboard")
             if dashboard is not None:
                 try:
@@ -1015,7 +1017,7 @@ class YTBotApp(tk.Tk):
         self._current_session_target_vids = 0
         self._current_session_target_shorts = 0
         self._update_close_button_state()
-        start_session_logging()
+        self.log_file = start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
         self.current_session_id = session_id
@@ -1051,6 +1053,7 @@ class YTBotApp(tk.Tk):
             self.session_manager_thread = None
             err_msg = f"Failed to start watching manager thread: {sanitize_error(exc, [self.loaded_accounts[0]])}"
             emit(self.log_queue, err_msg, logging.ERROR)
+            stop_session_logging()
             dashboard = self.views.get("dashboard")
             if dashboard is not None:
                 try:
@@ -1231,6 +1234,7 @@ class YTBotApp(tk.Tk):
             return
         mode_label = "browsing" if getattr(self, "current_mode", "automation") == "watching" else "automation"
         emit(self.log_queue, f"Stopping {mode_label} session... Please wait for workers to cleanup.")
+        flush_session_logs()
         self.show_report_modal("Generating report, do not close the app.", auto_hide_seconds=2.0)
         dashboard = self.views.get("dashboard")
         if dashboard is not None:
@@ -1611,6 +1615,12 @@ class YTBotApp(tk.Tk):
                     worker.reporting_driver = None
                 except Exception:
                     pass
+
+        # Flush and close the active session log file before exiting the process
+        try:
+            stop_session_logging()
+        except Exception:
+            pass
 
         try:
             self.quit()
