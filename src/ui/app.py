@@ -572,6 +572,12 @@ class YTBotApp(tk.Tk):
                 elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False
+                elif name == "accounts":
+                    if hasattr(view_widget, "refresh_auth_badges"):
+                        try:
+                            view_widget.refresh_auth_badges()
+                        except Exception:
+                            pass
                 elif name == "dashboard":
                     if hasattr(view_widget, "refresh_channel_stats"):
                         try:
@@ -1600,6 +1606,14 @@ class YTBotApp(tk.Tk):
             except Exception:
                 pass
             self.report_modal = None
+
+        # Cleanly stop any standalone account authentication browsers if still active
+        accounts_view = self.__dict__.get("views", {}).get("accounts") if isinstance(self.__dict__.get("views"), dict) else None
+        if accounts_view is not None and hasattr(accounts_view, "stop_all_authentications"):
+            try:
+                accounts_view.stop_all_authentications()
+            except Exception:
+                pass
 
         # Cleanly stop any worker drivers if still active
         for worker in list(self.__dict__.get("active_workers", [])):

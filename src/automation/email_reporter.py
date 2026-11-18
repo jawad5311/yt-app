@@ -2047,7 +2047,22 @@ class EmailReporter:
                     return True
 
         # 3. Primary Headless Browser Delivery (fresh instance if no persistent reporting driver open)
-        if account is not None:
+        # Never launch a headless reporting browser when the active browser is not logged in yet
+        # (e.g. still on accounts.google.com sign-in/challenge screen), because headless Gmail for
+        # the same unauthenticated account will fail.
+        source_is_unauthenticated = False
+        if driver is not None and not getattr(driver, "_is_reporting", False):
+            try:
+                from .login import LoginState, check_login_state
+                curr_u = getattr(driver, "current_url", "")
+                if isinstance(curr_u, str) and "accounts.google.com" in curr_u.lower():
+                    source_is_unauthenticated = True
+                elif check_login_state(driver, account) in (LoginState.SIGNED_OUT, LoginState.SIGNED_IN_OTHER):
+                    source_is_unauthenticated = True
+            except Exception:
+                pass
+
+        if account is not None and not source_is_unauthenticated:
             try:
                 if log_queue:
                     emit(log_queue, f"Launching headless browser to deliver alert email ({alert_type})...", logging.INFO)
@@ -2074,6 +2089,13 @@ class EmailReporter:
             except Exception as exc:
                 if log_queue:
                     emit(log_queue, f"Headless alert email delivery error: {_clean_error_msg(exc)}", logging.WARNING)
+        elif source_is_unauthenticated:
+            if log_queue:
+                emit(
+                    log_queue,
+                    f"Skipping headless browser alert email ({alert_type}): account {email_addr} is not logged in yet.",
+                    logging.INFO,
+                )
 
         # 4. Fallback: Active browser session if already available and not dedicated reporting driver
         # NEVER use the active watching browser if this alert is about a login issue, manual challenge,

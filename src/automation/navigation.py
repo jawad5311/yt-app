@@ -2,7 +2,7 @@ import logging
 import queue
 import random
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import urllib.parse
 
 from selenium.webdriver.common.by import By
@@ -465,13 +465,25 @@ def find_and_click_search_result(
     max_scrolls: int = 3,
     log_queue: Optional[queue.Queue] = None,
     allow_channel_fallback: bool = False,
+    eligibility_check: Optional[Callable[[str, str, str], bool]] = None,
+    priority_key: Optional[Callable[[str, str, str], Tuple[int, float]]] = None,
+    exclude_shorts: bool = False,
+    max_channel_candidates: Optional[int] = None,
 ) -> Optional[Dict[str, str]]:
     """Scan YouTube search results for a video matching task (by ID or title) or target_channels.
+
+    If ``eligibility_check`` is provided, results that fail eligibility (e.g. completed,
+    target achieved, disabled, or on cooldown) are skipped and never opened.
+    If ``priority_key`` is provided for target-channel matches, eligible results are
+    prioritized by ``priority_key`` (e.g. zero watch time first, then least watch time)
+    across up to ``max_channel_candidates`` eligible channel videos.
 
     If found, smooth scrolls into view, clicks the video organically to open in the current tab,
     and returns metadata {'url': ..., 'title': ..., 'channel': ...}.
     Returns None if no matching video is found after max_scrolls.
     """
+    from ..utils.helpers import clean_youtube_url
+
     target_video_id = extract_video_id(task.url) if task and task.url else None
     candidate_titles = task.get_title_queries() if task else []
     target_channels_clean = [ch.strip().lower().lstrip("@") for ch in target_channels if ch.strip()]
@@ -479,6 +491,22 @@ def find_and_click_search_result(
         c_clean = task.channel.strip().lower().lstrip("@")
         if c_clean and c_clean not in target_channels_clean:
             target_channels_clean.append(c_clean)
+
+    def _clean_item_url(item: Dict[str, Any]) -> str:
+        raw_url = item.get("url") or ""
+        return clean_youtube_url(raw_url) if raw_url else ""
+
+    def _is_result_allowed(item: Dict[str, Any]) -> bool:
+        raw_url = item.get("url") or ""
+        if exclude_shorts and "/shorts/" in raw_url.lower():
+            return False
+        if eligibility_check is not None:
+            c_url = _clean_item_url(item)
+            try:
+                return bool(eligibility_check(c_url, item.get("title", ""), item.get("channel", "")))
+            except Exception:
+                return False
+        return True
 
     emit(log_queue, "Scanning search results for matching video...")
 
@@ -512,6 +540,8 @@ def find_and_click_search_result(
         if target_video_id:
             for idx, item in enumerate(results_data):
                 if target_video_id in item.get("url", ""):
+                    if not _is_result_allowed(item):
+                        continue
                     matched_idx = idx
                     match_reason = f"video ID '{target_video_id}'"
                     break
@@ -531,6 +561,8 @@ def find_and_click_search_result(
                             raw_text = item.get("rawText", "").lower()
                             if not any(tc in ch_name or tc in ch_href or tc in raw_text for tc in target_channels_clean):
                                 continue
+                        if not _is_result_allowed(item):
+                            continue
                         matched_idx = idx
                         match_reason = f"title '{cand}'"
                         break
@@ -539,22 +571,55 @@ def find_and_click_search_result(
 
         # Priority 3: Match by target channel name or channel handle (when searching directly for channel or fallback allowed)
         if matched_idx < 0 and target_channels_clean and (not candidate_titles or allow_channel_fallback) and (not target_video_id or allow_channel_fallback):
+            channel_candidates: List[Tuple[Tuple[int, float], int, str]] = []
+            seen_candidate_keys = set()
             for idx, item in enumerate(results_data):
                 ch_name = item.get("channel", "").lower()
                 ch_href = item.get("channelHref", "").lower()
                 raw_text = item.get("rawText", "").lower()
+                matched_target_ch = None
                 for target_ch in target_channels_clean:
                     if target_ch in ch_name or target_ch in ch_href or target_ch in raw_text:
-                        matched_idx = idx
-                        match_reason = f"target channel '{target_ch}'"
+                        matched_target_ch = target_ch
                         break
-                if matched_idx >= 0:
+                if matched_target_ch is None:
+                    continue
+                if not _is_result_allowed(item):
+                    continue
+
+                if priority_key is None:
+                    matched_idx = idx
+                    match_reason = f"target channel '{matched_target_ch}'"
                     break
+
+                c_url = _clean_item_url(item)
+                dedup_key = extract_video_id(c_url) or c_url or f"idx:{idx}"
+                if dedup_key in seen_candidate_keys:
+                    continue
+                seen_candidate_keys.add(dedup_key)
+
+                try:
+                    prio = priority_key(c_url, item.get("title", ""), item.get("channel", ""))
+                except Exception:
+                    prio = (1, float("inf"))
+                channel_candidates.append((prio, idx, matched_target_ch))
+                if max_channel_candidates and len(channel_candidates) >= max_channel_candidates:
+                    break
+
+            if matched_idx < 0 and channel_candidates:
+                best_prio, best_idx, best_ch = min(channel_candidates, key=lambda entry: (entry[0], entry[1]))
+                has_zero_watch = best_prio[0] == 0
+                enough_inspected = (
+                    max_channel_candidates is None
+                    or len(channel_candidates) >= max_channel_candidates
+                )
+                if has_zero_watch or enough_inspected or scroll_idx >= max_scrolls:
+                    matched_idx = best_idx
+                    match_reason = f"target channel '{best_ch}'"
 
         if matched_idx >= 0:
             matched_item = results_data[matched_idx]
             if matched_item.get("url"):
-                from ..utils.helpers import clean_youtube_url
                 matched_item["url"] = clean_youtube_url(matched_item["url"])
             emit(log_queue, f"Matched search result #{matched_idx + 1} ({match_reason}): '{matched_item.get('title')}'")
 

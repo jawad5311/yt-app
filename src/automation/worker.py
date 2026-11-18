@@ -14,10 +14,10 @@ from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .dispatcher import TaskDispatcher
-from .driver import close_driver, is_driver_alive, setup_driver
+from .driver import close_driver, is_driver_alive, is_session_disconnected_error, setup_driver
 from .email_reporter import EmailReporter, SessionReport
 from .login import check_account_logged_in, is_logged_in, perform_google_login
-from .navigation import navigate_to_video_organically
+from .navigation import navigate_to_video_organically, safe_get
 from .session_tracker import SessionChannelTracker
 from .youtube_actions import DEFAULT_FULL_VIDEO_TIMEOUT_SECONDS, watch_short, watch_video
 
@@ -537,11 +537,12 @@ class AutomationWorker:
         succeeded = 0
 
         try:
+            self._login_verified = False
+            self.has_started_automation = False
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
             known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
             known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
             self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
-            self.has_started_automation = True
 
             if self.stop_event.is_set():
                 return
@@ -556,15 +557,6 @@ class AutomationWorker:
                 except Exception:
                     pass
             login_ok = self._ensure_signed_in_and_wait(max_retries=max_retries)
-
-            if login_ok and self.worker_id == 0:
-                # Sign-in verified! Send start notification in headless browser asynchronously
-                self.reporting_thread = threading.Thread(
-                    target=self._async_init_and_send_start_notification,
-                    name="ReportingStartNotificationThread",
-                    daemon=True,
-                )
-                self.reporting_thread.start()
 
             if not login_ok:
                 if self.stop_event.is_set():
@@ -588,10 +580,27 @@ class AutomationWorker:
 
                 emit(self.log_queue, f"Sign-in failed for {self.account.email}: {details}", logging.ERROR)
                 self._report_status(f"Sign-in failed for {self.account.email} — {details}", "error")
-                self._send_critical_alert(alert_type, details)
                 session_status = alert_type
                 session_err = details
                 return
+
+            # Ensure browser reaches YouTube before marking active and sending start notification
+            raw_url = getattr(self.driver, "current_url", "")
+            if isinstance(raw_url, str) and "youtube.com" not in raw_url.lower():
+                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                time.sleep(2.0)
+
+            self._login_verified = True
+            self.has_started_automation = True
+
+            if self.worker_id == 0:
+                # Sign-in verified and YouTube reached! Send start notification in headless browser asynchronously
+                self.reporting_thread = threading.Thread(
+                    target=self._async_init_and_send_start_notification,
+                    name="ReportingStartNotificationThread",
+                    daemon=True,
+                )
+                self.reporting_thread.start()
 
             # Iterate through video tasks
             task_idx = 0
@@ -963,6 +972,13 @@ class AutomationWorker:
     def _send_critical_alert(self, alert_type: str, details: str, force: bool = False) -> None:
         """Send urgent alert email for bot challenges, disconnections, or crashes."""
         if not self.config_mgr:
+            return
+        if getattr(self, "_login_verified", None) is False:
+            emit(
+                self.log_queue,
+                f"Skipping alert email ({alert_type}): account {getattr(self.account, 'email', '')} is not logged in yet. Waiting for login to complete.",
+                logging.INFO,
+            )
             return
         try:
             EmailReporter.send_alert_notification(

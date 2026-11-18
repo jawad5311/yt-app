@@ -79,6 +79,13 @@ class BrowsingWorker:
         """Send urgent alert email for bot challenges, disconnections, or manual action needed."""
         if not self.config_mgr:
             return
+        if getattr(self, "_login_verified", None) is False:
+            emit(
+                self.log_queue,
+                f"Skipping alert email ({alert_type}): account {getattr(self.account, 'email', '')} is not logged in yet. Waiting for login to complete.",
+                logging.INFO,
+            )
+            return
         try:
             from .email_reporter import EmailReporter
             EmailReporter.send_alert_notification(
@@ -182,6 +189,7 @@ class BrowsingWorker:
         videos_watched_count = 0
 
         try:
+            self._login_verified = False
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
             adblock_path = ensure_adblock(log_queue=self.log_queue) if self.skip_ads else None
             self.driver = setup_driver(self.account, log_queue=self.log_queue, adblock_path=adblock_path)
@@ -221,9 +229,9 @@ class BrowsingWorker:
 
                 emit(self.log_queue, f"Sign-in failed for {self.account.email}: {details}", logging.ERROR)
                 self._report_status(f"Sign-in failed for {self.account.email} — {details}", "error")
-                self._send_critical_alert(alert_type, details)
                 return
 
+            self._login_verified = True
             self._report_status(f"Browsing session running on {self.account.email}...", "info")
 
             # ----------------------------------------------------------

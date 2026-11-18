@@ -15,7 +15,109 @@ from selenium.webdriver.support.ui import WebDriverWait
 from ..models.account import Account, normalize_account_id
 from ..utils.helpers import human_like_delay, slow_type
 from ..utils.logger import emit
+from .driver import is_session_disconnected_error
 from .navigation import safe_get
+
+
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_scripts_and_styles(html: str) -> str:
+    """Remove <script> and <style> blocks so JS/CSS text never triggers false challenge matches."""
+    if not html or not isinstance(html, str):
+        return ""
+    return _SCRIPT_STYLE_RE.sub(" ", html)
+
+
+def _get_visible_page_text(driver: Any, page_source: str = "") -> str:
+    """Return lowercased visible text on the page, falling back to stripped HTML for mocks."""
+    try:
+        inner_text = driver.execute_script(
+            "return (document && document.body && document.body.innerText) ? document.body.innerText : '';"
+        )
+        if isinstance(inner_text, str) and inner_text.strip():
+            return inner_text.lower()
+    except Exception as exc:
+        if is_session_disconnected_error(exc):
+            raise
+    return _strip_scripts_and_styles(page_source).lower()
+
+
+def _has_visible_email_input(driver: Any) -> bool:
+    """Return True if a Google sign-in email/identifier input box is currently visible."""
+    try:
+        boxes = driver.find_elements(
+            By.XPATH,
+            "//input[@id='identifierId' or @name='identifier' or @type='email' or @aria-label='Email or phone']",
+        )
+        return any(getattr(b, "is_displayed", lambda: False)() is True for b in boxes)
+    except Exception as exc:
+        if is_session_disconnected_error(exc):
+            raise
+        return False
+
+
+def _is_email_input_empty(driver: Any) -> bool:
+    """Return True if a visible email input box exists and currently has an empty value."""
+    try:
+        boxes = driver.find_elements(
+            By.XPATH,
+            "//input[@id='identifierId' or @name='identifier' or @type='email' or @aria-label='Email or phone']",
+        )
+        for box in boxes:
+            try:
+                if getattr(box, "is_displayed", lambda: False)() is True:
+                    val = box.get_attribute("value")
+                    if val is None or (isinstance(val, str) and not val.strip()):
+                        return True
+                    return False
+            except Exception:
+                continue
+    except Exception as exc:
+        if is_session_disconnected_error(exc):
+            raise
+    return False
+
+
+def _check_captcha_dom_visibility(driver: Any) -> str:
+    """Inspect DOM CAPTCHA elements and return 'visible', 'hidden', or 'unknown'.
+
+    Google's standard /v3/signin/identifier page often includes hidden/empty
+    <img id="captchaimg"> or hidden captcha input elements in page_source.
+    Checking actual DOM visibility prevents false-positive CAPTCHA detection
+    on the normal email entry screen.
+    """
+    try:
+        captcha_els = driver.find_elements(
+            By.CSS_SELECTOR,
+            "#captchaimg, input[name='captcha'], input[name='ca'], iframe[src*='recaptcha']",
+        )
+    except Exception as exc:
+        if is_session_disconnected_error(exc):
+            raise
+        captcha_els = []
+
+    if captcha_els:
+        for el in captcha_els:
+            try:
+                if getattr(el, "is_displayed", lambda: False)() is not True:
+                    continue
+                tag = (getattr(el, "tag_name", "") or "").lower()
+                if tag == "img":
+                    src = el.get_attribute("src")
+                    # An empty src placeholder img is not an active CAPTCHA challenge
+                    if isinstance(src, str) and not src.strip():
+                        continue
+                return "visible"
+            except Exception:
+                continue
+        return "hidden"
+
+    # No CAPTCHA DOM nodes found; if the normal email input is visible, this is the email entry screen
+    if _has_visible_email_input(driver):
+        return "hidden"
+
+    return "unknown"
 
 
 class LoginState(Enum):
@@ -410,11 +512,9 @@ def _handle_email_input(
     log_queue: Optional[queue.Queue] = None,
 ) -> bool:
     """Enter email if email input is present on screen."""
+    email_xpath = "//input[@id='identifierId'] | //input[@name='identifier'] | //input[@aria-label='Email or phone'] | //input[@type='email']"
     try:
-        email_elements = driver.find_elements(
-            By.XPATH,
-            "//input[@id='identifierId'] | //input[@name='identifier'] | //input[@aria-label='Email or phone'] | //input[@type='email']",
-        )
+        email_elements = driver.find_elements(By.XPATH, email_xpath)
         email_input = None
         for el in email_elements:
             try:
@@ -425,29 +525,67 @@ def _handle_email_input(
                 continue
 
         if not email_input:
+            cur_u = (getattr(driver, "current_url", "") or "").lower()
+            if "accounts.google.com" in cur_u and "confirmidentifier" not in cur_u:
+                try:
+                    email_input = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.XPATH, email_xpath))
+                    )
+                except Exception:
+                    email_input = None
+
+        if not email_input:
             return False
 
         emit(log_queue, f"Entering email for {account.email}...")
-        email_input.click()
-        email_input.clear()
+        try:
+            email_input.click()
+        except Exception:
+            try:
+                driver.execute_script("arguments[0].focus(); arguments[0].click();", email_input)
+            except Exception:
+                pass
+        try:
+            email_input.clear()
+        except Exception:
+            pass
         slow_type(email_input, account.email)
+
+        # Verify typed value did not get swallowed by page transition/focus race
+        try:
+            typed_val = email_input.get_attribute("value")
+            if isinstance(typed_val, str) and not typed_val.strip():
+                email_input.send_keys(account.email)
+        except Exception:
+            pass
+
         human_like_delay(0.5, 1.0)
 
         try:
             next_btn = driver.find_element(
                 By.XPATH,
-                "//button[contains(., 'Next') or contains(., 'weiter') or @id='identifierNext'] | //div[@id='identifierNext']//button",
+                "//div[@id='identifierNext']//button | //button[@id='identifierNext'] | //button[contains(., 'Next') or contains(., 'weiter') or @id='identifierNext']",
             )
             try:
                 next_btn.click()
             except Exception:
-                driver.execute_script("arguments[0].click();", next_btn)
+                driver.execute_script(
+                    """
+                    var el = arguments[0];
+                    el.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+                    el.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true}));
+                    el.click();
+                    """,
+                    next_btn,
+                )
         except Exception:
             email_input.send_keys(Keys.ENTER)
 
         human_like_delay(2.5, 4.0)
         return True
     except Exception as exc:
+        if is_session_disconnected_error(exc):
+            raise
         err_msg = str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__
         emit(log_queue, f"Notice during email input: {err_msg}", logging.DEBUG)
         return False
@@ -553,17 +691,24 @@ def _perform_automated_login_steps(
             pass
 
         # Stop if a genuine bot/CAPTCHA or phone 2FA challenge is present
-        # Note: Do not treat confirmidentifier or password entry as manual challenge
+        # Note: Do not treat normal email entry, confirmidentifier, or password entry as manual challenge
+        visible_text = _get_visible_page_text(driver, page_source)
+        stripped_source = _strip_scripts_and_styles(page_source).lower()
+        captcha_vis = _check_captcha_dom_visibility(driver)
+        has_captcha_el = captcha_vis == "visible" or (
+            captcha_vis == "unknown" and "captchaimg" in stripped_source
+        )
         is_bot = (
             "/sorry/index" in current_url
             or "challenge/recaptcha" in current_url
-            or "captchaimg" in page_source
-            or "unusual traffic" in page_source
-            or "show you're not a robot" in page_source
+            or "signin/challenge/az" in current_url
+            or has_captcha_el
+            or "unusual traffic" in visible_text
+            or "show you're not a robot" in visible_text
         )
         is_phone_2fa = (
             any(c in current_url for c in ("challenge/totp", "challenge/ipp", "challenge/selection", "2step"))
-            or any(p in page_source for p in ("check your phone", "google sent a notification to your phone", "enter the 2-digit number", "tap yes on your phone"))
+            or any(p in visible_text for p in ("check your phone", "google sent a notification to your phone", "enter the 2-digit number", "tap yes on your phone"))
         )
         if is_bot or is_phone_2fa:
             break
@@ -571,7 +716,7 @@ def _perform_automated_login_steps(
         action_taken = False
 
         # 1. Account chooser
-        if "accountchooser" in current_url or "choose an account" in page_source:
+        if "accountchooser" in current_url or "choose an account" in visible_text:
             if _handle_account_chooser(driver, account, log_queue, attempt_count=account_chooser_attempts):
                 account_chooser_attempts += 1
                 action_taken = True
@@ -582,21 +727,23 @@ def _perform_automated_login_steps(
                 break
 
         # 2. Confirm identifier screen
-        if "confirmidentifier" in current_url or ("accounts.google.com" in current_url and "identifiernext" in page_source and "identifierid" not in page_source):
+        if "confirmidentifier" in current_url or ("accounts.google.com" in current_url and "identifiernext" in stripped_source and "identifierid" not in stripped_source):
             if _handle_confirm_identifier(driver, account, log_queue):
                 action_taken = True
                 human_like_delay(2.0, 3.5)
                 continue
 
         # 3. Email input screen
-        has_email_box = False
-        try:
-            email_boxes = driver.find_elements(By.XPATH, "//input[@id='identifierId' or @name='identifier' or @type='email']")
-            has_email_box = any(b.is_displayed() for b in email_boxes)
-        except Exception:
-            pass
+        has_email_box = _has_visible_email_input(driver)
+        on_email_identifier_url = (
+            "accounts.google.com" in current_url
+            and any(p in current_url for p in ("/identifier", "/signin/v2", "/v3/signin", "servicelogin"))
+            and "confirmidentifier" not in current_url
+            and "challenge/" not in current_url
+            and "accountchooser" not in current_url
+        )
 
-        if has_email_box:
+        if has_email_box or on_email_identifier_url:
             if _handle_email_input(driver, account, log_queue):
                 action_taken = True
                 human_like_delay(2.0, 3.5)
@@ -700,18 +847,22 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
         page_source = ""
         try:
             page_source = (getattr(driver, "page_source", "") or "").lower()
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_session_disconnected_error(exc):
+                raise
+
+        visible_text = _get_visible_page_text(driver, page_source)
+        stripped_source = _strip_scripts_and_styles(page_source).lower()
 
         # 1. Google / YouTube Bot Block & CAPTCHA (sorry/index, unusual traffic, bot checks)
-        # Check URL path or specific challenge phrases in page_source.
+        # Check URL path or specific challenge phrases in visible text (never raw <script>/<style> blocks).
         # Note: Do NOT match bare 'recaptcha' in page_source because normal YouTube pages include
         # '.grecaptcha-badge{visibility:hidden}' in their default stylesheet.
         is_bot_challenge = (
             "/sorry/index" in url
             or "google.com/sorry" in url
             or "youtube.com/sorry" in url
-            or any(phrase in page_source for phrase in (
+            or any(phrase in visible_text for phrase in (
                 "sorry/index",
                 "unusual traffic from your computer network",
                 "our systems have detected unusual traffic",
@@ -731,17 +882,26 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
 
         # 2. Authentication challenges and 2FA on Google Account sign-in pages
         if "accounts.google.com" in url:
-            # CAPTCHA on Google sign-in
-            if any(c in url for c in ("challenge/recaptcha", "signin/challenge/az")) or \
-               any(el in page_source for el in ("id=\"captchaimg\"", "id='captchaimg'", "name=\"captcha\"", "name='captcha'")):
+            # CAPTCHA on Google sign-in — verify actual DOM visibility so hidden/pre-rendered
+            # <img id="captchaimg"> templates on /v3/signin/identifier do not trigger false positives.
+            captcha_vis = _check_captcha_dom_visibility(driver)
+            has_captcha_dom = captcha_vis == "visible" or (
+                captcha_vis == "unknown"
+                and any(
+                    el in stripped_source
+                    for el in ('id="captchaimg"', "id='captchaimg'", 'name="captcha"', "name='captcha'")
+                )
+            )
+            if any(c in url for c in ("challenge/recaptcha", "signin/challenge/az")) or has_captcha_dom:
                 return (
                     "Manual Action Required - Google CAPTCHA / Bot Challenge",
                     "Google presented a CAPTCHA or bot verification challenge. Manual completion in the browser is required.",
                 )
 
-            is_confirm_identifier = "confirmidentifier" in url or ("identifiernext" in page_source and "identifierid" not in page_source)
-            has_pwd_input = "challenge/pwd" in url or "type=\"password\"" in page_source or "type='password'" in page_source
-            has_wrong_password = any(p in page_source for p in ("wrong password", "falsches passwort", "incorrect password"))
+            has_email_input = _has_visible_email_input(driver)
+            is_confirm_identifier = "confirmidentifier" in url or ("identifiernext" in stripped_source and "identifierid" not in stripped_source)
+            has_pwd_input = "challenge/pwd" in url or 'type="password"' in stripped_source or "type='password'" in stripped_source
+            has_wrong_password = any(p in visible_text for p in ("wrong password", "falsches passwort", "incorrect password"))
 
             if has_wrong_password:
                 return (
@@ -750,9 +910,9 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
                 )
 
             # 2-Step Verification / Security Challenge / Phone prompt
-            # Note: challenge/pwd is the standard password prompt and must NOT be treated as a 2FA challenge
+            # Note: challenge/pwd and normal email entry are NOT 2FA challenges
             if any(c in url for c in ("2step", "challenge/totp", "challenge/ipp", "challenge/selection", "speedbump")) or \
-               any(phrase in page_source for phrase in (
+               any(phrase in visible_text for phrase in (
                    "2-step verification",
                    "check your phone",
                    "google sent a notification to your phone",
@@ -760,16 +920,16 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
                    "get a verification code",
                    "tap yes on your phone",
                )) or (
-                   not is_confirm_identifier and not has_pwd_input and "verify it's you" in page_source
+                   not has_email_input and not is_confirm_identifier and not has_pwd_input and "verify it's you" in visible_text
                ):
                 return (
                     "Manual Action Required - 2-Step Verification / Security Challenge",
                     "Google presented a 2-Step Verification prompt or security challenge. Please verify on your device or browser manually.",
                 )
 
-            # Re-authentication / password re-entry (only when not on an actionable confirmidentifier or password input screen)
-            if not is_confirm_identifier and not has_pwd_input:
-                if any(phrase in page_source for phrase in (
+            # Re-authentication / password re-entry (only when not on an actionable email, confirmidentifier, or password input screen)
+            if not has_email_input and not is_confirm_identifier and not has_pwd_input:
+                if any(phrase in visible_text for phrase in (
                     "sign in again",
                     "your session has expired",
                     "re-enter your password",
@@ -782,7 +942,9 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
                     )
 
         return None
-    except Exception:
+    except Exception as exc:
+        if is_session_disconnected_error(exc):
+            raise
         return None
 def perform_google_login(
     driver: Any,
@@ -813,6 +975,9 @@ def perform_google_login(
             emit(log_queue, "Login check cancelled by user.")
             return False
 
+        # Probe current_url directly so external browser closure raises immediately
+        _ = getattr(driver, "current_url", "")
+
         state = check_login_state(driver, account)
         if state == LoginState.SIGNED_IN_MATCH:
             emit(log_queue, f"Account {account.email} is already signed in! Redirecting to YouTube...")
@@ -826,6 +991,8 @@ def perform_google_login(
             return False
         elif already_on_signin and state == LoginState.SIGNED_OUT:
             break
+        elif (time.time() - start_wait >= 2.0) and state == LoginState.SIGNED_OUT and _has_visible_email_input(driver):
+            break
 
         time.sleep(1.0)
 
@@ -834,6 +1001,8 @@ def perform_google_login(
     try:
         _perform_automated_login_steps(driver, account, log_queue, stop_event=stop_event)
     except Exception as exc:
+        if is_session_disconnected_error(exc):
+            raise
         err_msg = str(exc).splitlines()[0] if str(exc).strip() else type(exc).__name__
         emit(log_queue, f"Automatic login input notice: {err_msg}", logging.WARNING)
 
@@ -857,8 +1026,9 @@ def perform_google_login(
             ua = driver.execute_script("return navigator.userAgent") or ""
             if isinstance(ua, str) and "headless" in ua.lower():
                 is_headless = True
-        except Exception:
-            pass
+        except Exception as exc:
+            if is_session_disconnected_error(exc):
+                raise
 
     # Wait loop for login completion or manual CAPTCHA / 2FA completion
     # In headless mode or when wait_for_challenge_resolution is False, wait at most 5s since manual user interaction is not possible or was already unattended
@@ -866,11 +1036,15 @@ def perform_google_login(
     end_time = time.time() + max_wait
     challenge_logged = False
     last_reminder = time.time()
+    email_wait_attempts = 0
 
     while time.time() < end_time:
         if stop_event is not None and stop_event.is_set():
             emit(log_queue, "Login wait cancelled by user.")
             return False
+
+        # Probe current_url directly so external browser closure raises immediately
+        cur_u = (getattr(driver, "current_url", "") or "").lower()
 
         state = check_login_state(driver, account)
         if state == LoginState.SIGNED_IN_MATCH:
@@ -896,8 +1070,7 @@ def perform_google_login(
             _dispatch_login_alert("Manual Action Required - Wrong Account Signed In", details, account, config_mgr, alert_callback, driver, log_queue)
             return False
 
-        # In case confirmidentifier or password appears dynamically during the wait loop
-        cur_u = (getattr(driver, "current_url", "") or "").lower()
+        # In case email input, confirmidentifier, or password appears dynamically during the wait loop
         if "confirmidentifier" in cur_u:
             if _handle_confirm_identifier(driver, account, log_queue):
                 human_like_delay(2.0, 3.5)
@@ -906,6 +1079,16 @@ def perform_google_login(
             if _handle_password_input(driver, account, log_queue):
                 human_like_delay(2.5, 4.0)
                 _handle_post_login_prompts(driver, log_queue)
+                continue
+        elif (
+            "accounts.google.com" in cur_u
+            and email_wait_attempts < 1
+            and _is_email_input_empty(driver)
+            and _check_captcha_dom_visibility(driver) != "visible"
+        ):
+            if _handle_email_input(driver, account, log_queue):
+                email_wait_attempts += 1
+                human_like_delay(2.0, 3.5)
                 continue
 
         challenge_info = detect_manual_challenge(driver)

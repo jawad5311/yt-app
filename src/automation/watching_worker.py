@@ -2135,9 +2135,21 @@ class WatchingWorker:
             mult_desc = f"target={existing_task.target_multiplier:.1f}x" if existing_task.target_multiplier > 0 else "unlimited target"
             return True, existing_task, f"eligible ({current_runs}/{limit_disp} runs completed)"
 
-        # 3. Not in queue, but check if stats_store has already recorded >= 3 runs
+        # 3. Not in queue, but check if stats_store has already recorded >= 3 runs or achieved target multiplier
         if current_runs >= 3:
             return False, None, f"already reached run limit ({current_runs}/3 runs completed in stats)"
+
+        default_target_mult = DEFAULT_TARGET_MULTIPLIER
+        if self.config_mgr and hasattr(self.config_mgr, "get_float"):
+            try:
+                cfg_mult = float(self.config_mgr.get_float("DefaultVideoTargetViews", DEFAULT_TARGET_MULTIPLIER))
+                if cfg_mult > 0:
+                    default_target_mult = cfg_mult
+            except (TypeError, ValueError):
+                pass
+        if default_target_mult > 0 and video_duration > 0:
+            if (watch_seconds >= default_target_mult * video_duration) or (round(watch_seconds / video_duration, 1) >= default_target_mult):
+                return False, None, "already reached target multiplier reached"
 
         # Check cooldown for non-queue videos as well
         if rec and cooldown_hours > 0 and hasattr(rec, "is_on_cooldown"):
@@ -2326,7 +2338,7 @@ class WatchingWorker:
         last_watched_channel: Optional[str] = None,
         channel_watch_counts: Optional[Dict[str, int]] = None,
         channel_consecutive_counts: Optional[Dict[str, int]] = None,
-        max_attempts: int = 3,
+        max_attempts: int = 2,
         **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Channel, str, str, str]]:
         """Scan YouTube Home feed for an eligible target channel video up to max_attempts."""
@@ -4830,6 +4842,8 @@ class WatchingWorker:
                         continue
                     queue_tasks.append(t)
 
+        MAX_SEARCH_VIDEOS_PER_CHANNEL = 5
+
         def get_task_watch_seconds(task_item: VideoTask) -> float:
             if getattr(self, "stats_store", None):
                 rec = self.stats_store.find_for_task(task_item)
@@ -4844,13 +4858,54 @@ class WatchingWorker:
                     return (getattr(rec, "watch_seconds", 0.0) or 0.0) <= 0.0 and (getattr(rec, "runs", 0) or 0) <= 0
             return True
 
+        def _is_search_result_eligible(url: str, title: str, channel: str) -> bool:
+            if not url:
+                return False
+            if "/shorts/" in url.lower():
+                return False
+            eligible, _, reason = self.is_candidate_eligible(url, title, channel)
+            if not eligible:
+                emit(
+                    self.log_queue,
+                    f"[YouTube Search] Skipping video '{title}' ({channel or 'unknown channel'}): {reason}.",
+                    logging.INFO,
+                )
+                return False
+            return True
+
+        def _search_result_priority(url: str, title: str, channel: str) -> Tuple[int, float]:
+            if getattr(self, "stats_store", None):
+                temp_t = VideoTask(url=url, title=title, channel=channel)
+                vid_key = resolve_video_key(temp_t, url)
+                rec = self.stats_store.find_for_task(temp_t) or self.stats_store.get(vid_key)
+                if rec is not None:
+                    ws = float(getattr(rec, "watch_seconds", 0.0) or 0.0)
+                    runs = int(getattr(rec, "runs", 0) or 0)
+                    if ws <= 0.0 and runs <= 0:
+                        return (0, 0.0)
+                    return (1, ws)
+            return (0, 0.0)
+
+        # Group eligible tasks by added channel and pick up to 5 highest-priority videos per channel
+        # (zero watch time first, then least watch time ascending).
+        tasks_by_channel: Dict[str, List[VideoTask]] = {}
+        for t in queue_tasks:
+            ch_key = SessionChannelTracker._canon_name(t.channel) if t.channel else "__unassigned__"
+            tasks_by_channel.setdefault(ch_key, []).append(t)
+
         zero_watch_tasks: List[VideoTask] = []
         watched_tasks: List[VideoTask] = []
-        for t in queue_tasks:
-            if is_task_zero_watch(t):
-                zero_watch_tasks.append(t)
-            else:
-                watched_tasks.append(t)
+        for ch_tasks in tasks_by_channel.values():
+            ch_zero = [t for t in ch_tasks if is_task_zero_watch(t)]
+            ch_watched = [t for t in ch_tasks if not is_task_zero_watch(t)]
+            random.shuffle(ch_zero)
+            ch_watched.sort(key=get_task_watch_seconds)
+            selected_for_channel = (ch_zero + ch_watched)[:MAX_SEARCH_VIDEOS_PER_CHANNEL]
+            for t in selected_for_channel:
+                if is_task_zero_watch(t):
+                    zero_watch_tasks.append(t)
+                else:
+                    watched_tasks.append(t)
 
         avoid_canon = SessionChannelTracker._canon_name(preferred_channel_to_avoid) if (preferred_channel_to_avoid and len(target_channels) > 1) else None
 
@@ -4878,7 +4933,7 @@ class WatchingWorker:
 
         emit(
             self.log_queue,
-            f"\n=== [YouTube Search] Searching for targeted video across {len(candidate_tasks)} long-form candidate(s) ({len(zero_sorted)} zero-watch, {len(watched_tasks)} least-watch) and {len(target_channels)} channel(s) ===",
+            f"\n=== [YouTube Search] Searching for targeted video across {len(candidate_tasks)} long-form candidate(s) (max {MAX_SEARCH_VIDEOS_PER_CHANNEL}/channel; {len(zero_sorted)} zero-watch, {len(watched_tasks)} least-watch) and {len(target_channels)} channel(s) ===",
         )
 
         for cand_idx, task in enumerate(candidate_tasks, start=1):
@@ -4909,6 +4964,9 @@ class WatchingWorker:
                         max_scrolls=2,
                         log_queue=self.log_queue,
                         allow_channel_fallback=False,
+                        eligibility_check=_is_search_result_eligible,
+                        priority_key=_search_result_priority,
+                        exclude_shorts=True,
                     )
 
             # Stage 2: If not found, try adding channel name at the end of video title
@@ -4926,11 +4984,14 @@ class WatchingWorker:
                         max_scrolls=2,
                         log_queue=self.log_queue,
                         allow_channel_fallback=False,
+                        eligibility_check=_is_search_result_eligible,
+                        priority_key=_search_result_priority,
+                        exclude_shorts=True,
                     )
 
-            # Stage 3: Still if no exact video found, if any other video from that channel is found, watch that video
+            # Stage 3: Still if no exact video found, if any eligible video from that channel is found, watch that video
             if not matched_result and ch_name:
-                emit(self.log_queue, f"[YouTube Search] Exact video not found. Checking search results for any video from channel '{ch_name}'...")
+                emit(self.log_queue, f"[YouTube Search] Exact video not found. Checking search results for any eligible video from channel '{ch_name}'...")
                 matched_result = find_and_click_search_result(
                     self.driver,
                     task=task,
@@ -4938,6 +4999,10 @@ class WatchingWorker:
                     max_scrolls=1,
                     log_queue=self.log_queue,
                     allow_channel_fallback=True,
+                    eligibility_check=_is_search_result_eligible,
+                    priority_key=_search_result_priority,
+                    exclude_shorts=True,
+                    max_channel_candidates=MAX_SEARCH_VIDEOS_PER_CHANNEL,
                 )
                 if matched_result:
                     emit(self.log_queue, f"[YouTube Search] Found alternative video from target channel '{ch_name}': '{matched_result.get('title')}'. Watching it.")
@@ -5019,6 +5084,10 @@ class WatchingWorker:
                     target_channels=[ch_query],
                     max_scrolls=3,
                     log_queue=self.log_queue,
+                    eligibility_check=_is_search_result_eligible,
+                    priority_key=_search_result_priority,
+                    exclude_shorts=True,
+                    max_channel_candidates=MAX_SEARCH_VIDEOS_PER_CHANNEL,
                 )
 
                 if matched_result:
@@ -5106,6 +5175,8 @@ class WatchingWorker:
             shorts_watched = self._run_shorts_cycle(session_watched_keys=session_watched_keys)
             return int(shorts_watched or 0)
         except Exception as exc:
+            if is_session_disconnected_error(exc):
+                raise
             emit(self.log_queue, f"Notice during shorts search: {exc}", logging.DEBUG)
             return 0
 
@@ -5840,11 +5911,13 @@ class WatchingWorker:
         emit(self.log_queue, f"Target stored channel(s): {active_channels_msg}")
 
         try:
+            self._login_verified = False
+            self.has_started_browsing = False
+            self._start_notification_dispatched = False
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
             known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
             known = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
             self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known)
-            self.has_started_browsing = True
 
             if self.stop_event.is_set():
                 return
@@ -5882,12 +5955,26 @@ class WatchingWorker:
 
                 emit(self.log_queue, f"Sign-in failed for {self.account.email}: {details}", logging.ERROR)
                 self._report_status(f"Sign-in failed for {self.account.email}.", "error")
-                self._send_critical_alert(alert_type, details)
                 session_status = alert_type
                 session_err = details
                 return
 
-            # Sign-in verified successfully! Dispatch start notification in separate background headless window
+            # Ensure the browser actually reaches YouTube before marking the session active
+            # and dispatching the Session Started email notification.
+            if not self._ensure_youtube_home_reached(known_accounts=known, max_retries=max_retries):
+                if self.stop_event.is_set():
+                    emit(self.log_queue, "Watching session stopped while navigating to YouTube.", logging.WARNING)
+                    return
+                emit(self.log_queue, f"Could not verify YouTube session after sign-in for {self.account.email}.", logging.ERROR)
+                session_status = "YouTube Navigation Failed"
+                session_err = f"Browser did not reach YouTube after login for {self.account.email}."
+                return
+
+            self._login_verified = True
+            self.has_started_browsing = True
+
+            # Sign-in verified and YouTube reached! Dispatch start notification in separate background headless window
+            self._start_notification_dispatched = True
             self.reporting_thread = threading.Thread(
                 target=self._async_init_and_send_start_notification,
                 name="ReportingStartNotificationThread",
@@ -5923,44 +6010,77 @@ class WatchingWorker:
                     pass
                 time.sleep(1.5)
 
+                scan_reopen_failures = 0
                 while not self.stop_event.is_set():
                     self.check_pause()
                     if self.stop_event.is_set():
                         break
 
-                    target_channels = self.get_target_channels()
-                    raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
-                    if isinstance(raw_items, list):
-                        for item in raw_items:
-                            href = item.get("href", "")
-                            if not href:
-                                continue
-                            clean_href = href.split("&")[0]
-                            if clean_href in seen_video_urls:
-                                continue
-                            seen_video_urls.add(clean_href)
-                            total_links_found += 1
-
-                            full_url = clean_href if clean_href.startswith("http") else f"https://www.youtube.com{clean_href}"
-                            title = item.get("title") or "Untitled Video"
-                            ch_name = item.get("channel_name") or "Unknown Channel"
-                            ch_url = item.get("channel_url") or ""
-
-                            match = match_channel(ch_name, ch_url, target_channels)
-                            if match:
-                                matched_count += 1
-                                channel_display = match.name or ch_name
-                                emit(
-                                    self.log_queue,
-                                    f"URL: {full_url}\nTitle: {title}\nChannel: {channel_display}",
-                                )
-                                self._emit_event(("progress", 0, matched_count, matched_count))
-
-                    scroll_step = random.randint(500, 850)
                     try:
-                        self.driver.execute_script(f"window.scrollBy({{top: {scroll_step}, behavior: 'smooth'}});")
-                    except Exception:
-                        self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
+                        if not is_driver_alive(self.driver):
+                            if self._reopen_browser_and_navigate_home(
+                                known_accounts=known,
+                                reason="browser closed externally during home feed scan",
+                                max_retries=max_retries,
+                            ):
+                                scan_reopen_failures = 0
+                                continue
+                            scan_reopen_failures += 1
+                            if scan_reopen_failures >= 3:
+                                emit(self.log_queue, "Failed to reopen browser after multiple attempts. Exiting scan loop.", logging.ERROR)
+                                break
+                            continue
+
+                        target_channels = self.get_target_channels()
+                        raw_items = self.driver.execute_script(HOME_VIDEOS_JS)
+                        if isinstance(raw_items, list):
+                            for item in raw_items:
+                                href = item.get("href", "")
+                                if not href:
+                                    continue
+                                clean_href = href.split("&")[0]
+                                if clean_href in seen_video_urls:
+                                    continue
+                                seen_video_urls.add(clean_href)
+                                total_links_found += 1
+
+                                full_url = clean_href if clean_href.startswith("http") else f"https://www.youtube.com{clean_href}"
+                                title = item.get("title") or "Untitled Video"
+                                ch_name = item.get("channel_name") or "Unknown Channel"
+                                ch_url = item.get("channel_url") or ""
+
+                                match = match_channel(ch_name, ch_url, target_channels)
+                                if match:
+                                    matched_count += 1
+                                    channel_display = match.name or ch_name
+                                    emit(
+                                        self.log_queue,
+                                        f"URL: {full_url}\nTitle: {title}\nChannel: {channel_display}",
+                                    )
+                                    self._emit_event(("progress", 0, matched_count, matched_count))
+
+                        scroll_step = random.randint(500, 850)
+                        try:
+                            self.driver.execute_script(f"window.scrollBy({{top: {scroll_step}, behavior: 'smooth'}});")
+                        except Exception as scroll_exc:
+                            if is_session_disconnected_error(scroll_exc):
+                                raise
+                            self.driver.execute_script(f"window.scrollBy(0, {scroll_step});")
+                        scan_reopen_failures = 0
+                    except Exception as scan_exc:
+                        if is_session_disconnected_error(scan_exc) and not self.stop_event.is_set():
+                            if self._reopen_browser_and_navigate_home(
+                                known_accounts=known,
+                                reason=str(scan_exc),
+                                max_retries=max_retries,
+                            ):
+                                scan_reopen_failures = 0
+                                continue
+                            scan_reopen_failures += 1
+                            if scan_reopen_failures >= 3:
+                                raise
+                            continue
+                        raise
 
                     sleep_time = random.uniform(1.5, 2.5)
                     end_t = time.time() + sleep_time
@@ -5999,214 +6119,373 @@ class WatchingWorker:
                 logging.INFO,
             )
 
+            consecutive_reopen_failures = 0
+            max_reopen_failures = 3
+
             while not self.stop_event.is_set():
-                if self._is_target_limit_reached(target_attempts):
-                    emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
-                    break
+                try:
+                    while not self.stop_event.is_set():
+                        if self._is_target_limit_reached(target_attempts):
+                            emit(self.log_queue, f"Reached configured limit of {self.target_limit} target video attempt(s).")
+                            break
 
-                self.check_pause()
-                if self.stop_event.is_set():
-                    break
+                        self.check_pause()
+                        if self.stop_event.is_set():
+                            break
 
-                # Check if local system time has reached scheduled Long Sleep / Night Mode
-                if self._check_and_enter_night_sleep(session_watched_keys=session_watched_keys):
-                    cycle_long_vids_watched = 0
-                    suggested_miss_count = 0
-                    consecutive_target_watched = 0
-                    channel_buffer_counts.clear()
-                    if self.is_unlimited:
-                        target_attempts = 0
-                    continue
-
-                # Check if active account reached its progressive warm-up daily quota
-                if self._check_and_enter_warmup_sleep(session_watched_keys=session_watched_keys):
-                    cycle_long_vids_watched = 0
-                    suggested_miss_count = 0
-                    consecutive_target_watched = 0
-                    channel_buffer_counts.clear()
-                    target_attempts = 0
-                    continue
-
-                if not is_driver_alive(self.driver):
-                    emit(self.log_queue, "Browser session closed or disconnected. Exiting watch loop.", logging.WARNING)
-                    break
-
-                target_channels = self.get_target_channels()
-                if not target_channels:
-                    emit(self.log_queue, "No active target channels found in settings. Aborting watching session.", logging.WARNING)
-                    break
-
-                if all(c.target_achieved for c in target_channels):
-                    emit(self.log_queue, "All active target channels have achieved their target watch time! Watching session complete.")
-                    break
-
-                current_url = getattr(self.driver, "current_url", "") or ""
-
-                # -------------------------------------------------------------
-                # Case 1: Watch page flow
-                # -------------------------------------------------------------
-                if "/shorts" in current_url:
-                    emit(self.log_queue, "Currently on Shorts page. Entering Shorts reel loop...")
-                    self._run_shorts_reel_loop(session_watched_keys=session_watched_keys)
-                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                    human_like_delay(2.0, 3.5)
-                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                    cycle_long_vids_watched = 0
-                    target_long_vids_cycle = random.randint(3, 5)
-                    emit(
-                        self.log_queue,
-                        f"Exited Shorts reel. Starting new long-form cycle: will watch {target_long_vids_cycle} targeted long video(s).",
-                        logging.INFO,
-                    )
-                    continue
-
-                if "/watch" in current_url:
-                    # 1. Check if random buffer video condition met
-                    buffered = self._check_and_play_random_buffer_video(
-                        session_watched_keys=session_watched_keys,
-                        consecutive_target_watched=consecutive_target_watched,
-                        random_buffer_threshold=random_buffer_threshold,
-                        channel_watch_counts=channel_buffer_counts,
-                        channel_consecutive_counts=channel_buffer_counts,
-                    )
-                    if getattr(self, "_last_login_verification_failed", False):
-                        emit(
-                            self.log_queue,
-                            "[Manual Action Required] Buffer video playback halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
-                            logging.WARNING,
-                        )
-                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
-                        if woke_up:
-                            self._last_login_verification_failed = False
+                        # Check if local system time has reached scheduled Long Sleep / Night Mode
+                        if self._check_and_enter_night_sleep(session_watched_keys=session_watched_keys):
                             cycle_long_vids_watched = 0
                             suggested_miss_count = 0
                             consecutive_target_watched = 0
                             channel_buffer_counts.clear()
-                            continue
-                        else:
-                            break
-                    if buffered:
-                        consecutive_target_watched = 0
-                        channel_buffer_counts.clear()
-                        random_buffer_threshold = random.randint(1, 3)
-                        emit(
-                            self.log_queue,
-                            f"Target countdown reset. Next random buffer after {random_buffer_threshold} target video(s).",
-                        )
-                        if self.stop_event.is_set() or self._is_target_limit_reached(target_attempts):
-                            break
-
-                    # 2. Check if consecutive suggested misses threshold reached -> navigate to Home
-                    if suggested_miss_count >= max_suggested_misses:
-                        emit(
-                            self.log_queue,
-                            f"Target channel videos not found in suggested section after {suggested_miss_count} attempts. Navigating back to YouTube Home feed...",
-                        )
-                        suggested_miss_count = 0
-                        max_suggested_misses = random.randint(2, 3)
-                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                        human_like_delay(2.0, 3.5)
-                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                        continue
-
-                    # 3. Look in suggested section for target channel video
-                    emit(self.log_queue, "Scanning suggested section...")
-                    rec_candidates = self.fetch_recommended_videos()
-
-                    target_match = self._find_preferred_target_video(
-                        candidates=rec_candidates,
-                        target_channels=target_channels,
-                        last_channel_name=last_watched_channel,
-                        session_watched_keys=session_watched_keys,
-                        channel_watch_counts=channel_buffer_counts,
-                        channel_consecutive_counts=channel_buffer_counts,
-                    )
-
-                    suggested_played = False
-                    failed_rec_ids = set()
-
-                    while not self.stop_event.is_set():
-                        valid_candidates = [
-                            c for c in rec_candidates
-                            if (extract_video_id(c.get("href", "")) or c.get("href", "")) not in failed_rec_ids
-                        ]
-                        target_match = self._find_preferred_target_video(
-                            candidates=valid_candidates,
-                            target_channels=target_channels,
-                            last_channel_name=last_watched_channel,
-                            session_watched_keys=session_watched_keys,
-                            channel_watch_counts=channel_buffer_counts,
-                            channel_consecutive_counts=channel_buffer_counts,
-                        )
-                        if not target_match:
-                            break
-
-                        item, match_obj, full_url, title, ch_display = target_match
-                        cand_id = extract_video_id(full_url) or full_url
-                        emit(self.log_queue, "Found video in suggested section")
-
-                        try:
-                            watch_res = self._play_target_video(
-                                item, full_url, title, ch_display, session_watched_keys, is_home=False, source="suggested"
-                            )
-                        except Exception:
-                            raise
-
-                        if watch_res is None:
+                            if self.is_unlimited:
+                                target_attempts = 0
                             continue
 
-                        if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
-                            emit(
-                                self.log_queue,
-                                f"In-page click on suggested video '{title}' failed to navigate. Trying next video on page...",
-                                logging.WARNING,
-                            )
-                            failed_rec_ids.add(cand_id)
+                        # Check if active account reached its progressive warm-up daily quota
+                        if self._check_and_enter_warmup_sleep(session_watched_keys=session_watched_keys):
+                            cycle_long_vids_watched = 0
+                            suggested_miss_count = 0
+                            consecutive_target_watched = 0
+                            channel_buffer_counts.clear()
+                            target_attempts = 0
                             continue
-                        elif not watch_res.completed and watch_res.reason == "login_verification_failed":
-                            emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Halting suggested candidate attempts to protect account from bot detection.", logging.WARNING)
-                            self._last_login_verification_failed = True
-                            failed_rec_ids.add(cand_id)
-                            break
-                        elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
-                            emit(self.log_queue, f"Video '{title}' stopped without playback ({watch_res.reason or 'not watched'}). Skipping to next candidate...", logging.INFO)
-                            failed_rec_ids.add(cand_id)
+
+                        if not is_driver_alive(self.driver):
                             if self.stop_event.is_set():
+                                break
+                            reopened = self._reopen_browser_and_navigate_home(
+                                known_accounts=known,
+                                reason="browser closed externally",
+                                max_retries=max_retries,
+                            )
+                            if reopened:
+                                consecutive_reopen_failures = 0
+                                suggested_miss_count = 0
+                                continue
+                            consecutive_reopen_failures += 1
+                            if consecutive_reopen_failures >= max_reopen_failures:
+                                emit(self.log_queue, "Browser session closed or disconnected and could not be reopened. Exiting watch loop.", logging.ERROR)
                                 break
                             continue
 
-                        suggested_played = True
-                        target_attempts += 1
-                        self.target_attempts = target_attempts
-                        self.watched_count = target_attempts
-                        prog_total = self.target_limit if not self.is_unlimited else 0
-                        self._emit_event(("progress", 0, target_attempts, prog_total))
+                        target_channels = self.get_target_channels()
+                        if not target_channels:
+                            emit(self.log_queue, "No active target channels found in settings. Aborting watching session.", logging.WARNING)
+                            break
 
-                        ch_canon = SessionChannelTracker._canon_name(ch_display)
-                        channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
-                        last_watched_channel = ch_display
-                        consecutive_target_watched += 1
-                        suggested_miss_count = 0
-                        cycle_long_vids_watched += 1
+                        if all(c.target_achieved for c in target_channels):
+                            emit(self.log_queue, "All active target channels have achieved their target watch time! Watching session complete.")
+                            break
 
-                        emit(
-                            self.log_queue,
-                            f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
-                            f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
-                            f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
-                        )
+                        current_url = getattr(self.driver, "current_url", "") or ""
 
+                        # -------------------------------------------------------------
+                        # Case 1: Watch page flow
+                        # -------------------------------------------------------------
+                        if "/shorts" in current_url:
+                            emit(self.log_queue, "Currently on Shorts page. Entering Shorts reel loop...")
+                            self._run_shorts_reel_loop(session_watched_keys=session_watched_keys)
+                            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                            human_like_delay(2.0, 3.5)
+                            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                            cycle_long_vids_watched = 0
+                            target_long_vids_cycle = random.randint(3, 5)
+                            emit(
+                                self.log_queue,
+                                f"Exited Shorts reel. Starting new long-form cycle: will watch {target_long_vids_cycle} targeted long video(s).",
+                                logging.INFO,
+                            )
+                            continue
+
+                        if "/watch" in current_url:
+                            # 1. Check if random buffer video condition met
+                            buffered = self._check_and_play_random_buffer_video(
+                                session_watched_keys=session_watched_keys,
+                                consecutive_target_watched=consecutive_target_watched,
+                                random_buffer_threshold=random_buffer_threshold,
+                                channel_watch_counts=channel_buffer_counts,
+                                channel_consecutive_counts=channel_buffer_counts,
+                            )
+                            if getattr(self, "_last_login_verification_failed", False):
+                                emit(
+                                    self.log_queue,
+                                    "[Manual Action Required] Buffer video playback halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
+                                    logging.WARNING,
+                                )
+                                if not self.stop_event.is_set() and self.driver is not None and not is_driver_alive(self.driver):
+                                    reopened = self._reopen_browser_and_navigate_home(
+                                        known_accounts=known,
+                                        reason="browser closed externally",
+                                        max_retries=max_retries,
+                                    )
+                                    if reopened:
+                                        consecutive_reopen_failures = 0
+                                        suggested_miss_count = 0
+                                        self._last_login_verification_failed = False
+                                        continue
+                                woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                                if woke_up:
+                                    self._last_login_verification_failed = False
+                                    cycle_long_vids_watched = 0
+                                    suggested_miss_count = 0
+                                    consecutive_target_watched = 0
+                                    channel_buffer_counts.clear()
+                                    continue
+                                else:
+                                    break
+                            if buffered:
+                                consecutive_target_watched = 0
+                                channel_buffer_counts.clear()
+                                random_buffer_threshold = random.randint(1, 3)
+                                emit(
+                                    self.log_queue,
+                                    f"Target countdown reset. Next random buffer after {random_buffer_threshold} target video(s).",
+                                )
+                                if self.stop_event.is_set() or self._is_target_limit_reached(target_attempts):
+                                    break
+
+                            # 2. Check if consecutive suggested misses threshold reached -> navigate to Home
+                            if suggested_miss_count >= max_suggested_misses:
+                                emit(
+                                    self.log_queue,
+                                    f"Target channel videos not found in suggested section after {suggested_miss_count} attempts. Navigating back to YouTube Home feed...",
+                                )
+                                suggested_miss_count = 0
+                                max_suggested_misses = random.randint(2, 3)
+                                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                                human_like_delay(2.0, 3.5)
+                                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                                continue
+
+                            # 3. Look in suggested section for target channel video
+                            emit(self.log_queue, "Scanning suggested section...")
+                            rec_candidates = self.fetch_recommended_videos()
+
+                            target_match = self._find_preferred_target_video(
+                                candidates=rec_candidates,
+                                target_channels=target_channels,
+                                last_channel_name=last_watched_channel,
+                                session_watched_keys=session_watched_keys,
+                                channel_watch_counts=channel_buffer_counts,
+                                channel_consecutive_counts=channel_buffer_counts,
+                            )
+
+                            suggested_played = False
+                            failed_rec_ids = set()
+
+                            while not self.stop_event.is_set():
+                                valid_candidates = [
+                                    c for c in rec_candidates
+                                    if (extract_video_id(c.get("href", "")) or c.get("href", "")) not in failed_rec_ids
+                                ]
+                                target_match = self._find_preferred_target_video(
+                                    candidates=valid_candidates,
+                                    target_channels=target_channels,
+                                    last_channel_name=last_watched_channel,
+                                    session_watched_keys=session_watched_keys,
+                                    channel_watch_counts=channel_buffer_counts,
+                                    channel_consecutive_counts=channel_buffer_counts,
+                                )
+                                if not target_match:
+                                    break
+
+                                item, match_obj, full_url, title, ch_display = target_match
+                                cand_id = extract_video_id(full_url) or full_url
+                                emit(self.log_queue, "Found video in suggested section")
+
+                                try:
+                                    watch_res = self._play_target_video(
+                                        item, full_url, title, ch_display, session_watched_keys, is_home=False, source="suggested"
+                                    )
+                                except Exception:
+                                    raise
+
+                                if watch_res is None:
+                                    continue
+
+                                if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
+                                    emit(
+                                        self.log_queue,
+                                        f"In-page click on suggested video '{title}' failed to navigate. Trying next video on page...",
+                                        logging.WARNING,
+                                    )
+                                    failed_rec_ids.add(cand_id)
+                                    continue
+                                elif not watch_res.completed and watch_res.reason == "login_verification_failed":
+                                    emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Halting suggested candidate attempts to protect account from bot detection.", logging.WARNING)
+                                    self._last_login_verification_failed = True
+                                    failed_rec_ids.add(cand_id)
+                                    break
+                                elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
+                                    emit(self.log_queue, f"Video '{title}' stopped without playback ({watch_res.reason or 'not watched'}). Skipping to next candidate...", logging.INFO)
+                                    failed_rec_ids.add(cand_id)
+                                    if self.stop_event.is_set():
+                                        break
+                                    continue
+
+                                suggested_played = True
+                                target_attempts += 1
+                                self.target_attempts = target_attempts
+                                self.watched_count = target_attempts
+                                prog_total = self.target_limit if not self.is_unlimited else 0
+                                self._emit_event(("progress", 0, target_attempts, prog_total))
+
+                                ch_canon = SessionChannelTracker._canon_name(ch_display)
+                                channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
+                                last_watched_channel = ch_display
+                                consecutive_target_watched += 1
+                                suggested_miss_count = 0
+                                cycle_long_vids_watched += 1
+
+                                emit(
+                                    self.log_queue,
+                                    f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
+                                    f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
+                                    f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
+                                )
+
+                                if cycle_long_vids_watched >= target_long_vids_cycle:
+                                    emit(
+                                        self.log_queue,
+                                        f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
+                                        logging.INFO,
+                                    )
+                                break
+
+                            if suggested_played:
+                                if cycle_long_vids_watched >= target_long_vids_cycle:
+                                    self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+                                    cycle_long_vids_watched = 0
+                                    target_long_vids_cycle = random.randint(3, 5)
+                                    suggested_miss_count = 0
+                                    emit(
+                                        self.log_queue,
+                                        f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
+                                        logging.INFO,
+                                    )
+                                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                                    human_like_delay(2.0, 3.5)
+                                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                                continue
+
+                            if failed_rec_ids and not suggested_played:
+                                emit(
+                                    self.log_queue,
+                                    "Could not navigate to suggested video(s) via in-page click and no more target candidates on page. Clicking browser Back button to return to previous page...",
+                                    logging.WARNING,
+                                )
+                                try:
+                                    self.driver.back()
+                                    human_like_delay(2.5, 4.0)
+                                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                                except Exception as back_err:
+                                    emit(self.log_queue, f"Back button navigation error: {back_err}", logging.WARNING)
+                                suggested_miss_count += 1
+                                continue
+                            else:
+                                # NOT found in suggestions: do NOT watch random video; do YouTube search!
+                                suggested_miss_count += 1
+                                emit(
+                                    self.log_queue,
+                                    f"No target channel video found in suggested section (miss attempt {suggested_miss_count}/{max_suggested_misses}). Switching immediately to YouTube search...",
+                                )
+                                played_ch = self.search_and_play_target_video(
+                                    session_watched_keys=session_watched_keys,
+                                    preferred_channel_to_avoid=last_watched_channel,
+                                )
+                                if played_ch:
+                                    target_attempts += 1
+                                    self.target_attempts = target_attempts
+                                    self.watched_count = target_attempts
+                                    prog_total = self.target_limit if not self.is_unlimited else 0
+                                    self._emit_event(("progress", 0, target_attempts, prog_total))
+
+                                    ch_canon = SessionChannelTracker._canon_name(played_ch)
+                                    channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
+                                    last_watched_channel = played_ch
+                                    consecutive_target_watched += 1
+                                    cycle_long_vids_watched += 1
+                                    suggested_miss_count = 0
+
+                                    emit(
+                                        self.log_queue,
+                                        f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
+                                        f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
+                                        f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
+                                    )
+
+                                    if cycle_long_vids_watched >= target_long_vids_cycle:
+                                        emit(
+                                            self.log_queue,
+                                            f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
+                                            logging.INFO,
+                                        )
+                                        self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+                                        cycle_long_vids_watched = 0
+                                        target_long_vids_cycle = random.randint(3, 5)
+                                        suggested_miss_count = 0
+                                        emit(
+                                            self.log_queue,
+                                            f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
+                                            logging.INFO,
+                                        )
+                                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                                        human_like_delay(2.0, 3.5)
+                                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                                else:
+                                    emit(
+                                        self.log_queue,
+                                        "[Browsing Loop] YouTube search was unable to find candidate video. Navigating to YouTube Home feed...",
+                                        logging.INFO,
+                                    )
+                                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                                    human_like_delay(2.0, 3.5)
+
+                                continue
+
+                        # -------------------------------------------------------------
+                        # Case 2: Home feed discovery (startup or Home navigation)
+                        # -------------------------------------------------------------
+                        # If we completed the long-form video cycle target (3 to 5 videos), prioritize finding and playing Shorts!
                         if cycle_long_vids_watched >= target_long_vids_cycle:
                             emit(
                                 self.log_queue,
-                                f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
+                                f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts...",
                                 logging.INFO,
                             )
-                        break
-
-                    if suggested_played:
-                        if cycle_long_vids_watched >= target_long_vids_cycle:
                             self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+
+                            if getattr(self, "_last_login_verification_failed", False):
+                                emit(
+                                    self.log_queue,
+                                    "[Manual Action Required] Shorts cycle halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
+                                    logging.WARNING,
+                                )
+                                if not self.stop_event.is_set() and self.driver is not None and not is_driver_alive(self.driver):
+                                    reopened = self._reopen_browser_and_navigate_home(
+                                        known_accounts=known,
+                                        reason="browser closed externally",
+                                        max_retries=max_retries,
+                                    )
+                                    if reopened:
+                                        consecutive_reopen_failures = 0
+                                        suggested_miss_count = 0
+                                        self._last_login_verification_failed = False
+                                        continue
+                                woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                                if woke_up:
+                                    self._last_login_verification_failed = False
+                                    cycle_long_vids_watched = 0
+                                    suggested_miss_count = 0
+                                    consecutive_target_watched = 0
+                                    channel_buffer_counts.clear()
+                                    continue
+                                else:
+                                    break
+
+                            # Cycle completed! Reset counter and pick new random target of 3 to 5 long videos
                             cycle_long_vids_watched = 0
                             target_long_vids_cycle = random.randint(3, 5)
                             suggested_miss_count = 0
@@ -6215,53 +6494,93 @@ class WatchingWorker:
                                 f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
                                 logging.INFO,
                             )
+
                             safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
                             human_like_delay(2.0, 3.5)
                             dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                        continue
+                            continue
 
-                    if failed_rec_ids and not suggested_played:
-                        emit(
-                            self.log_queue,
-                            "Could not navigate to suggested video(s) via in-page click and no more target candidates on page. Clicking browser Back button to return to previous page...",
-                            logging.WARNING,
-                        )
-                        try:
-                            self.driver.back()
-                            human_like_delay(2.5, 4.0)
-                            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                        except Exception as back_err:
-                            emit(self.log_queue, f"Back button navigation error: {back_err}", logging.WARNING)
-                        suggested_miss_count += 1
-                        continue
-                    else:
-                        # NOT found in suggestions: do NOT watch random video; do YouTube search!
-                        suggested_miss_count += 1
-                        emit(
-                            self.log_queue,
-                            f"No target channel video found in suggested section (miss attempt {suggested_miss_count}/{max_suggested_misses}). Switching immediately to YouTube search...",
-                        )
-                        played_ch = self.search_and_play_target_video(
+                        # Otherwise (or if no Short found on Home), look for long-form video on Home feed
+                        matched_home = self._scan_home_feed_for_target(
                             session_watched_keys=session_watched_keys,
-                            preferred_channel_to_avoid=last_watched_channel,
+                            last_watched_channel=last_watched_channel,
+                            channel_watch_counts=channel_buffer_counts,
+                            channel_consecutive_counts=channel_buffer_counts,
+                            max_attempts=2,
                         )
-                        if played_ch:
+
+                        if matched_home:
+                            item, match_obj, full_url, title, ch_display = matched_home
+                            emit(self.log_queue, f"Found long-form video on Home page: '{title}' ({full_url})")
+
+                            try:
+                                watch_res = self._play_target_video(
+                                    item, full_url, title, ch_display, session_watched_keys, is_home=True, source="home"
+                                )
+                            except Exception:
+                                raise
+
+                            if watch_res is None:
+                                continue
+
+                            if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
+                                emit(
+                                    self.log_queue,
+                                    f"In-page click on Home video '{title}' failed to navigate. Refreshing Home feed...",
+                                    logging.WARNING,
+                                )
+                                safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                                human_like_delay(2.0, 3.5)
+                                dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                                continue
+                            elif not watch_res.completed and watch_res.reason == "login_verification_failed":
+                                emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Halting Home feed attempts to protect account from bot detection.", logging.WARNING)
+                                self._last_login_verification_failed = True
+                                if self.stop_event.is_set():
+                                    break
+                                if not self.stop_event.is_set() and self.driver is not None and not is_driver_alive(self.driver):
+                                    reopened = self._reopen_browser_and_navigate_home(
+                                        known_accounts=known,
+                                        reason="browser closed externally",
+                                        max_retries=max_retries,
+                                    )
+                                    if reopened:
+                                        consecutive_reopen_failures = 0
+                                        suggested_miss_count = 0
+                                        self._last_login_verification_failed = False
+                                        continue
+                                woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                                if woke_up:
+                                    self._last_login_verification_failed = False
+                                    cycle_long_vids_watched = 0
+                                    suggested_miss_count = 0
+                                    consecutive_target_watched = 0
+                                    channel_buffer_counts.clear()
+                                    continue
+                                else:
+                                    break
+                            elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
+                                emit(self.log_queue, f"Home video '{title}' stopped without playback ({watch_res.reason or 'not watched'}).", logging.INFO)
+                                if self.stop_event.is_set():
+                                    break
+                                continue
+
                             target_attempts += 1
                             self.target_attempts = target_attempts
                             self.watched_count = target_attempts
                             prog_total = self.target_limit if not self.is_unlimited else 0
                             self._emit_event(("progress", 0, target_attempts, prog_total))
 
-                            ch_canon = SessionChannelTracker._canon_name(played_ch)
+                            ch_canon = SessionChannelTracker._canon_name(ch_display)
                             channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
-                            last_watched_channel = played_ch
+                            last_watched_channel = ch_display
                             consecutive_target_watched += 1
-                            cycle_long_vids_watched += 1
                             suggested_miss_count = 0
+                            cycle_long_vids_watched += 1
 
                             emit(
                                 self.log_queue,
-                                f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
+                                f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
                                 f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
                                 f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
                             )
@@ -6273,6 +6592,33 @@ class WatchingWorker:
                                     logging.INFO,
                                 )
                                 self._run_shorts_cycle(session_watched_keys=session_watched_keys)
+                                if getattr(self, "_last_login_verification_failed", False):
+                                    emit(
+                                        self.log_queue,
+                                        "[Manual Action Required] Shorts cycle halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
+                                        logging.WARNING,
+                                    )
+                                    if not self.stop_event.is_set() and self.driver is not None and not is_driver_alive(self.driver):
+                                        reopened = self._reopen_browser_and_navigate_home(
+                                            known_accounts=known,
+                                            reason="browser closed externally",
+                                            max_retries=max_retries,
+                                        )
+                                        if reopened:
+                                            consecutive_reopen_failures = 0
+                                            suggested_miss_count = 0
+                                            self._last_login_verification_failed = False
+                                            continue
+                                    woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                                    if woke_up:
+                                        self._last_login_verification_failed = False
+                                        cycle_long_vids_watched = 0
+                                        suggested_miss_count = 0
+                                        consecutive_target_watched = 0
+                                        channel_buffer_counts.clear()
+                                        continue
+                                    else:
+                                        break
                                 cycle_long_vids_watched = 0
                                 target_long_vids_cycle = random.randint(3, 5)
                                 suggested_miss_count = 0
@@ -6284,240 +6630,117 @@ class WatchingWorker:
                                 safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
                                 human_like_delay(2.0, 3.5)
                                 dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                                continue
                         else:
+                            # Not found on Home feed after 2 attempts: fall back to YouTube search!
                             emit(
                                 self.log_queue,
-                                "[Browsing Loop] YouTube search was unable to find candidate video. Navigating to YouTube Home feed...",
+                                "No video matching target channels found on YouTube Home. Falling back to YouTube search...",
                                 logging.INFO,
                             )
-                            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                            human_like_delay(2.0, 3.5)
-
-                        continue
-
-                # -------------------------------------------------------------
-                # Case 2: Home feed discovery (startup or Home navigation)
-                # -------------------------------------------------------------
-                # If we completed the long-form video cycle target (3 to 5 videos), prioritize finding and playing Shorts!
-                if cycle_long_vids_watched >= target_long_vids_cycle:
-                    emit(
-                        self.log_queue,
-                        f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts...",
-                        logging.INFO,
-                    )
-                    self._run_shorts_cycle(session_watched_keys=session_watched_keys)
-
-                    if getattr(self, "_last_login_verification_failed", False):
-                        emit(
-                            self.log_queue,
-                            "[Manual Action Required] Shorts cycle halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
-                            logging.WARNING,
-                        )
-                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
-                        if woke_up:
-                            self._last_login_verification_failed = False
-                            cycle_long_vids_watched = 0
-                            suggested_miss_count = 0
-                            consecutive_target_watched = 0
-                            channel_buffer_counts.clear()
-                            continue
-                        else:
-                            break
-
-                    # Cycle completed! Reset counter and pick new random target of 3 to 5 long videos
-                    cycle_long_vids_watched = 0
-                    target_long_vids_cycle = random.randint(3, 5)
-                    suggested_miss_count = 0
-                    emit(
-                        self.log_queue,
-                        f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
-                        logging.INFO,
-                    )
-
-                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                    human_like_delay(2.0, 3.5)
-                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                    continue
-
-                # Otherwise (or if no Short found on Home), look for long-form video on Home feed
-                matched_home = self._scan_home_feed_for_target(
-                    session_watched_keys=session_watched_keys,
-                    last_watched_channel=last_watched_channel,
-                    channel_watch_counts=channel_buffer_counts,
-                    channel_consecutive_counts=channel_buffer_counts,
-                    max_attempts=3,
-                )
-
-                if matched_home:
-                    item, match_obj, full_url, title, ch_display = matched_home
-                    emit(self.log_queue, f"Found long-form video on Home page: '{title}' ({full_url})")
-
-                    try:
-                        watch_res = self._play_target_video(
-                            item, full_url, title, ch_display, session_watched_keys, is_home=True, source="home"
-                        )
-                    except Exception:
-                        raise
-
-                    if watch_res is None:
-                        continue
-
-                    if not watch_res.completed and watch_res.reason in ("in_page_click_failed", "navigation_identity_mismatch"):
-                        emit(
-                            self.log_queue,
-                            f"In-page click on Home video '{title}' failed to navigate. Refreshing Home feed...",
-                            logging.WARNING,
-                        )
-                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                        human_like_delay(2.0, 3.5)
-                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                        continue
-                    elif not watch_res.completed and watch_res.reason == "login_verification_failed":
-                        emit(self.log_queue, f"Playback aborted for '{title}' due to unresolved manual verification / login issue. Halting Home feed attempts to protect account from bot detection.", logging.WARNING)
-                        self._last_login_verification_failed = True
-                        if self.stop_event.is_set():
-                            break
-                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
-                        if woke_up:
-                            self._last_login_verification_failed = False
-                            cycle_long_vids_watched = 0
-                            suggested_miss_count = 0
-                            consecutive_target_watched = 0
-                            channel_buffer_counts.clear()
-                            continue
-                        else:
-                            break
-                    elif not watch_res.completed and (watch_res.watched_seconds or 0) <= 0:
-                        emit(self.log_queue, f"Home video '{title}' stopped without playback ({watch_res.reason or 'not watched'}).", logging.INFO)
-                        if self.stop_event.is_set():
-                            break
-                        continue
-
-                    target_attempts += 1
-                    self.target_attempts = target_attempts
-                    self.watched_count = target_attempts
-                    prog_total = self.target_limit if not self.is_unlimited else 0
-                    self._emit_event(("progress", 0, target_attempts, prog_total))
-
-                    ch_canon = SessionChannelTracker._canon_name(ch_display)
-                    channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
-                    last_watched_channel = ch_display
-                    consecutive_target_watched += 1
-                    suggested_miss_count = 0
-                    cycle_long_vids_watched += 1
-
-                    emit(
-                        self.log_queue,
-                        f"Target channel '{ch_display}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) "
-                        f"(total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}). "
-                        f"[Long-form cycle: {cycle_long_vids_watched}/{target_long_vids_cycle}]",
-                    )
-
-                    if cycle_long_vids_watched >= target_long_vids_cycle:
-                        emit(
-                            self.log_queue,
-                            f"Completed {cycle_long_vids_watched}/{target_long_vids_cycle} targeted long-form videos in this cycle! Switching to Shorts (checking suggested section on watch page first)...",
-                            logging.INFO,
-                        )
-                        self._run_shorts_cycle(session_watched_keys=session_watched_keys)
-                        if getattr(self, "_last_login_verification_failed", False):
-                            emit(
-                                self.log_queue,
-                                "[Manual Action Required] Shorts cycle halted due to unresolved manual challenge. Entering sleep cycle to avoid bot detection.",
-                                logging.WARNING,
+                            played_ch = self.search_and_play_target_video(
+                                session_watched_keys=session_watched_keys,
+                                preferred_channel_to_avoid=last_watched_channel,
                             )
-                            woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
-                            if woke_up:
-                                self._last_login_verification_failed = False
-                                cycle_long_vids_watched = 0
+                            if played_ch:
+                                target_attempts += 1
+                                self.target_attempts = target_attempts
+                                self.watched_count = target_attempts
+                                prog_total = self.target_limit if not self.is_unlimited else 0
+                                self._emit_event(("progress", 0, target_attempts, prog_total))
+
+                                ch_canon = SessionChannelTracker._canon_name(played_ch)
+                                channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
+                                last_watched_channel = played_ch
+                                consecutive_target_watched += 1
                                 suggested_miss_count = 0
-                                consecutive_target_watched = 0
-                                channel_buffer_counts.clear()
+
+                                emit(
+                                    self.log_queue,
+                                    f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
+                                )
                                 continue
                             else:
-                                break
-                        cycle_long_vids_watched = 0
-                        target_long_vids_cycle = random.randint(3, 5)
-                        suggested_miss_count = 0
-                        emit(
-                            self.log_queue,
-                            f"Exited Shorts cycle. Starting next long-form cycle: target is {target_long_vids_cycle} video(s).",
-                            logging.INFO,
-                        )
-                        safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                        human_like_delay(2.0, 3.5)
-                        dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
-                        continue
-                else:
-                    # Not found on Home feed after 3 attempts: fall back to YouTube search!
-                    emit(
-                        self.log_queue,
-                        "No video matching target channels found on YouTube Home. Falling back to YouTube search...",
-                        logging.INFO,
-                    )
-                    played_ch = self.search_and_play_target_video(
-                        session_watched_keys=session_watched_keys,
-                        preferred_channel_to_avoid=last_watched_channel,
-                    )
-                    if played_ch:
-                        target_attempts += 1
-                        self.target_attempts = target_attempts
-                        self.watched_count = target_attempts
-                        prog_total = self.target_limit if not self.is_unlimited else 0
-                        self._emit_event(("progress", 0, target_attempts, prog_total))
+                                if getattr(self, "_last_login_verification_failed", False):
+                                    emit(
+                                        self.log_queue,
+                                        "[Manual Action Required] Search playback halted due to unresolved manual challenge. Skipping Shorts and entering sleep cycle to avoid bot detection.",
+                                        logging.WARNING,
+                                    )
+                                    if not self.stop_event.is_set() and self.driver is not None and not is_driver_alive(self.driver):
+                                        reopened = self._reopen_browser_and_navigate_home(
+                                            known_accounts=known,
+                                            reason="browser closed externally",
+                                            max_retries=max_retries,
+                                        )
+                                        if reopened:
+                                            consecutive_reopen_failures = 0
+                                            suggested_miss_count = 0
+                                            self._last_login_verification_failed = False
+                                            continue
+                                    woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                                    if woke_up:
+                                        self._last_login_verification_failed = False
+                                        cycle_long_vids_watched = 0
+                                        suggested_miss_count = 0
+                                        consecutive_target_watched = 0
+                                        channel_buffer_counts.clear()
+                                        continue
+                                    else:
+                                        break
 
-                        ch_canon = SessionChannelTracker._canon_name(played_ch)
-                        channel_buffer_counts[ch_canon] = channel_buffer_counts.get(ch_canon, 0) + 1
-                        last_watched_channel = played_ch
-                        consecutive_target_watched += 1
-                        suggested_miss_count = 0
+                                emit(
+                                    self.log_queue,
+                                    "No long-form video found on Home feed or via Search. Checking YouTube Shorts for targeted channels...",
+                                    logging.INFO,
+                                )
+                                target_shorts_found = self._check_and_play_target_shorts_before_sleep(
+                                    session_watched_keys=session_watched_keys
+                                )
+                                if target_shorts_found > 0:
+                                    cycle_long_vids_watched = 0
+                                    suggested_miss_count = 0
+                                    continue
 
-                        emit(
-                            self.log_queue,
-                            f"Target channel '{played_ch}' watch countdown: {channel_buffer_counts[ch_canon]}/3 video(s) (total target videos since buffer: {consecutive_target_watched}/{random_buffer_threshold}).",
-                        )
-                        continue
-                    else:
-                        if getattr(self, "_last_login_verification_failed", False):
-                            emit(
-                                self.log_queue,
-                                "[Manual Action Required] Search playback halted due to unresolved manual challenge. Skipping Shorts and entering sleep cycle to avoid bot detection.",
-                                logging.WARNING,
-                            )
-                            woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
-                            if woke_up:
-                                self._last_login_verification_failed = False
-                                cycle_long_vids_watched = 0
-                                suggested_miss_count = 0
-                                consecutive_target_watched = 0
-                                channel_buffer_counts.clear()
-                                continue
-                            else:
-                                break
+                                # Both long-form videos and shorts checks yielded no target content
+                                if not self.stop_event.is_set() and self.driver is not None and not is_driver_alive(self.driver):
+                                    reopened = self._reopen_browser_and_navigate_home(
+                                        known_accounts=known,
+                                        reason="browser closed externally",
+                                        max_retries=max_retries,
+                                    )
+                                    if reopened:
+                                        consecutive_reopen_failures = 0
+                                        suggested_miss_count = 0
+                                        self._last_login_verification_failed = False
+                                        continue
+                                woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
+                                if woke_up:
+                                    cycle_long_vids_watched = 0
+                                    suggested_miss_count = 0
+                                    consecutive_target_watched = 0
+                                    channel_buffer_counts.clear()
+                                    continue
+                                else:
+                                    break
 
-                        emit(
-                            self.log_queue,
-                            "No long-form video found on Home feed or via Search. Checking YouTube Shorts for targeted channels...",
-                            logging.INFO,
+                    break
+                except Exception as watch_exc:
+                    if is_session_disconnected_error(watch_exc) and not self.stop_event.is_set():
+                        reopened = self._reopen_browser_and_navigate_home(
+                            known_accounts=known,
+                            reason=str(watch_exc),
+                            max_retries=max_retries,
                         )
-                        target_shorts_found = self._check_and_play_target_shorts_before_sleep(
-                            session_watched_keys=session_watched_keys
-                        )
-                        if target_shorts_found > 0:
-                            cycle_long_vids_watched = 0
+                        if reopened:
+                            consecutive_reopen_failures = 0
                             suggested_miss_count = 0
                             continue
-
-                        # Both long-form videos and shorts checks yielded no target content
-                        woke_up = self._enter_no_target_sleep_cycle(session_watched_keys=session_watched_keys)
-                        if woke_up:
-                            cycle_long_vids_watched = 0
-                            suggested_miss_count = 0
-                            consecutive_target_watched = 0
-                            channel_buffer_counts.clear()
-                            continue
-                        else:
-                            break
+                        consecutive_reopen_failures += 1
+                        if consecutive_reopen_failures >= max_reopen_failures:
+                            raise
+                        continue
+                    raise
 
             summary = f"Browsing session finished: attempted {target_attempts} target video(s)."
             emit(self.log_queue, summary)
@@ -6592,12 +6815,148 @@ class WatchingWorker:
                 close_driver(self.reporting_driver, log_queue=self.log_queue)
                 self.reporting_driver = None
 
+    def _relaunch_main_driver(self, known_accounts: Optional[List[Account]] = None) -> bool:
+        """Close dead main driver and launch a fresh Chrome browser instance for this account."""
+        if self.stop_event.is_set():
+            return False
+        if self.driver is not None:
+            try:
+                close_driver(self.driver, log_queue=self.log_queue)
+            except Exception:
+                pass
+            self.driver = None
+
+        # Wait briefly so Chrome profile locks release cleanly (interruptible by stop_event)
+        self.stop_event.wait(timeout=1.5)
+        if self.stop_event.is_set():
+            return False
+
+        try:
+            self.driver = setup_driver(self.account, log_queue=self.log_queue, known_accounts=known_accounts)
+            return True
+        except Exception as exc:
+            emit(self.log_queue, f"Failed to reopen Chrome browser: {exc}", logging.ERROR)
+            return False
+
+    def _ensure_youtube_home_reached(
+        self,
+        known_accounts: Optional[List[Account]] = None,
+        max_retries: Optional[int] = None,
+    ) -> bool:
+        """Ensure the browser reaches YouTube after login before dispatching session start email."""
+        if self.stop_event.is_set():
+            return False
+        if self.driver is None:
+            return True
+
+        for _attempt in range(2):
+            if self.stop_event.is_set():
+                return False
+            try:
+                raw_url = getattr(self.driver, "current_url", "")
+                if not isinstance(raw_url, str):
+                    # Mocked driver without string current_url
+                    return True
+                curr_url = raw_url.lower()
+                if "youtube.com" not in curr_url:
+                    emit(self.log_queue, "Navigating to YouTube Home (https://www.youtube.com/)...")
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(2.0, 3.0)
+                    dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+                    after_raw = getattr(self.driver, "current_url", "")
+                    if isinstance(after_raw, str) and after_raw.strip():
+                        after_url = after_raw.lower()
+                        if "accounts.google.com" in after_url:
+                            emit(
+                                self.log_queue,
+                                "Redirected to Google sign-in while opening YouTube. Waiting for login to complete...",
+                                logging.WARNING,
+                            )
+                            if not self._ensure_signed_in_and_wait(max_retries=max_retries):
+                                return False
+                            continue
+                        if after_url.startswith("http") and "youtube.com" not in after_url:
+                            emit(
+                                self.log_queue,
+                                f"Browser did not reach YouTube URL (currently at '{after_raw}').",
+                                logging.WARNING,
+                            )
+                            return False
+                return True
+            except Exception as exc:
+                if is_session_disconnected_error(exc) and not self.stop_event.is_set():
+                    emit(
+                        self.log_queue,
+                        f"Main browser closed externally while opening YouTube ({exc}). Reopening browser...",
+                        logging.WARNING,
+                    )
+                    if not self._relaunch_main_driver(known_accounts=known_accounts):
+                        return False
+                    if not self._ensure_signed_in_and_wait(max_retries=max_retries):
+                        return False
+                    continue
+                raise
+        return False
+
+    def _reopen_browser_and_navigate_home(
+        self,
+        known_accounts: Optional[List[Account]] = None,
+        reason: str = "",
+        max_retries: Optional[int] = None,
+    ) -> bool:
+        """Reopen the main browser after an external/accidental close and resume from YouTube Home."""
+        if self.stop_event.is_set():
+            return False
+
+        reason_suffix = f" ({reason})" if reason else ""
+        emit(
+            self.log_queue,
+            f"Main browser was closed externally{reason_suffix}. Reopening browser and resuming from YouTube Home...",
+            logging.WARNING,
+        )
+        self._report_status("Browser closed externally — reopening and returning to YouTube Home...", "warning")
+
+        if not self._relaunch_main_driver(known_accounts=known_accounts):
+            return False
+
+        login_ok = self._ensure_signed_in_and_wait(max_retries=max_retries)
+        if not login_ok or self.stop_event.is_set():
+            return False
+
+        try:
+            emit(self.log_queue, "Navigating reopened browser to YouTube Home (https://www.youtube.com/)...")
+            safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+            human_like_delay(2.0, 3.5)
+            dismiss_youtube_dialogs(self.driver, log_queue=self.log_queue)
+        except Exception as exc:
+            if is_session_disconnected_error(exc):
+                return False
+            emit(self.log_queue, f"Notice navigating reopened browser to YouTube Home: {exc}", logging.WARNING)
+
+        if not getattr(self, "_login_verified", False):
+            if self._ensure_youtube_home_reached(known_accounts=known_accounts, max_retries=max_retries):
+                self._login_verified = True
+                self.has_started_browsing = True
+                if not getattr(self, "_start_notification_dispatched", False):
+                    self._start_notification_dispatched = True
+                    self.reporting_thread = threading.Thread(
+                        target=self._async_init_and_send_start_notification,
+                        name="ReportingStartNotificationThread",
+                        daemon=True,
+                    )
+                    self.reporting_thread.start()
+
+        emit(self.log_queue, "Browser reopened successfully. Resuming video browsing from YouTube Home.", logging.INFO)
+        self._report_status(f"Browser reopened — browsing from YouTube Home ({self.account.email})...", "info")
+        return True
+
     def _ensure_signed_in_and_wait(self, wait_seconds: float = 120.0, max_retries: Optional[int] = None) -> bool:
         """Verify account login before starting or resuming session.
 
         If signed out or sign-in is incomplete:
         - Waits for the account to be signed in (default 2 minutes / 120s).
         - Re-checks periodically and after 2 minutes.
+        - If the browser is closed externally while waiting, automatically reopens it.
         - Once signed in successfully, returns True.
         """
         if not self.account or not getattr(self.account, "email", "").strip():
@@ -6612,19 +6971,45 @@ class WatchingWorker:
             except Exception:
                 pass
 
+        known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
+        known_accounts = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
+
         attempt = 0
+        consecutive_reopen_failures = 0
+        max_reopen_failures = 3
+
         while not self.stop_event.is_set():
             attempt += 1
             emit(self.log_queue, f"Checking Google sign-in status for {self.account.email} (Attempt #{attempt})...", logging.INFO)
 
-            login_ok = perform_google_login(
-                self.driver,
-                self.account,
-                log_queue=self.log_queue,
-                stop_event=self.stop_event,
-                config_mgr=self.config_mgr,
-                alert_callback=self._send_critical_alert,
-            )
+            try:
+                login_ok = perform_google_login(
+                    self.driver,
+                    self.account,
+                    log_queue=self.log_queue,
+                    stop_event=self.stop_event,
+                    config_mgr=self.config_mgr,
+                    alert_callback=self._send_critical_alert,
+                )
+            except Exception as exc:
+                if is_session_disconnected_error(exc) and not self.stop_event.is_set():
+                    emit(
+                        self.log_queue,
+                        f"Main browser closed externally while waiting for sign-in ({exc}). Reopening browser...",
+                        logging.WARNING,
+                    )
+                    self._report_status("Browser closed externally — reopening...", "warning")
+                    if self._relaunch_main_driver(known_accounts=known_accounts):
+                        consecutive_reopen_failures = 0
+                        attempt = max(0, attempt - 1)
+                        continue
+                    consecutive_reopen_failures += 1
+                    if consecutive_reopen_failures >= max_reopen_failures:
+                        emit(self.log_queue, "Could not reopen browser after multiple attempts during sign-in.", logging.ERROR)
+                        return False
+                    continue
+                raise
+
             if login_ok:
                 emit(self.log_queue, f"Sign-in verified successfully for {self.account.email}!", logging.INFO)
                 return True
@@ -6648,15 +7033,34 @@ class WatchingWorker:
             wait_start = time.time()
             wait_end = wait_start + wait_seconds
             last_cd_sec = -1
+            browser_reopened = False
 
             while time.time() < wait_end and not self.stop_event.is_set():
+                if self.driver is not None and not is_driver_alive(self.driver):
+                    emit(
+                        self.log_queue,
+                        "Main browser closed externally during sign-in wait. Reopening browser...",
+                        logging.WARNING,
+                    )
+                    self._report_status("Browser closed externally — reopening...", "warning")
+                    if self._relaunch_main_driver(known_accounts=known_accounts):
+                        consecutive_reopen_failures = 0
+                        attempt = max(0, attempt - 1)
+                        browser_reopened = True
+                        break
+                    consecutive_reopen_failures += 1
+                    if consecutive_reopen_failures >= max_reopen_failures:
+                        emit(self.log_queue, "Could not reopen browser after multiple attempts during sign-in wait.", logging.ERROR)
+                        return False
+
                 if is_logged_in(self.driver, self.account):
                     emit(self.log_queue, f"Sign-in detected for {self.account.email} during wait!", logging.INFO)
-                    self._send_critical_alert(
-                        "Manual Challenge Resolved - Resuming Session",
-                        f"Google sign-in detected and verified for account {self.account.email} on this PC. Resuming session.",
-                        force=True,
-                    )
+                    if getattr(self, "_login_verified", False):
+                        self._send_critical_alert(
+                            "Manual Challenge Resolved - Resuming Session",
+                            f"Google sign-in detected and verified for account {self.account.email} on this PC. Resuming session.",
+                            force=True,
+                        )
                     return True
 
                 remaining = int(wait_end - time.time())
@@ -6669,6 +7073,9 @@ class WatchingWorker:
 
             if self.stop_event.is_set():
                 return False
+
+            if browser_reopened:
+                continue
 
             emit(
                 self.log_queue,
@@ -6810,6 +7217,13 @@ class WatchingWorker:
     def _send_critical_alert(self, alert_type: str, details: str, force: bool = False) -> None:
         """Send urgent alert email for bot challenges, disconnections, or crashes."""
         if not self.config_mgr:
+            return
+        if getattr(self, "_login_verified", None) is False:
+            emit(
+                self.log_queue,
+                f"Skipping alert email ({alert_type}): account {getattr(self.account, 'email', '')} is not logged in yet. Waiting for login to complete.",
+                logging.INFO,
+            )
             return
         try:
             EmailReporter.send_alert_notification(
