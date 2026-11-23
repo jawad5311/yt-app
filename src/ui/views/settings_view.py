@@ -226,6 +226,22 @@ class SettingsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
+        self.use_system_chrome_switch = Switch(
+            scroll_general,
+            text="Use Personal Chrome Profile (Undetectable & Ready)",
+        )
+        if self.config_mgr and self.config_mgr.get_bool("UseSystemChromeProfile", True):
+            self.use_system_chrome_switch.select()
+        else:
+            self.use_system_chrome_switch.deselect()
+        self.use_system_chrome_switch.pack(anchor="w", padx=15, pady=(5, 2))
+        Label(
+            scroll_general,
+            text="When enabled, automates your installed Google Chrome profile directly. Bypasses manual account entry.",
+            font=Font(size=12),
+            style="Muted.TLabel",
+        ).pack(anchor="w", padx=15, pady=(0, 15))
+
         Label(scroll_general, text="YouTube Data API Key (Required for Channel Sync):", font=Font(weight="bold")).pack(
             anchor="w", padx=15, pady=(5, 2)
         )
@@ -1078,6 +1094,9 @@ class SettingsView(Frame):
 
         # 1. Fallback switch
         validated["DirectLinkFallback"] = bool(self.fallback_switch.get())
+
+        if hasattr(self, "use_system_chrome_switch"):
+            validated["UseSystemChromeProfile"] = bool(self.use_system_chrome_switch.get())
 
         # 1b. YouTube Data API Key
         if hasattr(self, "youtube_api_key_entry"):

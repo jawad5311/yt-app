@@ -566,6 +566,20 @@ class WarmupManager:
             raw_auto = self.config_mgr.get_bool("WarmupAutoEnableNewAccounts", True) if hasattr(self.config_mgr, "get_bool") else True
             auto_enabled = raw_auto if isinstance(raw_auto, bool) else True
 
+            # If using personal Chrome profile and this is the active personal account, default warmup to False unless explicitly configured
+            if hasattr(self.config_mgr, "get_use_system_chrome_profile") and self.config_mgr.get_use_system_chrome_profile():
+                try:
+                    from .profile_manager import get_active_system_profile
+                    prof = get_active_system_profile(
+                        self.config_mgr.get_system_chrome_profile_name()
+                        if hasattr(self.config_mgr, "get_system_chrome_profile_name") else "Default"
+                    )
+                    sys_email = normalize_account_id(prof.get("email") or "")
+                    if norm_email in (sys_email, "personal chrome profile", "default"):
+                        auto_enabled = False
+                except Exception:
+                    pass
+
             cfg = WarmupAccountConfig(
                 email=norm_email,
                 enabled=auto_enabled,

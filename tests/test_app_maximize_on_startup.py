@@ -44,3 +44,65 @@ class TestAppMaximizeOnStartup:
             assert root.state() in ("zoomed", "normal")
         finally:
             root.destroy()
+
+    def test_start_watching_maximizes_window_screen(self):
+        app = MagicMock()
+        app.is_running = False
+        app.is_closing = False
+        app._get_owned_threads.return_value = []
+        app._ensure_active_accounts_for_session.return_value = True
+        app.config_mgr = MagicMock()
+        app.config_mgr.get_channels.return_value = [{"name": "TestChannel", "enabled": True, "archived": False}]
+        app.config_mgr.update_settings.return_value = None
+        app.queued_video_tasks = []
+        mock_dashboard = MagicMock()
+        mock_dashboard.get_browsing_limit.return_value = (1, True)
+        mock_dashboard.get_sleep_nap_enabled.return_value = True
+        app.views = {"dashboard": mock_dashboard}
+        app.log_queue = MagicMock()
+        app._confirm_full_video_timeout_if_needed.return_value = True
+        app.stop_event = MagicMock()
+        app.pause_event = MagicMock()
+        app.worker_progress = {}
+        app.event_queue = MagicMock()
+        app.event_queue.empty.return_value = True
+        app.loaded_accounts = [MagicMock()]
+        app.after = MagicMock()
+
+        with patch("threading.Thread"):
+            YTBotApp.start_watching(app)
+
+        app.maximize_window.assert_called_once()
+        app.after.assert_any_call(50, app.maximize_window)
+
+    def test_start_automation_maximizes_window_screen(self):
+        app = MagicMock()
+        app.is_running = False
+        app.is_closing = False
+        app._get_owned_threads.return_value = []
+        app._ensure_active_accounts_for_session.return_value = True
+        app.config_mgr = MagicMock()
+        app.config_mgr.get_float.return_value = 0.0
+        app.config_mgr.get_channels.return_value = []
+        app.config_mgr.set_setting.return_value = None
+        task = MagicMock()
+        task.enabled = True
+        app.queued_video_tasks = [task]
+        app.stats_store = None
+        mock_dashboard = MagicMock()
+        mock_dashboard.get_loop_count.return_value = 1
+        app.views = {"dashboard": mock_dashboard}
+        app.log_queue = MagicMock()
+        app._confirm_full_video_timeout_if_needed.return_value = True
+        app.stop_event = MagicMock()
+        app.worker_progress = {}
+        app.event_queue = MagicMock()
+        app.event_queue.empty.return_value = True
+        app.after = MagicMock()
+
+        with patch("threading.Thread"), patch("src.ui.app.is_video_task_runnable", return_value=True):
+            YTBotApp.start_automation(app)
+
+        app.maximize_window.assert_called_once()
+        app.after.assert_any_call(50, app.maximize_window)
+

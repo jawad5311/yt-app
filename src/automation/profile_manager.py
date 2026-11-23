@@ -1,5 +1,8 @@
+import json
 import logging
 import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -23,6 +26,161 @@ def get_runtime_profiles_dir() -> Path:
     runtime_dir = (get_project_root() / "runtime" / "chrome_profiles").resolve()
     runtime_dir.mkdir(parents=True, exist_ok=True)
     return runtime_dir
+
+
+def get_system_chrome_user_data_dir() -> Path:
+    """Return the absolute path to the operating system's default Google Chrome User Data directory."""
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return (Path(local_app_data) / "Google" / "Chrome" / "User Data").resolve()
+        return (Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data").resolve()
+    elif sys.platform == "darwin":
+        return (Path.home() / "Library" / "Application Support" / "Google" / "Chrome").resolve()
+    else:
+        return (Path.home() / ".config" / "google-chrome").resolve()
+
+
+def get_system_chrome_profiles() -> List[Dict[str, Any]]:
+    """Scan and return all installed Chrome profiles from the system Chrome User Data directory.
+
+    Parses ``Local State`` to extract folder names, profile names, and signed-in Google account emails.
+    """
+    user_data_dir = get_system_chrome_user_data_dir()
+    profiles: List[Dict[str, Any]] = []
+
+    if not user_data_dir.exists():
+        return profiles
+
+    local_state_file = user_data_dir / "Local State"
+    if local_state_file.is_file():
+        try:
+            with open(local_state_file, "r", encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+            info_cache = data.get("profile", {}).get("info_cache", {})
+            if isinstance(info_cache, dict):
+                for folder_name, prof_data in info_cache.items():
+                    if not isinstance(prof_data, dict):
+                        continue
+                    email = prof_data.get("user_name", "") or ""
+                    display_name = prof_data.get("name", "") or folder_name
+                    gaia_name = prof_data.get("gaia_name", "") or ""
+                    is_primary = bool(prof_data.get("is_consented_primary_account", folder_name == "Default"))
+
+                    label = f"{display_name} ({email})" if email else display_name
+                    profiles.append({
+                        "folder": folder_name,
+                        "name": display_name,
+                        "email": email,
+                        "gaia_name": gaia_name,
+                        "is_primary": is_primary,
+                        "label": label,
+                        "path": user_data_dir / folder_name,
+                    })
+        except Exception as exc:
+            logging.debug(f"Failed to read Chrome Local State file: {exc}")
+
+    # Fallback if no profiles found in Local State but Default folder exists on disk
+    if not profiles:
+        default_folder = user_data_dir / "Default"
+        if default_folder.is_dir():
+            profiles.append({
+                "folder": "Default",
+                "name": "Default Profile",
+                "email": "",
+                "gaia_name": "",
+                "is_primary": True,
+                "label": "Default Profile",
+                "path": default_folder,
+            })
+
+    return profiles
+
+
+def get_active_system_profile(profile_name: str = "Default") -> Dict[str, Any]:
+    """Return the profile info dictionary for ``profile_name``, or Default profile if available."""
+    profiles = get_system_chrome_profiles()
+    for p in profiles:
+        if p["folder"].lower() == profile_name.lower():
+            return p
+    if profiles:
+        return profiles[0]
+    user_data = get_system_chrome_user_data_dir()
+    return {
+        "folder": profile_name,
+        "name": profile_name,
+        "email": "",
+        "gaia_name": "",
+        "is_primary": True,
+        "label": profile_name,
+        "path": user_data / profile_name,
+    }
+
+
+def is_process_running(process_name: str) -> bool:
+    """Return True if a process matching process_name is currently running.
+
+    Uses pure in-memory Windows Toolhelp32Snapshot to avoid spawning external
+    console processes (like tasklist.exe) which cause GUI window flickering/blinking.
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            TH32CS_SNAPPROCESS = 0x00000002
+
+            class PROCESSENTRY32W(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", wintypes.WCHAR * 260),
+                ]
+
+            h_snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            if h_snap != wintypes.HANDLE(-1).value and h_snap != -1:
+                try:
+                    entry = PROCESSENTRY32W()
+                    entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+                    target = process_name.lower()
+                    if ctypes.windll.kernel32.Process32FirstW(h_snap, ctypes.byref(entry)):
+                        while True:
+                            if entry.szExeFile.lower() == target:
+                                return True
+                            if not ctypes.windll.kernel32.Process32NextW(h_snap, ctypes.byref(entry)):
+                                break
+                finally:
+                    ctypes.windll.kernel32.CloseHandle(h_snap)
+        except Exception:
+            pass
+    return False
+
+
+def is_system_chrome_running() -> bool:
+    """Return True if Google Chrome is currently open on the computer.
+
+    Uses lock file inspection on the system User Data directory and in-memory Win32 process enumeration.
+    Spawns zero subprocesses to prevent GUI flickering.
+    """
+    user_data_dir = get_system_chrome_user_data_dir()
+    if user_data_dir.exists():
+        for lock_name in ("lockfile", "SingletonLock"):
+            lock_path = user_data_dir / lock_name
+            if lock_path.exists():
+                try:
+                    with open(lock_path, "r+b"):
+                        pass
+                except (PermissionError, OSError):
+                    return True
+
+    return is_process_running("chrome.exe")
 
 
 def resolve_profile_dir(
@@ -99,32 +257,36 @@ def resolve_profile_dir(
 
 def is_chrome_lock_active(profile_dir: Path) -> bool:
     """Check if Chrome's lock file is actively held by a live process."""
-    lock_file = profile_dir / "SingletonLock"
-    if not lock_file.exists():
+    if not profile_dir or not profile_dir.is_dir():
         return False
 
-    # On Windows / Unix, try opening in read-write mode.
-    # If Chrome holds it open, the OS raises PermissionError / OSError.
-    try:
-        if lock_file.is_file():
-            with open(lock_file, "r+b"):
-                pass
-    except (PermissionError, OSError):
-        return True
+    for lock_name in ("SingletonLock", "lockfile"):
+        lock_file = profile_dir / lock_name
+        if not lock_file.exists():
+            continue
 
-    if lock_file.is_symlink():
+        # On Windows / Unix, try opening in read-write mode.
+        # If Chrome holds it open, the OS raises PermissionError / OSError.
         try:
-            target = os.readlink(lock_file)
-            parts = target.split("-")
-            if len(parts) >= 2 and parts[-1].isdigit():
-                pid = int(parts[-1])
-                try:
-                    os.kill(pid, 0)
-                    return True
-                except (OSError, ProcessLookupError):
-                    return False
-        except Exception:
-            pass
+            if lock_file.is_file():
+                with open(lock_file, "r+b"):
+                    pass
+        except (PermissionError, OSError):
+            return True
+
+        if lock_file.is_symlink():
+            try:
+                target = os.readlink(lock_file)
+                parts = target.split("-")
+                if len(parts) >= 2 and parts[-1].isdigit():
+                    pid = int(parts[-1])
+                    try:
+                        os.kill(pid, 0)
+                        return True
+                    except (OSError, ProcessLookupError):
+                        pass
+            except Exception:
+                pass
 
     return False
 

@@ -3,6 +3,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import winreg
 from pathlib import Path
@@ -20,7 +21,12 @@ from .driver_provisioner import (
 from .profile_manager import (
     ProfileBusyError,
     ProfileLock,
+    get_active_system_profile,
+    get_runtime_profiles_dir,
+    get_system_chrome_profiles,
+    get_system_chrome_user_data_dir,
     is_chrome_lock_active,
+    is_system_chrome_running,
     resolve_profile_dir,
 )
 
@@ -247,15 +253,67 @@ def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
                     copy_shared_file(item, d_dir / item.name)
 
 
+def maximize_browser_window(driver: Any) -> None:
+    """Ensure the browser window is maximized via WebDriver and Win32."""
+    if driver is None:
+        return
+    try:
+        if hasattr(driver, "maximize_window"):
+            driver.maximize_window()
+    except Exception:
+        pass
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            browser_pid = getattr(driver, "browser_pid", None)
+            if not browser_pid or browser_pid <= 0:
+                service = getattr(driver, "service", None)
+                if service and getattr(service, "process", None):
+                    browser_pid = service.process.pid
+
+            if browser_pid and browser_pid > 0:
+                SW_MAXIMIZE = 3
+
+                def enum_windows_callback(hwnd: Any, _lparam: Any) -> bool:
+                    if user32.IsWindowVisible(hwnd):
+                        pid = wintypes.DWORD()
+                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        if pid.value == browser_pid:
+                            user32.ShowWindow(hwnd, SW_MAXIMIZE)
+                    return True
+
+                WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                user32.EnumWindows(WNDENUMPROC(enum_windows_callback), 0)
+        except Exception:
+            pass
+
+
 def setup_driver(
-    account: Account,
+    account: Optional[Account] = None,
     log_queue: Optional[queue.Queue] = None,
     adblock_path: Optional[Path] = None,
     known_accounts: Optional[Union[List[Account], List[Dict[str, Any]]]] = None,
     headless: bool = False,
     is_reporting: bool = False,
+    use_system_profile: Optional[bool] = None,
+    system_profile_name: Optional[str] = None,
 ) -> uc.Chrome:
-    """Initialize a stealth undetected-chromedriver instance with dedicated account profile."""
+    """Initialize a stealth undetected-chromedriver instance.
+
+    Supports dedicated account profiles in ``runtime/chrome_profiles/`` or directly
+    reusing the user's personal installed Google Chrome profile.
+    """
+    if use_system_profile is None:
+        try:
+            from ..config.manager import ConfigManager
+            use_system_profile = ConfigManager().get_bool("UseSystemChromeProfile", False)
+        except Exception:
+            use_system_profile = False
+
     resolved_known: Optional[List[Account]] = None
     if known_accounts is None:
         try:
@@ -275,39 +333,70 @@ def setup_driver(
             if a
         ]
 
-    main_profile_dir = resolve_profile_dir(account, known_accounts=resolved_known)
-    if is_reporting:
-        profile_dir = main_profile_dir.parent / f"{main_profile_dir.name}_reporting"
-        sync_reporting_profile(main_profile_dir, profile_dir)
+    if use_system_profile and not is_reporting:
+        if is_system_chrome_running():
+            raise ProfileBusyError(
+                "Google Chrome is currently open on this computer.\n\n"
+                "Chrome only allows one program to access your personal profile at a time.\n"
+                "Please close Google Chrome completely before starting."
+            )
+
+        if not system_profile_name:
+            try:
+                from ..config.manager import ConfigManager
+                system_profile_name = ConfigManager().get_setting("SystemChromeProfileName", "Default")
+            except Exception:
+                system_profile_name = "Default"
+
+        active_prof = get_active_system_profile(system_profile_name)
+        prof_folder = active_prof.get("folder", "Default")
+        sys_user_data_dir = get_system_chrome_user_data_dir()
+        profile_dir = sys_user_data_dir
+
+        acc_email = getattr(account, "email", "") or active_prof.get("email", "") or "System Chrome Profile"
+        emit(log_queue, f"Initializing Chrome driver with Personal Chrome Profile: {prof_folder} ({acc_email})")
+        emit(log_queue, f"Using system Chrome User Data: {sys_user_data_dir}")
+
+        profile_lock = ProfileLock(sys_user_data_dir)
+        profile_lock.acquire(timeout=2.0)
     else:
-        profile_dir = main_profile_dir
+        if account is None:
+            account = Account(email="default_user@gmail.com", password="")
+        main_profile_dir = resolve_profile_dir(account, known_accounts=resolved_known)
+        if is_reporting:
+            profile_dir = main_profile_dir.parent / f"{main_profile_dir.name}_reporting"
+            sync_reporting_profile(main_profile_dir, profile_dir)
+        else:
+            profile_dir = main_profile_dir
 
-    profile_dir.mkdir(parents=True, exist_ok=True)
-
-    profile_lock = ProfileLock(profile_dir)
-    profile_lock.acquire(timeout=2.0)
-
-    try:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        profile_lock = ProfileLock(profile_dir)
+        profile_lock.acquire(timeout=2.0)
         cleanup_profile_locks(profile_dir)
 
         emit(log_queue, f"Initializing Chrome driver for account: {account.email}")
         emit(log_queue, f"Using persistent Chrome profile: {profile_dir}")
 
-        options = uc.ChromeOptions()
-        options.page_load_strategy = "eager"
-        options.add_argument(f"--user-data-dir={profile_dir}")
-        options.add_argument("--no-first-run")
-        options.add_argument("--no-service-autorun")
-        options.add_argument("--password-store=basic")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-dev-shm-usage")
-        if headless:
-            options.add_argument("--window-size=1920,1080")
-        else:
-            options.add_argument("--start-maximized")
-        options.add_argument("--lang=en-US,en")
-        if headless:
-            options.add_argument("--headless=new")
+    try:
+        def _build_options() -> uc.ChromeOptions:
+            opts = uc.ChromeOptions()
+            opts.page_load_strategy = "eager"
+            if use_system_profile and not is_reporting:
+                opts.add_argument(f"--user-data-dir={sys_user_data_dir}")
+                opts.add_argument(f"--profile-directory={prof_folder}")
+            else:
+                opts.add_argument(f"--user-data-dir={profile_dir}")
+
+            opts.add_argument("--no-first-run")
+            opts.add_argument("--no-service-autorun")
+            opts.add_argument("--password-store=basic")
+            # GPU acceleration is enabled for maximum authenticity (disable-gpu removed)
+            opts.add_argument("--disable-dev-shm-usage")
+            opts.add_argument("--start-maximized")
+            opts.add_argument("--lang=en-US,en")
+            return opts
+
+        options = _build_options()
 
         chrome_version = get_chrome_version()
         chrome_major = None
@@ -322,9 +411,10 @@ def setup_driver(
         if chrome_version:
             cached_path = ensure_chromedriver(chrome_version, log_queue)
             if cached_path is not None:
-                driver_path = create_session_driver_copy(cached_path, profile_dir)
+                driver_working_dir = (get_runtime_profiles_dir() / "system_driver_bin") if (use_system_profile and not is_reporting) else profile_dir
+                driver_path = create_session_driver_copy(cached_path, driver_working_dir)
 
-        launch_kwargs: Dict[str, Any] = {"use_subprocess": True}
+        launch_kwargs: Dict[str, Any] = {"use_subprocess": True, "headless": False}
         if chrome_major:
             launch_kwargs["version_main"] = chrome_major
         if driver_path is not None:
@@ -334,20 +424,25 @@ def setup_driver(
         with DRIVER_INIT_LOCK:
             try:
                 driver = uc.Chrome(options=options, **launch_kwargs)
-            except Exception:
+            except Exception as first_exc:
                 if driver_path is None:
                     raise
-                # Cached copy rejected (e.g. patched badly) -> uc's own flow.
-                emit(log_queue, "Cached chromedriver rejected; retrying automatic download.", logging.WARNING)
+                # Cached copy rejected (e.g. patched badly) -> uc's own flow with fresh ChromeOptions.
+                emit(
+                    log_queue,
+                    f"Cached chromedriver rejected ({first_exc}); retrying automatic download.",
+                    logging.WARNING,
+                )
                 launch_kwargs.pop("driver_executable_path", None)
-                driver = uc.Chrome(options=options, **launch_kwargs)
+                driver = uc.Chrome(options=_build_options(), **launch_kwargs)
+
+        driver.keep_user_data_dir = True
         driver.set_page_load_timeout(45)
 
-        if not headless:
-            try:
-                driver.maximize_window()
-            except Exception:
-                pass
+        try:
+            maximize_browser_window(driver)
+        except Exception:
+            pass
 
         # First successful automatic download -> keep a copy for offline launches using safe publication.
         if driver_path is None and chrome_major:
@@ -358,8 +453,9 @@ def setup_driver(
                 pass
 
         driver._profile_lock = profile_lock
-        driver._is_headless = bool(headless)
+        driver._is_headless = False
         driver._is_reporting = bool(is_reporting)
+        driver._is_system_profile = bool(use_system_profile and not is_reporting)
 
         # Ensure calling driver.quit() directly also safely releases the profile lock
         orig_quit = getattr(driver, "quit", None)
@@ -376,7 +472,8 @@ def setup_driver(
                             pass
             driver.quit = _safe_quit
 
-        emit(log_queue, f"Chrome driver successfully started for {account.email}.")
+        acc_name = getattr(account, "email", "") or (active_prof.get("email") if use_system_profile and not is_reporting else "profile")
+        emit(log_queue, f"Chrome driver successfully started for {acc_name}.")
         return driver
     except Exception as exc:
         profile_lock.release()

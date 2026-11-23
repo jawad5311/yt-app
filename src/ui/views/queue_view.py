@@ -1589,7 +1589,7 @@ class QueueView(Frame):
                 pass
             self._loading_indicator = None
 
-    def _process_card_render_batch(self, batch_size: int = 15):
+    def _process_card_render_batch(self, batch_size: int = 10):
         """Render a progressive chunk of cards and yield to the Tkinter event loop between batches."""
         self._render_job = None
         try:
@@ -1655,40 +1655,11 @@ class QueueView(Frame):
 
             try:
                 if hasattr(self, "after"):
-                    self._render_job = self.after(10, lambda: self._process_card_render_batch(batch_size=25))
+                    self._render_job = self.after(16, lambda: self._process_card_render_batch(batch_size=10))
                 else:
-                    self._process_card_render_batch(batch_size=len(self._pending_card_queue))
+                    self._process_card_render_batch(batch_size=10)
             except Exception:
-                while self._pending_card_queue:
-                    (
-                        container,
-                        g_idx,
-                        task,
-                        real_index,
-                        group,
-                        can_move_up,
-                        can_move_down,
-                        on_move_up,
-                        on_move_down,
-                    ) = self._pending_card_queue.pop(0)
-                    try:
-                        if hasattr(container, "winfo_exists") and not container.winfo_exists():
-                            continue
-                        card = self._build_task_card(
-                            container,
-                            g_idx + 1,
-                            task,
-                            real_index,
-                            channel_enabled=group.channel.enabled if not group.is_uncategorized else True,
-                            can_move_up=can_move_up,
-                            can_move_down=can_move_down,
-                            on_move_up=on_move_up,
-                            on_move_down=on_move_down,
-                            group=group,
-                        )
-                        card.grid(row=g_idx + 1, column=0, sticky="ew", pady=(0, 5))
-                    except Exception:
-                        pass
+                pass
         else:
             if getattr(self, "_loading_indicator", None) is not None:
                 try:
@@ -1804,7 +1775,7 @@ class QueueView(Frame):
             self._render_group(filtered_group)
 
         if hasattr(self, "_pending_card_queue") and self._pending_card_queue:
-            self._process_card_render_batch(batch_size=15)
+            self._process_card_render_batch(batch_size=10)
 
     def _render_group(self, group: VideoGroup):
         """Render one channel section (header + its video cards)."""

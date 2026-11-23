@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import tkinter as tk
 from typing import Optional
 
+from ...automation.profile_manager import is_system_chrome_running
 from ..components import Button, CheckBox, Entry, Font, Frame, Label, ProgressBar, ScrollableFrame
 from ..tooltip import add_tooltip, flash_button_feedback
 
@@ -339,6 +341,23 @@ class DashboardView(ScrollableFrame):
             "Stop all ongoing browsing operations and browser sessions.",
         )
 
+        self.chrome_status_pill = tk.Label(
+            self.btn_grid,
+            text="Detecting Chrome...",
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=4,
+            relief="flat",
+            bd=0,
+            cursor="hand2",
+        )
+        self.chrome_status_pill.grid(row=0, column=2, padx=(15, 0), pady=0, sticky="w")
+        self.chrome_status_pill.bind("<Button-1>", lambda _e: self._update_chrome_status_pill())
+        add_tooltip(
+            self.chrome_status_pill,
+            "Live status of personal Google Chrome. Chrome must be closed before starting automation so its profile lock is released. Click to re-check.",
+        )
+
         # Backward compatibility alias for unified control button
         self.pause_btn = self.start_watching_btn
 
@@ -370,6 +389,10 @@ class DashboardView(ScrollableFrame):
         self.progress_bar = ProgressBar(self.action_frame, style="Apple.Horizontal.TProgressbar")
         self.progress_bar.pack(padx=20, pady=(0, 22), fill="x")
         self.progress_bar.set(0)
+
+        self._chrome_poll_job = None
+        self._update_chrome_status_pill()
+        self._poll_chrome_status()
 
     def _create_card(
         self,
@@ -676,6 +699,7 @@ class DashboardView(ScrollableFrame):
                     self._status_card_footer.configure(text="Ready for automation")
                 except Exception:
                     pass
+        self._update_chrome_status_pill()
 
     def set_paused_state(self, is_paused: bool):
         """Update unified start/pause/resume button text/color and status indicator."""
@@ -737,6 +761,7 @@ class DashboardView(ScrollableFrame):
                     self._status_card_footer.configure(text="Active watch cycle")
                 except Exception:
                     pass
+        self._update_chrome_status_pill()
 
     @property
     def stop_countdown_active(self) -> bool:
@@ -797,6 +822,71 @@ class DashboardView(ScrollableFrame):
         self._stop_countdown_active = False
         self._stop_countdown_remaining = 0
 
+    def _update_chrome_status_pill(self) -> None:
+        """Update the Chrome running status badge on the dashboard."""
+        if not hasattr(self, "chrome_status_pill") or not self.chrome_status_pill.winfo_exists():
+            return
+
+        use_system_profile = True
+        if hasattr(self.app_controller, "config_mgr") and hasattr(
+            self.app_controller.config_mgr, "get_use_system_chrome_profile"
+        ):
+            val = self.app_controller.config_mgr.get_use_system_chrome_profile()
+            if isinstance(val, (bool, int, str)):
+                use_system_profile = bool(val)
+
+        if not use_system_profile:
+            self.chrome_status_pill.configure(
+                text="Dedicated Profiles Active",
+                bg="#334155",
+                fg="#94a3b8",
+            )
+            return
+
+        is_bot_running = getattr(self, "is_running", False) or (
+            hasattr(self.app_controller, "is_running") and self.app_controller.is_running is True
+        )
+        if is_bot_running:
+            self.chrome_status_pill.configure(
+                text="🟢 Chrome In Use (Automation Active)",
+                bg="#064e3b",
+                fg="#6ee7b7",
+            )
+            return
+
+        is_running = is_system_chrome_running()
+        if is_running:
+            self.chrome_status_pill.configure(
+                text="⚠️ Chrome is Open (Close to Browse)",
+                bg="#7f1d1d",
+                fg="#fca5a5",
+            )
+        else:
+            self.chrome_status_pill.configure(
+                text="🟢 Chrome Closed (Ready to Browse)",
+                bg="#064e3b",
+                fg="#6ee7b7",
+            )
+
+    def _poll_chrome_status(self) -> None:
+        """Periodically refresh Chrome running status indicator when dashboard is visible."""
+        try:
+            if not self.winfo_exists():
+                return
+            if self.winfo_viewable():
+                self._update_chrome_status_pill()
+        except Exception:
+            pass
+        finally:
+            if hasattr(self, "winfo_exists") and self.winfo_exists():
+                self._chrome_poll_job = self.after(3000, self._poll_chrome_status)
+
     def destroy(self) -> None:
         self._cancel_stop_countdown()
+        if hasattr(self, "_chrome_poll_job") and self._chrome_poll_job:
+            try:
+                self.after_cancel(self._chrome_poll_job)
+            except Exception:
+                pass
+            self._chrome_poll_job = None
         super().destroy()

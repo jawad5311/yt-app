@@ -13,7 +13,7 @@ from ..models.watch_stats import TaskOutcome, resolve_video_key
 from ..utils.helpers import extract_video_id
 from ..utils.logger import emit
 from .adblock import ensure_adblock
-from .driver import close_driver, setup_driver
+from .driver import close_driver, maximize_browser_window, setup_driver
 from .login import check_account_logged_in, perform_google_login
 from .navigation import (
     find_and_click_search_result,
@@ -193,6 +193,7 @@ class BrowsingWorker:
             self.skip_ads, self.max_ad_seconds = self._ad_settings()
             adblock_path = ensure_adblock(log_queue=self.log_queue) if self.skip_ads else None
             self.driver = setup_driver(self.account, log_queue=self.log_queue, adblock_path=adblock_path)
+            maximize_browser_window(self.driver)
 
             if self.stop_event.is_set():
                 return

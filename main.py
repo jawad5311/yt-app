@@ -6,16 +6,12 @@ root_dir = Path(__file__).resolve().parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-from src.automation.driver import close_driver, setup_driver
-from src.config.manager import ConfigManager
-from src.models.account import Account
-from src.ui.app import YTBotApp
-from src.utils.logger import init_logging
-
-
 def run_browser_diagnostics():
     """Diagnostic mode to verify Chrome/ChromeDriver health."""
     print("=== Running Chrome Browser Diagnostics ===")
+    from src.automation.driver import close_driver, setup_driver
+    from src.models.account import Account
+    from src.utils.logger import init_logging
     init_logging()
     test_acc = Account(email="diagnostics_test@gmail.com", password="dummy")
     driver = None
@@ -36,6 +32,8 @@ def main():
         sys.exit(0)
 
     try:
+        from src.config.manager import ConfigManager
+        from src.ui.app import YTBotApp
         config_mgr = ConfigManager()
         app = YTBotApp(config_mgr=config_mgr)
         app.mainloop()

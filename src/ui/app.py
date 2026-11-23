@@ -86,8 +86,8 @@ class YTBotApp(tk.Tk):
         self.stats_store = stats_store or StatsStore()
 
         self.title("YouTube Playback Automation Tool - V2.1 (Modular)")
-        self.geometry("1180x740")
-        self.minsize(1020, 620)
+        self.geometry("1180x640")
+        self.minsize(1020, 600)
         self.maximize_window()
 
         self.apply_appearance_mode(self.config_mgr.get_setting("AppearanceMode", "Dark"), persist=False)
@@ -113,6 +113,7 @@ class YTBotApp(tk.Tk):
         self._queue_needs_refresh = False
         self._shorts_queue_needs_refresh = False
         self._channels_needs_refresh = False
+        self._stats_needs_refresh = False
         self.session_manager_thread: Optional[threading.Thread] = None
         self._session_counter: int = 0
         self.current_session_id: int = 0
@@ -138,10 +139,9 @@ class YTBotApp(tk.Tk):
 
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self._update_close_button_state()
         self._poll_job = self.after(50, self._poll_log_queue)
         self.after(50, self.maximize_window)
-        self.after(100, self._update_close_button_state)
+        self.after(150, lambda: self._update_close_button_state(force=True))
         self.after(250, self._check_and_prompt_system_name)
         self._poll_quota_clock()
 
@@ -207,7 +207,7 @@ class YTBotApp(tk.Tk):
                     self.config_mgr.set_video_queue(raw)
                     def _update_ui():
                         self.on_queue_changed(self.queued_video_tasks)
-                        self.refresh_stats_views()
+                        self.refresh_watch_stats()
                     self.after(0, _update_ui)
             except Exception as err:
                 logging.getLogger("views_app").debug("Background enrichment failed: %s", err)
@@ -497,8 +497,11 @@ class YTBotApp(tk.Tk):
             if self.is_running:
                 status = "Watching" if getattr(self, "current_mode", "automation") == "watching" else "Running"
             dashboard = self.views["dashboard"]
+            acc_count = len(self.loaded_accounts)
+            if acc_count == 0 and hasattr(self, "config_mgr") and self.config_mgr.get_use_system_chrome_profile():
+                acc_count = 1
             dashboard.update_stats(
-                len(self.loaded_accounts),
+                acc_count,
                 self.get_runnable_video_count(),
                 status,
             )
@@ -511,6 +514,10 @@ class YTBotApp(tk.Tk):
             if hasattr(dashboard, "update_target_videos_watched"):
                 tv, ts = self.get_current_session_target_counts()
                 dashboard.update_target_videos_watched(tv, ts)
+
+    def refresh_stats_views(self) -> None:
+        """Alias for refresh_watch_stats for backward compatibility."""
+        self.refresh_watch_stats()
 
     def refresh_watch_stats(self) -> None:
         """Re-render everything that shows watch statistics (main thread only, without rebuilding hidden tabs)."""
@@ -545,10 +552,14 @@ class YTBotApp(tk.Tk):
             self.update_dashboard_stats()
         stats_view = self.views.get("stats")
         if stats_view and hasattr(stats_view, "refresh"):
-            try:
-                stats_view.refresh()
-            except Exception:
-                pass
+            if cur_view == "stats":
+                try:
+                    stats_view.refresh()
+                    self._stats_needs_refresh = False
+                except Exception:
+                    pass
+            else:
+                self._stats_needs_refresh = True
 
     def show_view(self, name: str):
         self.current_view_name = name
@@ -572,24 +583,36 @@ class YTBotApp(tk.Tk):
                 elif name == "channels" and getattr(self, "_channels_needs_refresh", False):
                     view_widget.refresh_list()
                     self._channels_needs_refresh = False
-                elif name == "accounts":
-                    if hasattr(view_widget, "refresh_auth_badges"):
-                        try:
-                            view_widget.refresh_auth_badges()
-                        except Exception:
-                            pass
                 elif name == "dashboard":
                     if hasattr(view_widget, "refresh_channel_stats"):
                         try:
                             view_widget.refresh_channel_stats()
                         except Exception:
                             pass
-                elif name == "stats":
-                    if hasattr(view_widget, "refresh"):
+                    if hasattr(view_widget, "_update_chrome_status_pill"):
                         try:
-                            view_widget.refresh()
+                            view_widget._update_chrome_status_pill()
                         except Exception:
                             pass
+                elif name == "accounts":
+                    if hasattr(view_widget, "refresh_auth_badges"):
+                        try:
+                            view_widget.refresh_auth_badges()
+                        except Exception:
+                            pass
+                    if hasattr(view_widget, "_update_chrome_status_pill"):
+                        try:
+                            view_widget._update_chrome_status_pill()
+                        except Exception:
+                            pass
+                elif name == "stats":
+                    if getattr(self, "_stats_needs_refresh", False) or not bool(getattr(view_widget, "content_frame", None) and view_widget.content_frame.winfo_children()):
+                        if hasattr(view_widget, "refresh"):
+                            try:
+                                view_widget.refresh()
+                                self._stats_needs_refresh = False
+                            except Exception:
+                                pass
             else:
                 if view_name in self.nav_buttons:
                     self.nav_buttons[view_name].configure(style="Nav.TButton")
@@ -732,14 +755,52 @@ class YTBotApp(tk.Tk):
                 return True
         return True
 
+    def _ensure_active_accounts_for_session(self) -> bool:
+        """Ensure active accounts are prepared for starting a session.
+
+        When using Personal Chrome Profile, automatically resolves the installed profile
+        so the user does not need to enter credentials manually, and checks if Chrome is open.
+        """
+        if hasattr(self, "config_mgr") and self.config_mgr.get_use_system_chrome_profile():
+            from ..automation.profile_manager import get_active_system_profile, is_system_chrome_running
+            if is_system_chrome_running():
+                msg = (
+                    "Google Chrome is currently open on your computer.\n\n"
+                    "Since you are using your Personal Chrome Profile, Chrome only allows one program "
+                    "to access your profile at a time.\n\n"
+                    "Please close Google Chrome completely and click 'Start Browsing' again."
+                )
+                emit(self.log_queue, f"[Chrome Open] {msg}", logging.ERROR)
+                messagebox.showwarning("Chrome Is Currently Open", msg, parent=self)
+                return False
+
+            if not self.loaded_accounts:
+                prof_info = get_active_system_profile(self.config_mgr.get_system_chrome_profile_name())
+                sys_account = Account(
+                    email=prof_info.get("email") or "Personal Chrome Profile",
+                    password="",
+                    status="Ready",
+                )
+                self.loaded_accounts = [sys_account]
+                self.update_dashboard_stats()
+            return True
+
+        if not self.loaded_accounts:
+            self.show_view("accounts")
+            emit(self.log_queue, "Please load at least one Google account before starting!")
+            return False
+
+        return True
+
     def start_automation(self):
         if self.is_running or self.__dict__.get("is_closing", False) or bool(self._get_owned_threads()):
             emit(self.log_queue, "Previous session is still cleaning up. Please wait.", logging.WARNING)
             return
 
-        if not self.loaded_accounts:
-            self.show_view("accounts")
-            emit(self.log_queue, "Please load at least one Google account before starting!")
+        if not self._ensure_active_accounts_for_session():
+            dashboard = getattr(self, "views", {}).get("dashboard")
+            if dashboard is not None and hasattr(dashboard, "set_running_state"):
+                dashboard.set_running_state(False)
             return
 
         if not self.queued_video_tasks:
@@ -790,6 +851,8 @@ class YTBotApp(tk.Tk):
         self._current_session_target_vids = 0
         self._current_session_target_shorts = 0
         self._update_close_button_state()
+        self.maximize_window()
+        self.after(50, self.maximize_window)
         self.log_file = start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
@@ -951,9 +1014,10 @@ class YTBotApp(tk.Tk):
             emit(self.log_queue, "Previous session is still cleaning up. Please wait.", logging.WARNING)
             return
 
-        if not self.loaded_accounts:
-            self.show_view("accounts")
-            emit(self.log_queue, "Please load at least one Google account before starting!")
+        if not self._ensure_active_accounts_for_session():
+            dashboard = getattr(self, "views", {}).get("dashboard")
+            if dashboard is not None and hasattr(dashboard, "set_running_state"):
+                dashboard.set_running_state(False)
             return
 
         stored_channel_dicts = self.config_mgr.get_channels()
@@ -1023,6 +1087,8 @@ class YTBotApp(tk.Tk):
         self._current_session_target_vids = 0
         self._current_session_target_shorts = 0
         self._update_close_button_state()
+        self.maximize_window()
+        self.after(50, self.maximize_window)
         self.log_file = start_session_logging()
         self._session_counter = self.__dict__.get("_session_counter", 0) + 1
         session_id = self._session_counter
@@ -1536,16 +1602,20 @@ class YTBotApp(tk.Tk):
             return True
         return False
 
-    def _update_close_button_state(self) -> None:
+    def _update_close_button_state(self, force: bool = False) -> None:
         """Dynamically enable or gray out the title bar close (X) button based on active task status."""
         is_busy = self.is_any_task_running()
         should_enable = not is_busy
-        if self.__dict__.get("_close_button_enabled", None) is not should_enable:
+        if force or self.__dict__.get("_close_button_enabled", None) is not should_enable:
             self._close_button_enabled = should_enable
             self._set_native_close_button_enabled(should_enable)
 
     def maximize_window(self) -> None:
         """Maximize the application window (like clicking the title bar maximize button)."""
+        try:
+            self.deiconify()
+        except Exception:
+            pass
         try:
             self.state("zoomed")
         except Exception:
@@ -1562,7 +1632,11 @@ class YTBotApp(tk.Tk):
             import ctypes
             user32 = ctypes.windll.user32
             # Retrieve the outer top-level window frame HWND containing the title bar
-            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            raw_id = self.winfo_id()
+            if not raw_id:
+                return
+            # GA_ROOT (2) finds root top-level window frame
+            hwnd = user32.GetAncestor(raw_id, 2) or user32.GetParent(raw_id) or raw_id
             if not hwnd:
                 return
 

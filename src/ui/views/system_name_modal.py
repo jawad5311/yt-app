@@ -53,6 +53,8 @@ class SystemNamePromptModal(Toplevel):
 
         self._build_ui(current_name)
         try:
+            self.lift()
+            self.focus_force()
             self.grab_set()
         except Exception:
             pass

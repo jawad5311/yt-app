@@ -14,11 +14,15 @@ from ...automation.account_auth import (
     has_existing_profile_data,
 )
 from ...automation.driver import close_driver
-from ...automation.profile_manager import resolve_profile_dir
+from ...automation.profile_manager import (
+    get_active_system_profile,
+    is_system_chrome_running,
+    resolve_profile_dir,
+)
 from ...automation.warmup_manager import WarmupManager
 from ...models.account import Account
 from ..background_jobs import BackgroundJobs
-from ..components import Button, Font, Frame, InputDialog, Label, ScrollableFrame
+from ..components import Button, Font, Frame, InputDialog, Label, ScrollableFrame, Switch
 from ..tooltip import add_tooltip, flash_button_feedback, with_button_feedback
 from ..warmup_dialog import WarmupDialog
 
@@ -37,7 +41,7 @@ class AccountsView(Frame):
         self._auth_badges: Dict[str, tk.Label] = {}
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
 
         # Header (macOS Large Title & Subtitle)
         header_frame = Frame(self, style="Transparent.TFrame")
@@ -60,9 +64,98 @@ class AccountsView(Frame):
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(2, 0))
 
-        # Action Buttons
+        # Profile Mode & Personal Chrome Card (Row 1)
+        mode_card = Frame(self, style="Card.TFrame")
+        mode_card.grid(row=1, column=0, padx=20, pady=(5, 10), sticky="ew")
+        mode_card.grid_columnconfigure(1, weight=1)
+
+        use_sys_initial = True
+        if hasattr(self.app_controller, "config_mgr") and hasattr(self.app_controller.config_mgr, "get_use_system_chrome_profile"):
+            val = self.app_controller.config_mgr.get_use_system_chrome_profile()
+            if isinstance(val, (bool, int, str)):
+                use_sys_initial = bool(val)
+        self.use_system_profile_var = tk.BooleanVar(value=use_sys_initial)
+
+        Label(
+            mode_card,
+            text="🌐",
+            font=Font(size=20),
+            style="Card.TLabel",
+        ).grid(row=0, column=0, rowspan=2, padx=(15, 10), pady=12, sticky="w")
+
+        info_box = Frame(mode_card, style="Transparent.TFrame")
+        info_box.grid(row=0, column=1, rowspan=2, pady=10, sticky="w")
+
+        self.profile_mode_title = Label(
+            info_box,
+            text="Use Personal Chrome Profile (Undetectable & Ready)",
+            font=Font(size=12, weight="bold"),
+            style="Card.TLabel",
+        )
+        self.profile_mode_title.pack(anchor="w")
+
+        self.profile_mode_desc = Label(
+            info_box,
+            text="Reuses your installed Google Chrome profile directly. No credentials needed.",
+            font=Font(size=9),
+            style="Muted.TLabel",
+        )
+        self.profile_mode_desc.pack(anchor="w", pady=(2, 0))
+
+        right_box = Frame(mode_card, style="Transparent.TFrame")
+        right_box.grid(row=0, column=2, rowspan=2, padx=15, pady=10, sticky="e")
+
+        self.chrome_status_pill = tk.Label(
+            right_box,
+            text="Detecting Chrome...",
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=4,
+            relief="flat",
+            bd=0,
+        )
+        self.chrome_status_pill.pack(side="left", padx=(0, 10))
+
+        self.personal_warmup_pill = tk.Label(
+            right_box,
+            text=" Warm-Up Off ",
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=2,
+            relief="flat",
+            bd=0,
+            bg="#4b5563",
+            fg="#ffffff",
+        )
+        self.personal_warmup_pill.pack(side="left", padx=(0, 8))
+
+        self.personal_warmup_btn = Button(
+            right_box,
+            text="🔥 Warm Up",
+            width=85,
+            style="Primary.TButton",
+            command=self.open_personal_warmup_dialog,
+        )
+        self.personal_warmup_btn.pack(side="left", padx=(0, 15))
+        add_tooltip(
+            self.personal_warmup_btn,
+            "Configure warm-up settings, daily limits, or disable warm-up for your Personal Chrome Profile.",
+        )
+
+        self.profile_switch = Switch(
+            right_box,
+            variable=self.use_system_profile_var,
+            command=self._on_profile_mode_toggled,
+        )
+        self.profile_switch.pack(side="right")
+        add_tooltip(
+            self.profile_switch,
+            "Enable to directly use your installed Google Chrome browser profile instead of creating isolated empty profiles.",
+        )
+
+        # Action Buttons (Row 2)
         btn_frame = Frame(self, style="Transparent.TFrame")
-        btn_frame.grid(row=1, column=0, padx=20, pady=5, sticky="ew")
+        btn_frame.grid(row=2, column=0, padx=20, pady=5, sticky="ew")
 
         add_acc_btn = Button(
             btn_frame,
@@ -106,12 +199,171 @@ class AccountsView(Frame):
             "Remove all accounts from the system.",
         )
 
-        # Accounts List Scrollable Frame
+        # Accounts List Scrollable Frame (Row 3)
         self.scroll_frame = ScrollableFrame(self, label_text="Loaded Accounts")
-        self.scroll_frame.grid(row=2, column=0, padx=20, pady=(10, 20), sticky="nsew")
+        self.scroll_frame.grid(row=3, column=0, padx=20, pady=(10, 20), sticky="nsew")
         self.scroll_frame.grid_columnconfigure(0, weight=1)
 
+        self._chrome_poll_job = None
+        self._update_chrome_status_pill()
+        self._poll_chrome_status()
+
         self.load_saved_accounts()
+
+    def _update_chrome_status_pill(self):
+        """Update the Chrome running status badge and detected account display."""
+        if not hasattr(self, "chrome_status_pill") or not self.chrome_status_pill.winfo_exists():
+            return
+        is_running = is_system_chrome_running()
+        prof_name = "Default"
+        if hasattr(self.app_controller, "config_mgr") and hasattr(self.app_controller.config_mgr, "get_system_chrome_profile_name"):
+            val = self.app_controller.config_mgr.get_system_chrome_profile_name()
+            if isinstance(val, str):
+                prof_name = val
+        prof_info = get_active_system_profile(prof_name)
+        email = prof_info.get("email", "")
+        prof_folder = prof_info.get("folder", "Default")
+
+        if not self.use_system_profile_var.get():
+            self.chrome_status_pill.configure(
+                text="Dedicated App Profiles Active",
+                bg="#334155",
+                fg="#94a3b8",
+            )
+            self.profile_mode_desc.configure(
+                text="Using dedicated sandbox profiles under runtime/chrome_profiles/."
+            )
+            if hasattr(self, "personal_warmup_pill") and self.personal_warmup_pill.winfo_ismapped():
+                self.personal_warmup_pill.pack_forget()
+            if hasattr(self, "personal_warmup_btn") and self.personal_warmup_btn.winfo_ismapped():
+                self.personal_warmup_btn.pack_forget()
+            return
+
+        if hasattr(self, "personal_warmup_pill") and not self.personal_warmup_pill.winfo_ismapped():
+            self.personal_warmup_pill.pack(side="left", padx=(0, 8), before=self.profile_switch)
+        if hasattr(self, "personal_warmup_btn") and not self.personal_warmup_btn.winfo_ismapped():
+            self.personal_warmup_btn.pack(side="left", padx=(0, 15), before=self.profile_switch)
+
+        warmup_mgr = WarmupManager(self.app_controller.config_mgr) if hasattr(self.app_controller, "config_mgr") else None
+        if warmup_mgr and email and hasattr(self, "personal_warmup_pill") and self.personal_warmup_pill.winfo_exists():
+            w_cfg = warmup_mgr.get_account_config(email)
+            w_info = w_cfg.get_status_info()
+            if not w_cfg.enabled:
+                w_badge_text = "Warm-Up Off"
+                w_badge_col = "#4b5563"
+                w_badge_fg = "#ffffff"
+            elif w_cfg.is_warmed_up:
+                w_badge_text = "✅ Warmed Up"
+                w_badge_col = w_info["color"]
+                w_badge_fg = w_info["text_fg"]
+            else:
+                w_badge_text = f"🔥 {w_info['stage_label']}"
+                w_badge_col = w_info["color"]
+                w_badge_fg = w_info["text_fg"]
+
+            self.personal_warmup_pill.configure(
+                text=f" {w_badge_text} ",
+                bg=w_badge_col,
+                fg=w_badge_fg,
+            )
+
+        is_bot_running = getattr(self.app_controller, "is_running", False)
+        if is_bot_running:
+            self.chrome_status_pill.configure(
+                text="🟢 Chrome In Use (Automation Active)",
+                bg="#064e3b",
+                fg="#6ee7b7",
+            )
+        elif is_running:
+            self.chrome_status_pill.configure(
+                text="⚠️ Chrome is Open (Close to Browse)",
+                bg="#7f1d1d",
+                fg="#fca5a5",
+            )
+        else:
+            self.chrome_status_pill.configure(
+                text="🟢 Chrome Closed (Ready to Browse)",
+                bg="#064e3b",
+                fg="#6ee7b7",
+            )
+
+        account_info = f"Profile: {prof_folder}" + (f" ({email})" if email else "")
+        self.profile_mode_desc.configure(
+            text=f"Using live personal Chrome: {account_info}. No login required."
+        )
+
+    def open_personal_warmup_dialog(self) -> None:
+        """Open the Warm Up Settings dialog for the active personal Chrome profile."""
+        prof_name = "Default"
+        if hasattr(self.app_controller, "config_mgr") and hasattr(self.app_controller.config_mgr, "get_system_chrome_profile_name"):
+            val = self.app_controller.config_mgr.get_system_chrome_profile_name()
+            if isinstance(val, str):
+                prof_name = val
+        prof_info = get_active_system_profile(prof_name)
+        email = prof_info.get("email") or "Personal Chrome Profile"
+        sys_account = Account(email=email, password="", status="Ready")
+
+        cfg_mgr = getattr(self.app_controller, "config_mgr", None)
+        mode = getattr(self.app_controller, "appearance_mode", "Dark")
+        WarmupDialog(
+            self,
+            account=sys_account,
+            config_mgr=cfg_mgr,
+            on_save_callback=self._update_chrome_status_pill,
+            mode=mode,
+        )
+
+    def _on_profile_mode_toggled(self):
+        """Handle user toggling the Personal Chrome Profile switch."""
+        enabled = bool(self.use_system_profile_var.get())
+        if hasattr(self.app_controller, "config_mgr"):
+            self.app_controller.config_mgr.set_use_system_chrome_profile(enabled)
+        self._update_chrome_status_pill()
+        if enabled:
+            prof_info = get_active_system_profile(
+                self.app_controller.config_mgr.get_system_chrome_profile_name()
+                if hasattr(self.app_controller, "config_mgr") else "Default"
+            )
+            sys_account = Account(
+                email=prof_info.get("email") or "Personal Chrome Profile",
+                password="",
+                status="Ready",
+            )
+            if hasattr(self.app_controller, "loaded_accounts"):
+                self.app_controller.loaded_accounts = [sys_account]
+        else:
+            self.load_saved_accounts()
+        if hasattr(self.app_controller, "update_dashboard_stats"):
+            self.app_controller.update_dashboard_stats()
+        if hasattr(self.app_controller, "views") and isinstance(self.app_controller.views, dict):
+            dashboard = self.app_controller.views.get("dashboard")
+            if dashboard and hasattr(dashboard, "_update_chrome_status_pill"):
+                try:
+                    dashboard._update_chrome_status_pill()
+                except Exception:
+                    pass
+
+    def _poll_chrome_status(self):
+        """Periodically refresh Chrome running status indicator when visible."""
+        try:
+            if not self.winfo_exists():
+                return
+            if self.winfo_viewable():
+                self._update_chrome_status_pill()
+        except Exception:
+            pass
+        finally:
+            if hasattr(self, "winfo_exists") and self.winfo_exists():
+                self._chrome_poll_job = self.after(3000, self._poll_chrome_status)
+
+    def destroy(self):
+        if hasattr(self, "_chrome_poll_job") and self._chrome_poll_job:
+            try:
+                self.after_cancel(self._chrome_poll_job)
+            except Exception:
+                pass
+            self._chrome_poll_job = None
+        super().destroy()
 
     def load_saved_accounts(self):
         try:

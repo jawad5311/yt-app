@@ -670,6 +670,9 @@ def _perform_automated_login_steps(
     stop_event: Optional[threading.Event] = None,
 ) -> bool:
     """Execute sequential automated sign-in steps (Account Chooser -> Confirm Identifier -> Email -> Password -> Prompts)."""
+    if not getattr(account, "password", ""):
+        return False
+
     max_steps = 6
     password_entered = False
     account_chooser_attempts = 0

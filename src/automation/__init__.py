@@ -1,6 +1,6 @@
 from .browsing_worker import BrowsingWorker
 from .dispatcher import TaskDispatcher
-from .driver import close_driver, setup_driver
+from .driver import close_driver, maximize_browser_window, setup_driver
 from .interactivity import (
     HumanInteractivitySimulator,
     enter_fullscreen_mode,
@@ -31,6 +31,7 @@ from .youtube_actions import ensure_video_at_start, ensure_video_playing, watch_
 
 __all__ = [
     "setup_driver",
+    "maximize_browser_window",
     "close_driver",
     "perform_google_login",
     "check_account_logged_in",

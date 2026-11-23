@@ -176,6 +176,8 @@ class ConfigManager:
             "NightSleepWindowHours": "12 Hours",
             "NightSleepDurationHours": "8 Hours",
             "AccountsFile": "accounts.txt",
+            "UseSystemChromeProfile": True,
+            "SystemChromeProfileName": "Default",
             "DirectLinkFallback": False,
             "WatchtimeDuration": DEFAULT_WATCHTIME_DURATION,
             "ParallelBrowsers": 1,
@@ -418,6 +420,22 @@ class ConfigManager:
                 if res < 0.0:
                     return default
             return res
+
+    def get_use_system_chrome_profile(self, default: bool = True) -> bool:
+        """Return True if the user elected to use their personal installed Chrome profile directly."""
+        return self.get_bool("UseSystemChromeProfile", default)
+
+    def set_use_system_chrome_profile(self, enabled: bool) -> None:
+        """Set whether to use the user's personal installed Chrome profile."""
+        self.set_setting("UseSystemChromeProfile", bool(enabled))
+
+    def get_system_chrome_profile_name(self, default: str = "Default") -> str:
+        """Return the active personal Chrome profile folder name (e.g. 'Default')."""
+        return str(self.get_setting("SystemChromeProfileName", default) or default)
+
+    def set_system_chrome_profile_name(self, name: str) -> None:
+        """Set the active personal Chrome profile folder name."""
+        self.set_setting("SystemChromeProfileName", str(name or "Default"))
 
     def get_sleep_nap_enabled(self, default: bool = True) -> bool:
         """Return True if Sleep & Nap mode toggle is enabled."""
