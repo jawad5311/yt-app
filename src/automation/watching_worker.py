@@ -6967,6 +6967,24 @@ class WatchingWorker:
         if self.stop_event.is_set():
             return False
 
+        is_personal_profile = (getattr(self.driver, "_is_system_profile", False) is True) or (
+            self.config_mgr
+            and hasattr(self.config_mgr, "get_use_system_chrome_profile")
+            and self.config_mgr.get_use_system_chrome_profile()
+            and not getattr(self.account, "password", "").strip()
+        )
+        if is_personal_profile:
+            emit(self.log_queue, f"Using existing Personal Chrome Profile session for {self.account.email} (already signed in).", logging.INFO)
+            self._report_status(f"Personal profile active — verified for {self.account.email}", "info")
+            try:
+                curr = (getattr(self.driver, "current_url", "") or "").lower()
+                if "youtube.com" not in curr:
+                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
+                    human_like_delay(1.5, 2.5)
+            except Exception:
+                pass
+            return True
+
         if self.config_mgr:
             try:
                 wait_seconds = float(self.config_mgr.get_setting("SignInWaitSeconds", wait_seconds))

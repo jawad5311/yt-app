@@ -25,7 +25,6 @@ from .profile_manager import (
     get_runtime_profiles_dir,
     get_system_chrome_user_data_dir,
     is_chrome_lock_active,
-    is_default_chrome_user_data_dir,
     is_system_chrome_running,
     resolve_profile_dir,
 )
@@ -344,6 +343,7 @@ def setup_driver(
 
         profile_lock = ProfileLock(sys_user_data_dir)
         profile_lock.acquire(timeout=2.0)
+        cleanup_profile_locks(sys_user_data_dir)
         launch_system_profile = True
     else:
         if account is None:
@@ -376,25 +376,6 @@ def setup_driver(
                 chrome_major = None
             emit(log_queue, f"Detected system Chrome version: {chrome_version}")
 
-        # Modern Chrome (136+) enforces strict security that ignores --remote-debugging-port
-        # when pointed directly at the operating system's default user data directory.
-        # Proactively prepare an isolated copy to preserve login state and prevent 60-second timeouts.
-        if launch_system_profile and is_default_chrome_user_data_dir(sys_user_data_dir) and (chrome_major is None or chrome_major >= 136):
-            safe_name = "".join(ch if ch.isalnum() else "_" for ch in prof_folder).strip("_") or "Default"
-            fallback_root = get_runtime_profiles_dir() / f"system_profile_{safe_name}"
-            emit(
-                log_queue,
-                f"Chrome {chrome_version or ''} restricts direct remote debugging on default User Data; preparing isolated personal profile session copy at {fallback_root.name}.",
-                logging.INFO,
-            )
-            profile_lock.release()
-            sync_reporting_profile(sys_user_data_dir, fallback_root, profile_folder=prof_folder)
-            profile_dir = fallback_root
-            profile_lock = ProfileLock(profile_dir)
-            profile_lock.acquire(timeout=2.0)
-            launch_system_profile = False
-            launch_profile_directory = prof_folder
-
         def _build_options() -> uc.ChromeOptions:
             opts = uc.ChromeOptions()
             opts.page_load_strategy = "eager"
@@ -408,7 +389,8 @@ def setup_driver(
 
             opts.add_argument("--no-first-run")
             opts.add_argument("--no-service-autorun")
-            opts.add_argument("--password-store=basic")
+            if not launch_system_profile:
+                opts.add_argument("--password-store=basic")
             # GPU acceleration is enabled for maximum authenticity (disable-gpu removed)
             opts.add_argument("--disable-dev-shm-usage")
             opts.add_argument("--start-maximized")
@@ -425,7 +407,10 @@ def setup_driver(
                 driver_working_dir = (get_runtime_profiles_dir() / "system_driver_bin") if launch_system_profile else profile_dir
                 driver_path = create_session_driver_copy(cached_path, driver_working_dir)
 
-        launch_kwargs: Dict[str, Any] = {"use_subprocess": True, "headless": False}
+        launch_kwargs: Dict[str, Any] = {
+            "use_subprocess": False if (launch_system_profile and os.name == "nt") else True,
+            "headless": False,
+        }
         if chrome_major:
             launch_kwargs["version_main"] = chrome_major
         if driver_path is not None:
@@ -436,53 +421,16 @@ def setup_driver(
             try:
                 driver = uc.Chrome(options=options, **launch_kwargs)
             except Exception as first_exc:
-                if launch_system_profile:
-                    # The real Chrome profile rejected direct automation (remote debugging lockout on default profile, lock conflict, etc.).
-                    # Use an isolated copy so the saved Google session is preserved without sharing Chrome's live profile lock.
-                    safe_name = "".join(ch if ch.isalnum() else "_" for ch in prof_folder).strip("_") or "Default"
-                    fallback_root = get_runtime_profiles_dir() / f"system_profile_{safe_name}"
+                if driver_path is not None:
                     emit(
                         log_queue,
-                        f"Personal profile direct connection failed ({first_exc}); using isolated session copy at {fallback_root.name}.",
+                        f"Initial launch failed with provisioned driver ({first_exc}); retrying automatic launch...",
                         logging.WARNING,
                     )
-                    profile_lock.release()
-                    sync_reporting_profile(sys_user_data_dir, fallback_root, profile_folder=prof_folder)
-                    profile_dir = fallback_root
-                    profile_lock = ProfileLock(profile_dir)
-                    profile_lock.acquire(timeout=2.0)
-                    launch_system_profile = False
-                    launch_profile_directory = prof_folder
-
-                    if cached_path is not None:
-                        driver_path = create_session_driver_copy(cached_path, profile_dir)
-                        launch_kwargs["driver_executable_path"] = str(driver_path)
-
-                    try:
-                        driver = uc.Chrome(options=_build_options(), **launch_kwargs)
-                    except Exception as fallback_exc:
-                        if driver_path is not None:
-                            emit(
-                                log_queue,
-                                f"Cached chromedriver rejected ({fallback_exc}); retrying automatic download.",
-                                logging.WARNING,
-                            )
-                            launch_kwargs.pop("driver_executable_path", None)
-                            driver = uc.Chrome(options=_build_options(), **launch_kwargs)
-                        else:
-                            raise
+                    launch_kwargs.pop("driver_executable_path", None)
+                    driver = uc.Chrome(options=_build_options(), **launch_kwargs)
                 else:
-                    if driver_path is not None:
-                        # Cached copy rejected (e.g. patched badly) -> uc's own flow with fresh ChromeOptions.
-                        emit(
-                            log_queue,
-                            f"Cached chromedriver rejected ({first_exc}); retrying automatic download.",
-                            logging.WARNING,
-                        )
-                        launch_kwargs.pop("driver_executable_path", None)
-                        driver = uc.Chrome(options=_build_options(), **launch_kwargs)
-                    else:
-                        raise
+                    raise
 
         driver.keep_user_data_dir = True
         driver.set_page_load_timeout(45)

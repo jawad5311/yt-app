@@ -959,6 +959,23 @@ def perform_google_login(
     wait_for_challenge_resolution: bool = True,
 ) -> bool:
     """Perform Google sign-in or verify existing active session matching the requested account."""
+    is_system_profile = (getattr(driver, "_is_system_profile", False) is True) or (
+        config_mgr
+        and hasattr(config_mgr, "get_use_system_chrome_profile")
+        and config_mgr.get_use_system_chrome_profile()
+        and not getattr(account, "password", "").strip()
+    )
+    if is_system_profile:
+        emit(log_queue, f"Using existing Personal Chrome Profile session for {account.email} (already signed in).")
+        current_url = (getattr(driver, "current_url", "") or "").lower()
+        if "youtube.com" not in current_url:
+            try:
+                safe_get(driver, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
+                human_like_delay(1.5, 2.5)
+            except Exception:
+                pass
+        return True
+
     emit(log_queue, f"Checking Google sign-in status for {account.email}...")
 
     current_url = (getattr(driver, "current_url", "") or "").lower()
