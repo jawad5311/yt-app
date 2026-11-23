@@ -5,7 +5,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from ..models.account import Account
 from ..utils.helpers import get_project_root
@@ -39,6 +39,28 @@ def get_system_chrome_user_data_dir() -> Path:
         return (Path.home() / "Library" / "Application Support" / "Google" / "Chrome").resolve()
     else:
         return (Path.home() / ".config" / "google-chrome").resolve()
+
+
+def is_default_chrome_user_data_dir(path: Union[str, Path]) -> bool:
+    """Return True if path matches the operating system's standard Google Chrome User Data directory."""
+    try:
+        norm_target = os.path.normcase(os.path.normpath(str(Path(path).resolve())))
+        default_dir = os.path.normcase(os.path.normpath(str(get_system_chrome_user_data_dir().resolve())))
+        if norm_target == default_dir:
+            return True
+
+        if os.name == "nt":
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            candidates = []
+            if local_app_data:
+                candidates.append(Path(local_app_data) / "Google" / "Chrome" / "User Data")
+            candidates.append(Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data")
+            for cand in candidates:
+                if norm_target == os.path.normcase(os.path.normpath(str(cand.resolve()))):
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 def get_system_chrome_profiles() -> List[Dict[str, Any]]:

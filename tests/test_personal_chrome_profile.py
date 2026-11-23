@@ -10,6 +10,7 @@ from src.automation.profile_manager import (
     get_active_system_profile,
     get_system_chrome_profiles,
     get_system_chrome_user_data_dir,
+    is_default_chrome_user_data_dir,
     is_system_chrome_running,
 )
 from src.config.manager import ConfigManager
@@ -292,6 +293,106 @@ def test_app_show_view_refreshes_dashboard_chrome_status_pill():
     mock_dashboard.tkraise.assert_called_once()
     mock_dashboard.refresh_channel_stats.assert_called_once()
     mock_dashboard._update_chrome_status_pill.assert_called_once()
+
+
+def test_is_default_chrome_user_data_dir(tmp_path):
+    default_dir = get_system_chrome_user_data_dir()
+    assert is_default_chrome_user_data_dir(default_dir) is True
+    assert is_default_chrome_user_data_dir(tmp_path / "custom_chrome_data") is False
+
+
+def test_setup_driver_proactively_syncs_for_default_dir_on_chrome_136_plus(tmp_path):
+    """Chrome 136+ security blocks --remote-debugging-port on default User Data.
+
+    setup_driver should proactively sync to an isolated copy and launch with the cached driver.
+    """
+    default_dir = get_system_chrome_user_data_dir()
+    runtime_dir = tmp_path / "runtime"
+    cached_driver = tmp_path / "tools" / "chromedriver-157.exe"
+    cached_driver.parent.mkdir(parents=True)
+    cached_driver.write_text("dummy driver", encoding="utf-8")
+
+    captured_options = []
+    captured_kwargs = []
+    driver_mock = MagicMock()
+
+    def mock_uc_chrome(options=None, **kwargs):
+        captured_options.append(options)
+        captured_kwargs.append(kwargs)
+        return driver_mock
+
+    with patch("src.automation.driver.is_system_chrome_running", return_value=False), \
+         patch("src.automation.driver.get_system_chrome_user_data_dir", return_value=default_dir), \
+         patch("src.automation.driver.get_runtime_profiles_dir", return_value=runtime_dir), \
+         patch("src.automation.driver.get_chrome_version", return_value="157.0.8103.79"), \
+         patch("src.automation.driver.ensure_chromedriver", return_value=cached_driver), \
+         patch("src.automation.driver.sync_reporting_profile") as sync_profile, \
+         patch("undetected_chromedriver.Chrome", side_effect=mock_uc_chrome):
+        driver = setup_driver(use_system_profile=True, system_profile_name="Default")
+
+    assert driver is driver_mock
+    # Exactly 1 launch attempt (no 60s timeout loop)
+    assert len(captured_options) == 1
+    sync_profile.assert_called_once_with(default_dir, runtime_dir / "system_profile_Default", profile_folder="Default")
+
+    args = captured_options[0].arguments
+    assert f"--user-data-dir={runtime_dir / 'system_profile_Default'}" in args
+    assert "--profile-directory=Default" in args
+
+    # Cached driver was used directly
+    assert "driver_executable_path" in captured_kwargs[0]
+    assert driver._is_system_profile is True
+    driver._profile_lock.release()
+
+
+def test_setup_driver_fallback_retains_cached_driver_on_direct_launch_failure(tmp_path):
+    """When direct launch fails (e.g. non-default dir), fallback retains the cached driver."""
+    system_dir = tmp_path / "User Data"
+    system_dir.mkdir(parents=True)
+    runtime_dir = tmp_path / "runtime"
+    cached_driver = tmp_path / "tools" / "chromedriver-157.exe"
+    cached_driver.parent.mkdir(parents=True)
+    cached_driver.write_text("dummy driver", encoding="utf-8")
+
+    captured_options = []
+    captured_kwargs = []
+    driver_mock = MagicMock()
+
+    def mock_uc_chrome(options=None, **kwargs):
+        captured_options.append(options)
+        captured_kwargs.append(kwargs)
+        if len(captured_options) == 1:
+            raise RuntimeError("cannot connect to chrome from chrome not reachable")
+        return driver_mock
+
+    log_queue = MagicMock()
+
+    with patch("src.automation.driver.is_system_chrome_running", return_value=False), \
+         patch("src.automation.driver.get_system_chrome_user_data_dir", return_value=system_dir), \
+         patch("src.automation.driver.get_runtime_profiles_dir", return_value=runtime_dir), \
+         patch("src.automation.driver.get_chrome_version", return_value="157.0.8103.79"), \
+         patch("src.automation.driver.ensure_chromedriver", return_value=cached_driver), \
+         patch("src.automation.driver.sync_reporting_profile") as sync_profile, \
+         patch("undetected_chromedriver.Chrome", side_effect=mock_uc_chrome):
+        driver = setup_driver(use_system_profile=True, system_profile_name="Default", log_queue=log_queue)
+
+    assert driver is driver_mock
+    assert len(captured_options) == 2
+    sync_profile.assert_called_once_with(system_dir, runtime_dir / "system_profile_Default", profile_folder="Default")
+
+    # The fallback launch must still have driver_executable_path pointing to session driver
+    assert "driver_executable_path" in captured_kwargs[1]
+    fallback_driver_path = captured_kwargs[1]["driver_executable_path"]
+    assert "system_profile_Default" in fallback_driver_path
+
+    # Verify no false "Cached chromedriver rejected" was logged
+    logged_messages = [call.args[0] if call.args else "" for call in log_queue.put.call_args_list]
+    for msg in logged_messages:
+        assert "Cached chromedriver rejected" not in str(msg)
+
+    assert driver._is_system_profile is True
+    driver._profile_lock.release()
+
 
 
 
