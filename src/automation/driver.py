@@ -23,7 +23,6 @@ from .profile_manager import (
     ProfileLock,
     get_active_system_profile,
     get_runtime_profiles_dir,
-    get_system_chrome_profiles,
     get_system_chrome_user_data_dir,
     is_chrome_lock_active,
     is_system_chrome_running,
@@ -202,36 +201,24 @@ def sync_cookies_between_drivers(src_driver: Any, dst_driver: Any) -> bool:
     return False
 
 
-def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
-    """Sync authentication and session state files from main profile to isolated reporting profile."""
+def sync_reporting_profile(src_dir: Path, dst_dir: Path, profile_folder: str = "Default") -> None:
+    """Sync authentication/session state into an isolated Chrome user-data directory."""
     if not src_dir.exists():
         return
     dst_dir.mkdir(parents=True, exist_ok=True)
-    files_to_sync = [
-        "Local State",
-        "Default/Preferences",
-        "Default/Secure Preferences",
-        "Default/Account Web Data",
-        "Default/Account Web Data-journal",
-        "Default/Account Web Data-wal",
-        "Default/Network/Cookies",
-        "Default/Network/Cookies-journal",
-        "Default/Network/Cookies-wal",
-        "Default/Network/Cookies-shm",
-        "Default/Network/Network Persistent State",
-        "Default/Network/Device Bound Sessions",
-        "Default/Network/Device Bound Sessions-journal",
-        "Default/Network/Trust Tokens",
-        "Default/Network/Trust Tokens-journal",
-        "Default/Cookies",
-        "Default/Cookies-journal",
-        "Default/Cookies-wal",
-        "Default/Login Data",
-        "Default/Login Data-journal",
-        "Default/Login Data For Account",
-        "Default/Login Data For Account-journal",
-        "Default/Web Data",
-        "Default/Web Data-journal",
+    profile_prefix = str(profile_folder or "Default").strip("/\\") or "Default"
+    files_to_sync = ["Local State"] + [
+        f"{profile_prefix}/{name}" for name in (
+            "Preferences", "Secure Preferences", "Account Web Data",
+            "Account Web Data-journal", "Account Web Data-wal",
+            "Network/Cookies", "Network/Cookies-journal", "Network/Cookies-wal",
+            "Network/Cookies-shm", "Network/Network Persistent State",
+            "Network/Device Bound Sessions", "Network/Device Bound Sessions-journal",
+            "Network/Trust Tokens", "Network/Trust Tokens-journal",
+            "Cookies", "Cookies-journal", "Cookies-wal", "Login Data",
+            "Login Data-journal", "Login Data For Account",
+            "Login Data For Account-journal", "Web Data", "Web Data-journal",
+        )
     ]
     for rel_path in files_to_sync:
         s = src_dir / rel_path
@@ -239,10 +226,7 @@ def sync_reporting_profile(src_dir: Path, dst_dir: Path) -> None:
         if s.exists():
             copy_shared_file(s, d)
 
-    dirs_to_sync = [
-        "Default/Session Storage",
-        "Default/Sessions",
-    ]
+    dirs_to_sync = [f"{profile_prefix}/Session Storage", f"{profile_prefix}/Sessions"]
     for rel_dir in dirs_to_sync:
         s_dir = src_dir / rel_dir
         if s_dir.is_dir():
@@ -359,6 +343,7 @@ def setup_driver(
 
         profile_lock = ProfileLock(sys_user_data_dir)
         profile_lock.acquire(timeout=2.0)
+        launch_system_profile = True
     else:
         if account is None:
             account = Account(email="default_user@gmail.com", password="")
@@ -376,16 +361,21 @@ def setup_driver(
 
         emit(log_queue, f"Initializing Chrome driver for account: {account.email}")
         emit(log_queue, f"Using persistent Chrome profile: {profile_dir}")
+        launch_system_profile = False
 
     try:
+        launch_profile_directory: Optional[str] = None
+
         def _build_options() -> uc.ChromeOptions:
             opts = uc.ChromeOptions()
             opts.page_load_strategy = "eager"
-            if use_system_profile and not is_reporting:
+            if launch_system_profile:
                 opts.add_argument(f"--user-data-dir={sys_user_data_dir}")
                 opts.add_argument(f"--profile-directory={prof_folder}")
             else:
                 opts.add_argument(f"--user-data-dir={profile_dir}")
+                if launch_profile_directory:
+                    opts.add_argument(f"--profile-directory={launch_profile_directory}")
 
             opts.add_argument("--no-first-run")
             opts.add_argument("--no-service-autorun")
@@ -411,7 +401,7 @@ def setup_driver(
         if chrome_version:
             cached_path = ensure_chromedriver(chrome_version, log_queue)
             if cached_path is not None:
-                driver_working_dir = (get_runtime_profiles_dir() / "system_driver_bin") if (use_system_profile and not is_reporting) else profile_dir
+                driver_working_dir = (get_runtime_profiles_dir() / "system_driver_bin") if launch_system_profile else profile_dir
                 driver_path = create_session_driver_copy(cached_path, driver_working_dir)
 
         launch_kwargs: Dict[str, Any] = {"use_subprocess": True, "headless": False}
@@ -425,16 +415,39 @@ def setup_driver(
             try:
                 driver = uc.Chrome(options=options, **launch_kwargs)
             except Exception as first_exc:
-                if driver_path is None:
-                    raise
-                # Cached copy rejected (e.g. patched badly) -> uc's own flow with fresh ChromeOptions.
-                emit(
-                    log_queue,
-                    f"Cached chromedriver rejected ({first_exc}); retrying automatic download.",
-                    logging.WARNING,
-                )
-                launch_kwargs.pop("driver_executable_path", None)
-                driver = uc.Chrome(options=_build_options(), **launch_kwargs)
+                if driver_path is not None:
+                    # Cached copy rejected (e.g. patched badly) -> uc's own flow with fresh ChromeOptions.
+                    emit(log_queue, f"Cached chromedriver rejected ({first_exc}); retrying automatic download.", logging.WARNING)
+                    launch_kwargs.pop("driver_executable_path", None)
+                    try:
+                        driver = uc.Chrome(options=_build_options(), **launch_kwargs)
+                    except Exception as retry_exc:
+                        if not launch_system_profile:
+                            raise retry_exc
+                        first_exc = retry_exc
+                    else:
+                        first_exc = None
+                if launch_system_profile and first_exc is not None:
+                    # The real Chrome profile may reject automation even when Chrome
+                    # appears closed (stale locks, profile corruption, or a Chrome
+                    # update). Use an isolated copy so the saved Google session is
+                    # preserved without sharing Chrome's live profile lock.
+                    safe_name = "".join(ch if ch.isalnum() else "_" for ch in prof_folder).strip("_") or "Default"
+                    fallback_root = get_runtime_profiles_dir() / f"system_profile_{safe_name}"
+                    emit(
+                        log_queue,
+                        f"Personal profile launch failed ({first_exc}); retrying with an isolated copy at {fallback_root}.",
+                        logging.WARNING,
+                    )
+                    profile_lock.release()
+                    sync_reporting_profile(sys_user_data_dir, fallback_root, profile_folder=prof_folder)
+                    profile_dir = fallback_root
+                    profile_lock = ProfileLock(profile_dir)
+                    profile_lock.acquire(timeout=2.0)
+                    launch_system_profile = False
+                    launch_profile_directory = prof_folder
+                    launch_kwargs.pop("driver_executable_path", None)
+                    driver = uc.Chrome(options=_build_options(), **launch_kwargs)
 
         driver.keep_user_data_dir = True
         driver.set_page_load_timeout(45)
@@ -455,7 +468,7 @@ def setup_driver(
         driver._profile_lock = profile_lock
         driver._is_headless = False
         driver._is_reporting = bool(is_reporting)
-        driver._is_system_profile = bool(use_system_profile and not is_reporting)
+        driver._is_system_profile = bool(launch_system_profile)
 
         # Ensure calling driver.quit() directly also safely releases the profile lock
         orig_quit = getattr(driver, "quit", None)

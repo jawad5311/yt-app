@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +13,6 @@ from src.automation.profile_manager import (
     is_system_chrome_running,
 )
 from src.config.manager import ConfigManager
-from src.models.account import Account
 
 
 def test_get_system_chrome_user_data_dir():
@@ -137,6 +135,37 @@ def test_setup_driver_options_system_profile_flags(tmp_path):
     assert "--headless=new" not in args
     assert "--headless" not in args
     assert "--start-maximized" in args
+
+
+def test_setup_driver_personal_profile_falls_back_to_isolated_copy(tmp_path):
+    """A personal-profile launch failure should preserve login state via an isolated copy."""
+    system_dir = tmp_path / "User Data"
+    system_dir.mkdir(parents=True)
+    runtime_dir = tmp_path / "runtime"
+    captured_options = []
+    driver_mock = MagicMock()
+    driver_mock.patcher.executable_path = str(tmp_path / "chromedriver.exe")
+
+    def mock_uc_chrome(options=None, **kwargs):
+        captured_options.append(options)
+        if len(captured_options) == 1:
+            raise RuntimeError("Chrome not reachable")
+        return driver_mock
+
+    with patch("src.automation.driver.is_system_chrome_running", return_value=False), \
+         patch("src.automation.driver.get_system_chrome_user_data_dir", return_value=system_dir), \
+         patch("src.automation.driver.get_runtime_profiles_dir", return_value=runtime_dir), \
+         patch("src.automation.driver.ensure_chromedriver", return_value=None), \
+         patch("src.automation.driver.sync_reporting_profile") as sync_profile, \
+         patch("undetected_chromedriver.Chrome", side_effect=mock_uc_chrome):
+        driver = setup_driver(use_system_profile=True, system_profile_name="Default")
+
+    assert driver is driver_mock
+    sync_profile.assert_called_once_with(system_dir, runtime_dir / "system_profile_Default", profile_folder="Default")
+    fallback_args = captured_options[1].arguments
+    assert f"--user-data-dir={runtime_dir / 'system_profile_Default'}" in fallback_args
+    assert "--profile-directory=Default" in fallback_args
+    driver._profile_lock.release()
 
 
 def test_app_ensure_active_accounts_populates_when_chrome_closed(tmp_path):
