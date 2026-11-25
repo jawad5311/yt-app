@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -152,6 +153,7 @@ def test_setup_driver_personal_profile_always_uses_existing_profile_directly(tmp
 
     with patch("src.automation.driver.is_system_chrome_running", return_value=False), \
          patch("src.automation.driver.get_system_chrome_user_data_dir", return_value=system_dir), \
+         patch("src.automation.driver.get_chrome_version", return_value="158.0.8127.88"), \
          patch("src.automation.driver.cleanup_profile_locks") as cleanup_locks, \
          patch("src.automation.driver.ensure_chromedriver", return_value=None), \
          patch("src.automation.driver.sync_reporting_profile") as sync_profile, \
@@ -169,6 +171,63 @@ def test_setup_driver_personal_profile_always_uses_existing_profile_directly(tmp
     assert "--password-store=basic" not in args
     assert driver._is_system_profile is True
     driver._profile_lock.release()
+
+
+def test_setup_driver_default_dir_chrome_158_initializes_persistent_copy_once(tmp_path):
+    """Chrome 136+ blocks remote debugging on the default User Data dir; use persistent copy seeded once."""
+    default_dir = tmp_path / "Google" / "Chrome" / "User Data"
+    (default_dir / "Default" / "Network").mkdir(parents=True)
+    (default_dir / "Local State").write_text("{}", encoding="utf-8")
+    (default_dir / "Default" / "Network" / "Cookies").write_text("v20_cookies", encoding="utf-8")
+    runtime_dir = tmp_path / "runtime_profiles"
+    runtime_dir.mkdir(parents=True)
+
+    captured_options = []
+    captured_kwargs = []
+    driver_mock = MagicMock()
+    driver_mock.patcher.executable_path = str(tmp_path / "chromedriver.exe")
+
+    def mock_uc_chrome(options=None, **kwargs):
+        captured_options.append(options)
+        captured_kwargs.append(kwargs)
+        return driver_mock
+
+    def fake_sync(src_dir, dst_dir, profile_folder="Default"):
+        prof = dst_dir / profile_folder / "Network"
+        prof.mkdir(parents=True, exist_ok=True)
+        (prof / "Cookies").write_text("seeded", encoding="utf-8")
+        (dst_dir / profile_folder / "Preferences").write_text("{}", encoding="utf-8")
+
+    with patch("src.automation.driver.is_system_chrome_running", return_value=False), \
+         patch("src.automation.driver.get_system_chrome_user_data_dir", return_value=default_dir), \
+         patch("src.automation.driver.is_default_chrome_user_data_dir", return_value=True), \
+         patch("src.automation.driver.get_runtime_profiles_dir", return_value=runtime_dir), \
+         patch("src.automation.driver.get_chrome_version", return_value="158.0.8127.88"), \
+         patch("src.automation.driver.ensure_chromedriver", return_value=None), \
+         patch("src.automation.driver.sync_reporting_profile", side_effect=fake_sync) as sync_mock, \
+         patch("src.automation.driver.cleanup_profile_locks") as cleanup_locks, \
+         patch("undetected_chromedriver.Chrome", side_effect=mock_uc_chrome):
+        driver1 = setup_driver(use_system_profile=True, system_profile_name="Default")
+        driver1._profile_lock.release()
+
+        # Second launch must reuse existing copy without overwriting saved cookies/session
+        driver2 = setup_driver(use_system_profile=True, system_profile_name="Default")
+        driver2._profile_lock.release()
+
+    expected_copy = runtime_dir / "system_profile_Default"
+    sync_mock.assert_called_once_with(default_dir, expected_copy, profile_folder="Default")
+    assert (expected_copy / "First Run").exists()
+    assert len(captured_options) == 2
+    for opts, kwargs in zip(captured_options, captured_kwargs):
+        assert f"--user-data-dir={expected_copy}" in opts.arguments
+        assert "--profile-directory=Default" in opts.arguments
+        assert "--password-store=basic" not in opts.arguments
+        assert kwargs["use_subprocess"] is True
+    assert cleanup_locks.call_count == 4
+    cleanup_locks.assert_any_call(default_dir)
+    cleanup_locks.assert_any_call(expected_copy)
+    assert driver1._is_system_profile is True
+    assert driver2._is_system_profile is True
 
 
 def test_app_ensure_active_accounts_populates_when_chrome_closed(tmp_path):
@@ -304,7 +363,7 @@ def test_is_default_chrome_user_data_dir(tmp_path):
 
 
 def test_watching_worker_personal_profile_bypasses_automated_login():
-    """WatchingWorker should immediately verify the session and bypass automated credential entry for personal profile."""
+    """WatchingWorker should verify the session and bypass automated credential entry for personal profile."""
     from src.automation.watching_worker import WatchingWorker
     from src.models.account import Account
 
@@ -317,29 +376,69 @@ def test_watching_worker_personal_profile_bypasses_automated_login():
     worker.driver = MagicMock()
     worker.driver._is_system_profile = True
     worker.driver.current_url = "https://www.youtube.com/"
+    avatar_elem = MagicMock()
+    avatar_elem.is_displayed.return_value = True
+    worker.driver.find_element.return_value = avatar_elem
     worker.log_queue = MagicMock()
 
-    ok = WatchingWorker._ensure_signed_in_and_wait(worker)
+    with patch("src.automation.login._perform_automated_login_steps") as auto_login:
+        ok = WatchingWorker._ensure_signed_in_and_wait(worker)
+
     assert ok is True
-    # Verify no attempt was made to enter email or password
-    worker.driver.find_elements.assert_not_called()
+    auto_login.assert_not_called()
 
 
 def test_perform_google_login_personal_profile_bypasses_credentials():
-    """perform_google_login should immediately return True without credential entry for personal profile."""
+    """perform_google_login should return True without credential entry when personal profile is signed in."""
     from src.automation.login import perform_google_login
     from src.models.account import Account
 
     driver_mock = MagicMock()
     driver_mock._is_system_profile = True
     driver_mock.current_url = "https://www.youtube.com/"
+    avatar_elem = MagicMock()
+    avatar_elem.is_displayed.return_value = True
+    driver_mock.find_element.return_value = avatar_elem
     account = Account(email="personal@gmail.com", password="")
     log_queue = MagicMock()
 
-    ok = perform_google_login(driver_mock, account, log_queue=log_queue)
+    with patch("src.automation.login._perform_automated_login_steps") as auto_login:
+        ok = perform_google_login(driver_mock, account, log_queue=log_queue)
+
     assert ok is True
-    # Verify driver did not search for identifier input or attempt typing
-    driver_mock.find_elements.assert_not_called()
+    auto_login.assert_not_called()
+
+
+def test_personal_profile_signed_out_waits_for_manual_signin_without_typing():
+    """If copied Chrome 136+ personal profile starts signed out, wait for manual sign-in without typing credentials."""
+    from src.automation.login import LoginState, ensure_personal_profile_signed_in
+    from src.models.account import Account
+
+    driver_mock = MagicMock()
+    driver_mock.current_url = "https://www.youtube.com/"
+    account = Account(email="personal@gmail.com", password="")
+    stop_event = threading.Event()
+    log_queue = MagicMock()
+
+    states = iter([LoginState.SIGNED_OUT, LoginState.SIGNED_IN_MATCH])
+
+    with patch("src.automation.login.check_login_state", side_effect=lambda *a, **kw: next(states, LoginState.SIGNED_IN_MATCH)), \
+         patch("src.automation.login.safe_get") as mock_safe_get, \
+         patch("src.automation.login.human_like_delay"), \
+         patch("src.automation.login._perform_automated_login_steps") as auto_login:
+        ok = ensure_personal_profile_signed_in(
+            driver_mock,
+            account,
+            log_queue=log_queue,
+            stop_event=stop_event,
+            wait_for_manual_signin=True,
+            max_wait_seconds=10.0,
+        )
+
+    assert ok is True
+    auto_login.assert_not_called()
+    mock_safe_get.assert_any_call(driver_mock, "https://accounts.google.com/", timeout=30, log_queue=log_queue)
+    mock_safe_get.assert_any_call(driver_mock, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
 
 
 def test_setup_driver_personal_profile_cleans_up_stale_locks(tmp_path):

@@ -47,7 +47,12 @@ from .driver import (
     maximize_browser_window,
     setup_driver,
 )
-from .login import check_account_logged_in, is_logged_in, perform_google_login
+from .login import (
+    check_account_logged_in,
+    ensure_personal_profile_signed_in,
+    is_logged_in,
+    perform_google_login,
+)
 from .navigation import (
     dismiss_youtube_dialogs,
     find_and_click_search_result,
@@ -6974,16 +6979,37 @@ class WatchingWorker:
             and not getattr(self.account, "password", "").strip()
         )
         if is_personal_profile:
-            emit(self.log_queue, f"Using existing Personal Chrome Profile session for {self.account.email} (already signed in).", logging.INFO)
-            self._report_status(f"Personal profile active — verified for {self.account.email}", "info")
-            try:
-                curr = (getattr(self.driver, "current_url", "") or "").lower()
-                if "youtube.com" not in curr:
-                    safe_get(self.driver, "https://www.youtube.com/", timeout=30, log_queue=self.log_queue)
-                    human_like_delay(1.5, 2.5)
-            except Exception:
-                pass
-            return True
+            known_raw = self.config_mgr.get_accounts() if self.config_mgr else None
+            known_accounts = [Account.from_dict(a) if isinstance(a, dict) else a for a in known_raw] if known_raw else None
+            reopen_failures = 0
+            while not self.stop_event.is_set():
+                try:
+                    return ensure_personal_profile_signed_in(
+                        self.driver,
+                        self.account,
+                        log_queue=self.log_queue,
+                        stop_event=self.stop_event,
+                        wait_for_manual_signin=True,
+                        status_callback=self._report_status,
+                    )
+                except Exception as exc:
+                    if is_session_disconnected_error(exc) and not self.stop_event.is_set():
+                        emit(
+                            self.log_queue,
+                            f"Main browser closed externally during personal profile verification ({exc}). Reopening browser...",
+                            logging.WARNING,
+                        )
+                        self._report_status("Browser closed externally — reopening...", "warning")
+                        if self._relaunch_main_driver(known_accounts=known_accounts):
+                            reopen_failures = 0
+                            continue
+                        reopen_failures += 1
+                        if reopen_failures >= 3:
+                            emit(self.log_queue, "Could not reopen browser after multiple attempts.", logging.ERROR)
+                            return False
+                        continue
+                    raise
+            return False
 
         if self.config_mgr:
             try:

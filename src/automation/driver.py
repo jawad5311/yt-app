@@ -25,6 +25,7 @@ from .profile_manager import (
     get_runtime_profiles_dir,
     get_system_chrome_user_data_dir,
     is_chrome_lock_active,
+    is_default_chrome_user_data_dir,
     is_system_chrome_running,
     resolve_profile_dir,
 )
@@ -237,6 +238,30 @@ def sync_reporting_profile(src_dir: Path, dst_dir: Path, profile_folder: str = "
                     copy_shared_file(item, d_dir / item.name)
 
 
+def _is_profile_dir_initialized(user_data_dir: Path, profile_folder: str = "Default") -> bool:
+    """Return True if a persistent Chrome user-data directory already holds profile state."""
+    profile_prefix = str(profile_folder or "Default").strip("/\\") or "Default"
+    prof_dir = user_data_dir / profile_prefix
+    return (
+        (prof_dir / "Preferences").is_file()
+        or (prof_dir / "Network" / "Cookies").is_file()
+        or (prof_dir / "Cookies").is_file()
+    )
+
+
+def _seed_first_run_marker(src_dir: Path, dst_dir: Path) -> None:
+    """Copy or create Chrome's First Run sentinel so cloned profiles skip first-run prompts."""
+    src_marker = src_dir / "First Run"
+    dst_marker = dst_dir / "First Run"
+    if src_marker.is_file():
+        copy_shared_file(src_marker, dst_marker)
+    elif not dst_marker.exists():
+        try:
+            dst_marker.touch(exist_ok=True)
+        except Exception:
+            pass
+
+
 def maximize_browser_window(driver: Any) -> None:
     """Ensure the browser window is maximized via WebDriver and Win32."""
     if driver is None:
@@ -317,7 +342,9 @@ def setup_driver(
             if a
         ]
 
-    if use_system_profile and not is_reporting:
+    is_personal_session = bool(use_system_profile and not is_reporting)
+
+    if is_personal_session:
         if is_system_chrome_running():
             raise ProfileBusyError(
                 "Google Chrome is currently open on this computer.\n\n"
@@ -376,6 +403,43 @@ def setup_driver(
                 chrome_major = None
             emit(log_queue, f"Detected system Chrome version: {chrome_version}")
 
+        # Chrome 136 and newer ignores the DevTools remote-debugging port when
+        # launched against the operating system's default User Data directory.
+        # UC relies on that port to attach ChromeDriver, so the browser window
+        # can appear while the driver waits until its connection timeout. Use a
+        # persistent per-profile copy for this configuration, seeded only once
+        # so any sign-in inside the copy is preserved instead of overwritten.
+        if (
+            launch_system_profile
+            and is_default_chrome_user_data_dir(sys_user_data_dir)
+            and (chrome_major is None or chrome_major >= 136)
+        ):
+            safe_name = "".join(ch if ch.isalnum() else "_" for ch in prof_folder).strip("_") or "Default"
+            fallback_root = get_runtime_profiles_dir() / f"system_profile_{safe_name}"
+            profile_lock.release()
+            profile_dir = fallback_root
+            profile_lock = ProfileLock(profile_dir)
+            profile_lock.acquire(timeout=2.0)
+            cleanup_profile_locks(profile_dir)
+            if not _is_profile_dir_initialized(fallback_root, prof_folder):
+                emit(
+                    log_queue,
+                    f"Chrome {chrome_version or ''} blocks direct automation of the default profile; "
+                    f"initializing persistent session copy '{fallback_root.name}'.",
+                    logging.INFO,
+                )
+                sync_reporting_profile(sys_user_data_dir, fallback_root, profile_folder=prof_folder)
+                _seed_first_run_marker(sys_user_data_dir, fallback_root)
+            else:
+                emit(
+                    log_queue,
+                    f"Chrome {chrome_version or ''} blocks direct automation of the default profile; "
+                    f"reusing persistent session copy '{fallback_root.name}'.",
+                    logging.INFO,
+                )
+            launch_system_profile = False
+            launch_profile_directory = prof_folder
+
         def _build_options() -> uc.ChromeOptions:
             opts = uc.ChromeOptions()
             opts.page_load_strategy = "eager"
@@ -389,7 +453,7 @@ def setup_driver(
 
             opts.add_argument("--no-first-run")
             opts.add_argument("--no-service-autorun")
-            if not launch_system_profile:
+            if not is_personal_session:
                 opts.add_argument("--password-store=basic")
             # GPU acceleration is enabled for maximum authenticity (disable-gpu removed)
             opts.add_argument("--disable-dev-shm-usage")
@@ -408,7 +472,7 @@ def setup_driver(
                 driver_path = create_session_driver_copy(cached_path, driver_working_dir)
 
         launch_kwargs: Dict[str, Any] = {
-            "use_subprocess": False if (launch_system_profile and os.name == "nt") else True,
+            "use_subprocess": True,
             "headless": False,
         }
         if chrome_major:

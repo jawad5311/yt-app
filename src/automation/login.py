@@ -279,7 +279,7 @@ def check_login_state(driver: Any, expected_account: Optional[Account] = None) -
             try:
                 sign_in_btns = driver.find_elements(
                     By.XPATH,
-                    "//a[contains(@href, 'signin') or contains(., 'Sign in') or contains(., 'Anmelden')]"
+                    "//a[contains(@href, 'signin') or contains(@href, 'ServiceLogin') or contains(., 'Sign in') or contains(., 'Anmelden')]",
                 )
                 if any(b.is_displayed() for b in sign_in_btns):
                     return LoginState.SIGNED_OUT
@@ -949,6 +949,109 @@ def detect_manual_challenge(driver: Any) -> Optional[Tuple[str, str]]:
         if is_session_disconnected_error(exc):
             raise
         return None
+def ensure_personal_profile_signed_in(
+    driver: Any,
+    account: Account,
+    log_queue: Optional[queue.Queue] = None,
+    stop_event: Optional[threading.Event] = None,
+    wait_for_manual_signin: bool = True,
+    max_wait_seconds: float = 600.0,
+    status_callback: Optional[Callable[[str, str], None]] = None,
+) -> bool:
+    """Verify an active Personal Chrome Profile session without automated credential entry.
+
+    On Chrome 136+, the isolated persistent copy cannot decrypt Windows App-Bound
+    Encrypted (v20) cookies copied from the default Chrome directory, so the first run
+    may start signed out. When signed out, prompts the user to sign in once manually
+    and preserves that session for all future runs.
+    """
+    current_url = (getattr(driver, "current_url", "") or "").lower()
+    if "youtube.com" not in current_url:
+        try:
+            safe_get(driver, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
+            human_like_delay(1.5, 2.5)
+        except Exception as exc:
+            if is_session_disconnected_error(exc):
+                raise
+
+    # Give YouTube's header a brief window to render under eager page load.
+    state = LoginState.UNKNOWN
+    hydrate_deadline = time.time() + 4.0
+    while True:
+        if stop_event is not None and stop_event.is_set():
+            return False
+        state = check_login_state(driver, None)
+        if state in (LoginState.SIGNED_IN_MATCH, LoginState.SIGNED_OUT):
+            break
+        if time.time() >= hydrate_deadline:
+            break
+        if stop_event is not None:
+            stop_event.wait(timeout=0.5)
+        else:
+            time.sleep(0.5)
+
+    if state != LoginState.SIGNED_OUT:
+        emit(log_queue, f"Using existing Personal Chrome Profile session for {account.email} (already signed in).")
+        if status_callback:
+            status_callback(f"Personal profile active — verified for {account.email}", "info")
+        return True
+
+    if not wait_for_manual_signin:
+        emit(
+            log_queue,
+            f"Personal Chrome Profile session for {account.email} is not signed in yet.",
+            logging.WARNING,
+        )
+        return False
+
+    emit(
+        log_queue,
+        f"Personal Chrome Profile session for {account.email} is not signed in yet "
+        "(Chrome 136+ prevents reading encrypted cookies from the default Chrome directory). "
+        "Please sign in manually in the open Chrome window once — your login will stay saved for future sessions.",
+        logging.WARNING,
+    )
+    if status_callback:
+        status_callback(f"Waiting for one-time sign-in in Chrome ({account.email})...", "warning")
+
+    cur_after = (getattr(driver, "current_url", "") or "").lower()
+    if "accounts.google.com" not in cur_after:
+        try:
+            safe_get(driver, "https://accounts.google.com/", timeout=30, log_queue=log_queue)
+        except Exception as exc:
+            if is_session_disconnected_error(exc):
+                raise
+
+    wait_deadline = time.time() + max_wait_seconds
+    while time.time() < wait_deadline:
+        if stop_event is not None and stop_event.is_set():
+            emit(log_queue, "Personal profile sign-in wait cancelled by user.")
+            return False
+
+        # Probe current_url directly so browser window closure propagates immediately.
+        _ = getattr(driver, "current_url", "")
+
+        if check_login_state(driver, None) == LoginState.SIGNED_IN_MATCH:
+            emit(log_queue, f"Personal Chrome Profile sign-in verified for {account.email}! Redirecting to YouTube...")
+            try:
+                safe_get(driver, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
+                human_like_delay(1.5, 2.5)
+            except Exception as exc:
+                if is_session_disconnected_error(exc):
+                    raise
+            if status_callback:
+                status_callback(f"Personal profile active — verified for {account.email}", "info")
+            return True
+
+        if stop_event is not None:
+            stop_event.wait(timeout=2.0)
+        else:
+            time.sleep(2.0)
+
+    emit(log_queue, f"Timed out waiting for manual sign-in on Personal Chrome Profile ({account.email}).", logging.WARNING)
+    return False
+
+
 def perform_google_login(
     driver: Any,
     account: Account,
@@ -966,15 +1069,13 @@ def perform_google_login(
         and not getattr(account, "password", "").strip()
     )
     if is_system_profile:
-        emit(log_queue, f"Using existing Personal Chrome Profile session for {account.email} (already signed in).")
-        current_url = (getattr(driver, "current_url", "") or "").lower()
-        if "youtube.com" not in current_url:
-            try:
-                safe_get(driver, "https://www.youtube.com/", timeout=30, log_queue=log_queue)
-                human_like_delay(1.5, 2.5)
-            except Exception:
-                pass
-        return True
+        return ensure_personal_profile_signed_in(
+            driver,
+            account,
+            log_queue=log_queue,
+            stop_event=stop_event,
+            wait_for_manual_signin=wait_for_challenge_resolution,
+        )
 
     emit(log_queue, f"Checking Google sign-in status for {account.email}...")
 
