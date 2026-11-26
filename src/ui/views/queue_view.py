@@ -2167,7 +2167,6 @@ class QueueView(Frame):
             else:
                 target_hit = task.target_multiplier > 0 and effective_duration > 0 and (
                     watch_sec >= task.target_multiplier * effective_duration
-                    or round(watch_sec / effective_duration, 1) >= task.target_multiplier
                 )
                 views_hit = task.max_runs > 0 and current_runs >= task.max_runs
                 if target_hit and views_hit:

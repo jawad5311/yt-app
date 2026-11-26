@@ -299,8 +299,8 @@ def test_video_task_is_target_reached_with_updated_multiplier():
     # At 7000s / 2000s = 3.5x -> target reached!
     assert task.is_target_reached(current_runs=3, watch_seconds=7000.0, video_duration=2000.0) is True
 
-    # At 6950s / 2000s = 3.475x -> round(3.475, 1) = 3.5x -> target reached!
-    assert task.is_target_reached(current_runs=3, watch_seconds=6950.0, video_duration=2000.0) is True
+    # A target is reached only after the exact watch-time threshold is met.
+    assert task.is_target_reached(current_runs=3, watch_seconds=6950.0, video_duration=2000.0) is False
 
     # At 4000s / 2000s = 2.0x -> not reached
     assert task.is_target_reached(current_runs=2, watch_seconds=4000.0, video_duration=2000.0) is False

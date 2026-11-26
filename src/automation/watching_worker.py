@@ -2127,7 +2127,7 @@ class WatchingWorker:
             eff_dur = video_duration if video_duration > 0 else task_dur
             limit_disp = existing_task.max_runs if existing_task.max_runs > 0 else 3
             if existing_task.is_target_reached(current_runs, watch_seconds, eff_dur):
-                reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and (watch_seconds >= existing_task.target_multiplier * eff_dur or round(watch_seconds / eff_dur, 1) >= existing_task.target_multiplier)) else f"run limit ({current_runs}/{limit_disp} runs completed)"
+                reason = "target multiplier reached" if (existing_task.target_multiplier > 0 and eff_dur > 0 and watch_seconds >= existing_task.target_multiplier * eff_dur) else f"run limit ({current_runs}/{limit_disp} runs completed)"
                 return False, existing_task, f"already reached {reason}"
 
             # Check cooldown before confirming eligibility
@@ -2154,7 +2154,7 @@ class WatchingWorker:
             except (TypeError, ValueError):
                 pass
         if default_target_mult > 0 and video_duration > 0:
-            if (watch_seconds >= default_target_mult * video_duration) or (round(watch_seconds / video_duration, 1) >= default_target_mult):
+            if watch_seconds >= default_target_mult * video_duration:
                 return False, None, "already reached target multiplier reached"
 
         # Check cooldown for non-queue videos as well

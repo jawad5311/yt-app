@@ -82,6 +82,11 @@ def test_channel_defaults_to_empty():
     assert VideoTask.from_dict({"channel": None}).channel == ""
 
 
+def test_from_dict_parses_string_short_flag_as_a_boolean():
+    assert VideoTask.from_dict({"is_short": "false"}).is_short is False
+    assert VideoTask.from_dict({"is_short": "true"}).is_short is True
+
+
 def test_channel_roundtrips():
     task = VideoTask(url="https://youtu.be/abcdefghijk", channel="Cooking")
     assert task.to_dict()["channel"] == "Cooking"

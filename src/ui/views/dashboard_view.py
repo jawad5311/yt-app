@@ -299,7 +299,11 @@ class DashboardView(ScrollableFrame):
             check_fn = getattr(self.app_controller, "is_playing_target_long_video", None)
             if callable(check_fn):
                 try:
-                    is_target_long = check_fn()
+                    # The controller contract returns a bool.  Treat anything
+                    # else as unknown so a mock, stale worker, or malformed
+                    # plugin response cannot block an immediate stop behind
+                    # the confirmation countdown.
+                    is_target_long = check_fn() is True
                 except Exception:
                     is_target_long = False
 

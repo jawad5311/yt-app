@@ -179,7 +179,10 @@ class VideoTask:
         target_multiplier_val = safe_float(raw_mult, default=0.0, min_val=0.0)
 
         raw_is_short = data.get("is_short")
-        is_short_val = bool(raw_is_short) if raw_is_short is not None else None
+        if isinstance(raw_is_short, str):
+            is_short_val = raw_is_short.strip().lower() in ("true", "1", "yes", "on")
+        else:
+            is_short_val = bool(raw_is_short) if raw_is_short is not None else None
 
         raw_published_at = str(data.get("published_at", "") or data.get("publish_date", "") or "").strip()
 
@@ -230,7 +233,7 @@ class VideoTask:
         # 2. Check target multiplier
         eff_dur = float(video_duration if video_duration > 0 else self.duration_seconds)
         if self.target_multiplier > 0.0 and eff_dur > 0.0:
-            if (watch_seconds >= self.target_multiplier * eff_dur) or (round(watch_seconds / eff_dur, 1) >= self.target_multiplier):
+            if watch_seconds >= self.target_multiplier * eff_dur:
                 return True
         return False
 

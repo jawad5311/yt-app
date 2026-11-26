@@ -374,7 +374,7 @@ def check_video_task_eligibility(
             watch_sec = record.watch_seconds
             v_dur = (record.video_duration if record.video_duration > 0 else 0.0) or getattr(task, "duration_seconds", 0.0)
             if task.is_target_reached(current_runs, watch_sec, v_dur):
-                reason = f"target multiplier {task.target_multiplier:.1f}x reached" if (getattr(task, "target_multiplier", 0.0) > 0 and v_dur > 0 and (watch_sec >= task.target_multiplier * v_dur or round(watch_sec / v_dur, 1) >= task.target_multiplier)) else f"max views limit of {task.max_runs} reached"
+                reason = f"target multiplier {task.target_multiplier:.1f}x reached" if (getattr(task, "target_multiplier", 0.0) > 0 and v_dur > 0 and watch_sec >= task.target_multiplier * v_dur) else f"max views limit of {task.max_runs} reached"
                 return False, reason
 
     if task.channel:
@@ -562,7 +562,12 @@ def calculate_channel_target_seconds(
             # Determine whether this item is a short
             is_s = False
             if isinstance(t, dict):
-                is_s = bool(t.get("is_short")) or ("/shorts/" in str(t.get("url", "") or ""))
+                raw_short = t.get("is_short")
+                if isinstance(raw_short, str):
+                    is_s = raw_short.strip().lower() in ("true", "1", "yes", "on")
+                else:
+                    is_s = bool(raw_short)
+                is_s = is_s or ("/shorts/" in str(t.get("url", "") or ""))
             else:
                 raw_override = getattr(t, "is_short_override", None)
                 if not hasattr(raw_override, "assert_called") and raw_override is not None:
